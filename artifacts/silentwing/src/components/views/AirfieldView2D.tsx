@@ -363,11 +363,12 @@ const AirfieldView2D: React.FC<AirfieldView2DProps> = ({
   }, [transform]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!dragRef.current) return;
+    const drag = dragRef.current;
+    if (!drag) return;
     setTransform(prev => ({
       ...prev,
-      x: dragRef.current!.startTx + (e.clientX - dragRef.current!.startX),
-      y: dragRef.current!.startTy + (e.clientY - dragRef.current!.startY),
+      x: drag.startTx + (e.clientX - drag.startX),
+      y: drag.startTy + (e.clientY - drag.startY),
     }));
   }, []);
 
