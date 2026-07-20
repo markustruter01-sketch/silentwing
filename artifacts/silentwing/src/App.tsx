@@ -2,25 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import TopBar from '@/components/layout/TopBar';
 import StatusStrip from '@/components/layout/StatusStrip';
 import AirfieldView2D from '@/components/views/AirfieldView2D';
+import AirspaceView3D from '@/components/views/AirspaceView3D';
 import { getSimAdapter } from '@/sim/engine';
 import type { DataFeedAdapter, WorldSnapshot } from '@/types';
 
 type View = 'airspace' | 'airfield';
-
-// Phase 3+ placeholder for the 3D airspace view
-function AirspaceView3D() {
-  return (
-    <div className="w-full h-full flex flex-col items-center justify-center gap-3 bg-[#0A0E14]">
-      <div className="w-12 h-12 border border-slate-800 rounded flex items-center justify-center">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#334155" strokeWidth="1.5">
-          <path d="M12 22V12M12 12L4 7M12 12l8-5M4 17l8 5 8-5M4 7l8-5 8 5" />
-        </svg>
-      </div>
-      <p className="text-slate-700 font-mono text-xs tracking-widest">3D AIRSPACE — PHASE 3</p>
-      <p className="text-slate-800 text-xs">Press V to switch to 2D Airfield view</p>
-    </div>
-  );
-}
 
 // Derive a rough sector-load from aircraft count (≤ 99 %)
 function sectorLoad(count: number) {
@@ -94,7 +80,7 @@ export default function App() {
         {view === 'airfield' ? (
           <AirfieldView2D aircraft={snapshot.aircraft} />
         ) : (
-          <AirspaceView3D />
+          <AirspaceView3D aircraft={snapshot.aircraft} />
         )}
       </main>
     </div>
