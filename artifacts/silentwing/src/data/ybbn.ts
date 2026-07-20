@@ -212,15 +212,15 @@ export const APRONS: Apron[] = [
       [-780,  -50],
     ],
   },
-  // International apron (south-west)
+  // International apron (between runways, south of domestic)
   {
     id: 'intl-apron',
     label: 'International Apron',
     corners: [
-      [-1400, 400],
-      [ -520, 400],
-      [ -520, 1350],
-      [-1400, 1350],
+      [-600,  50],
+      [ 300,  50],
+      [ 300, 900],
+      [-600, 900],
     ],
   },
 ];
@@ -248,10 +248,10 @@ export const TERMINALS: Terminal[] = [
     id: 'international',
     label: 'International Terminal',
     corners: [
-      [-1300, 560],
-      [ -620, 560],
-      [ -620, 1080],
-      [-1300, 1080],
+      [-450, 200],
+      [ 200, 200],
+      [ 200, 700],
+      [-450, 700],
     ],
   },
 ];
@@ -281,13 +281,13 @@ function domGates(): Gate[] {
 
 function intlGates(): Gate[] {
   const gates: Gate[] = [];
-  // International: 8 gates
+  // International: 8 gates along northern face of terminal (y=215)
   for (let i = 0; i < 8; i++) {
     gates.push({
       id: `I${i + 1}`,
       terminal: 'international',
-      x: -1260 + i * 82,
-      y: 575,
+      x: -410 + i * 75,
+      y: 215,
     });
   }
   return gates;
