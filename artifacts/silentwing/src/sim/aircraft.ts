@@ -119,17 +119,20 @@ export class SimAircraft {
     this.x    = from.x   + dx          * this.legT;
     this.y    = from.y   + dy          * this.legT;
     this.alt  = from.alt + (to.alt - from.alt) * this.legT;
-    this.phase = to.phase;
+    // Phase comes from the SOURCE waypoint of the leg being flown so that
+    // the approach leg (APPROACH_SRC→THR19R) reports 'approach', not 'landing'.
+    this.phase = from.phase;
 
     // ── Reached target waypoint ───────────────────────────────────────────────
     if (this.legT >= 1.0) {
-      // Snap exactly to waypoint
-      this.x   = to.x;
-      this.y   = to.y;
-      this.alt = to.alt;
+      // Snap exactly to waypoint and adopt the destination's phase.
+      this.x     = to.x;
+      this.y     = to.y;
+      this.alt   = to.alt;
+      this.phase = to.phase;
 
       if (to.phase === 'at-gate') {
-        // Stay parked; gate handler will fire on the next tick
+        // Stay parked; gate handler will fire on the next tick.
         this.speedMs = 0;
         return;
       }

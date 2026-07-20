@@ -76,6 +76,14 @@ export interface AircraftDetail extends Aircraft {
 
 export type Unsubscribe = () => void;
 
+// ─── Single source of truth for airborne/ground classification ───────────────
+// Classified by altitude, NOT phase, so it stays correct regardless of what
+// phase the sim currently reports. 50 ft threshold sits safely above all
+// ground waypoints (alt = 0) while remaining below any airborne segment.
+export function isAirborne(ac: Aircraft): boolean {
+  return ac.position.alt > 50;
+}
+
 // ─── DataFeedAdapter — the ONLY interface between sim and UI ──────────────────
 
 export interface DataFeedAdapter {

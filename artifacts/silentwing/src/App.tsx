@@ -5,6 +5,7 @@ import AirfieldView2D from '@/components/views/AirfieldView2D';
 import AirspaceView3D from '@/components/views/AirspaceView3D';
 import { getSimAdapter } from '@/sim/engine';
 import type { DataFeedAdapter, WorldSnapshot } from '@/types';
+import { isAirborne } from '@/types';
 
 type View = 'airspace' | 'airfield';
 
@@ -13,15 +14,6 @@ function sectorLoad(count: number) {
   return Math.min(99, count * 11);
 }
 
-// Count aircraft that are on the ground (taxiing or parked)
-function groundCount(snap: WorldSnapshot) {
-  return snap.aircraft.filter(ac =>
-    ac.phase === 'landing'   ||
-    ac.phase === 'taxi-in'   ||
-    ac.phase === 'at-gate'   ||
-    ac.phase === 'taxi-out',
-  ).length;
-}
 
 export default function App() {
   const [view, setView] = useState<View>('airfield');
@@ -73,7 +65,7 @@ export default function App() {
       <StatusStrip
         aircraftCount={snapshot.aircraft.length}
         alertCount={activeAlerts.length}
-        groundCount={groundCount(snapshot)}
+        groundCount={snapshot.aircraft.filter(ac => !isAirborne(ac)).length}
         sectorLoad={sectorLoad(snapshot.aircraft.length)}
       />
       <main className="flex-1 relative overflow-hidden">

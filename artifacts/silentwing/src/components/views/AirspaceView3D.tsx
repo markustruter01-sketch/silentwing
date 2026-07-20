@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { useEffect, useRef } from 'react';
 import type { Aircraft } from '@/types';
+import { isAirborne } from '@/types';
 import { RUNWAYS } from '@/data/ybbn';
 
 // ─── Scene constants ──────────────────────────────────────────────────────────
@@ -287,9 +288,16 @@ export default function AirspaceView3D({ aircraft }: AirspaceView3DProps) {
         const stem = new THREE.Line(stemGeo, STEM_MAT);
         scene.add(stem);
 
-        // Trail — starts with two identical points so the Line is valid
-        const trailBuf: THREE.Vector3[] = [pos.clone(), pos.clone()];
-        const trailGeo = new THREE.BufferGeometry().setFromPoints(trailBuf);
+        // Trail — pre-allocate the full TRAIL_MAX buffer so setFromPoints never
+        // needs to grow it (which triggers the "Buffer size too small" warning).
+        // drawRange controls how many points are actually rendered each tick.
+        const trailArr = new Float32Array(TRAIL_MAX * 3); // all zeros
+        trailArr[0] = pos.x; trailArr[1] = pos.y; trailArr[2] = pos.z;
+        trailArr[3] = pos.x; trailArr[4] = pos.y; trailArr[5] = pos.z;
+        const trailAttr = new THREE.BufferAttribute(trailArr, 3);
+        const trailGeo  = new THREE.BufferGeometry();
+        trailGeo.setAttribute('position', trailAttr);
+        trailGeo.setDrawRange(0, 2); // start with 2 visible points
         const trailMat = new THREE.LineBasicMaterial({
           color: hex,
           transparent: true,
@@ -302,6 +310,10 @@ export default function AirspaceView3D({ aircraft }: AirspaceView3DProps) {
         const label = makeLabel(ac.callsign, hex);
         label.position.set(pos.x, pos.y + LABEL_LIFT, pos.z);
         scene.add(label);
+
+        // Rolling position history (Vector3[]) used to write into the
+        // pre-allocated trail buffer; grows to TRAIL_MAX then rotates.
+        const trailBuf: THREE.Vector3[] = [pos.clone(), pos.clone()];
 
         acMap.set(ac.id, { cone, stem, trail, label, trailBuf });
 
@@ -330,11 +342,19 @@ export default function AirspaceView3D({ aircraft }: AirspaceView3DProps) {
         b.trailBuf.push(pos.clone());
         if (b.trailBuf.length > TRAIL_MAX) b.trailBuf.shift();
 
-        // Rebuild trail geometry (always ≥ 2 pts)
-        const pts = b.trailBuf.length >= 2 ? b.trailBuf : [b.trailBuf[0], b.trailBuf[0]];
-        b.trail.geometry.setFromPoints(pts);
+        // Write directly into the pre-allocated Float32Array — never reallocates,
+        // never exceeds TRAIL_MAX, so no "Buffer size too small" warning.
+        const trailAttr = b.trail.geometry.attributes.position as THREE.BufferAttribute;
+        const trailArr  = trailAttr.array as Float32Array;
+        for (let i = 0; i < b.trailBuf.length; i++) {
+          trailArr[i * 3]     = b.trailBuf[i].x;
+          trailArr[i * 3 + 1] = b.trailBuf[i].y;
+          trailArr[i * 3 + 2] = b.trailBuf[i].z;
+        }
+        trailAttr.needsUpdate = true;
+        b.trail.geometry.setDrawRange(0, b.trailBuf.length);
         b.trail.geometry.computeBoundingSphere();
-        // Sync trail color in case phase changed
+        // Sync trail colour in case phase changed
         (b.trail.material as THREE.LineBasicMaterial).color.setHex(hex);
       }
     }
@@ -349,10 +369,8 @@ export default function AirspaceView3D({ aircraft }: AirspaceView3DProps) {
     }
   }, [aircraft]);
 
-  // ── Derived counts for the HUD ────────────────────────────────────────────
-  const airborne = aircraft.filter(
-    a => ['enroute-arrival','approach','landing','takeoff','departure','enroute-departure'].includes(a.phase)
-  ).length;
+  // ── Derived counts for the HUD — uses the single shared isAirborne() ────────
+  const airborneCount = aircraft.filter(isAirborne).length;
 
   return (
     <div className="relative w-full h-full overflow-hidden bg-[#07090F]">
@@ -364,7 +382,7 @@ export default function AirspaceView3D({ aircraft }: AirspaceView3DProps) {
       <div className="absolute top-4 left-4 flex flex-col gap-0.5 pointer-events-none select-none">
         <span className="font-mono text-[10px] tracking-[0.2em] text-slate-600">3D · AIRSPACE</span>
         <span className="font-mono text-[10px] tracking-[0.2em] text-slate-700">
-          {airborne} AIRBORNE &nbsp;·&nbsp; {aircraft.length - airborne} GROUND
+          {airborneCount} AIRBORNE &nbsp;·&nbsp; {aircraft.length - airborneCount} GROUND
         </span>
       </div>
 
