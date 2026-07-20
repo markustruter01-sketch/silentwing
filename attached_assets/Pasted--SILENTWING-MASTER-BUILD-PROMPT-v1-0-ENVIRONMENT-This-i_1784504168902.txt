@@ -1,0 +1,187 @@
+# SILENTWING — MASTER BUILD PROMPT (v1.0)
+
+**ENVIRONMENT:** This is a NEW Replit project. Fresh app, no existing codebase. Development environment only — there is no production deployment yet. Do not reference or connect to any other project or database.
+
+**PROJECT NAME:** SilentWing
+
+---
+
+## WHAT YOU ARE BUILDING
+
+SilentWing is a silent digital co-controller platform for air traffic control. It fuses four data streams (surveillance, flight plans, weather, aeronautical data) into a live operational picture of **Brisbane Airport (YBBN)** and its surrounding airspace. The system runs quietly in the background and only speaks up when something irregular, unsafe, or predicted-to-conflict is detected. All decisions remain with the human controller. The system is advisory only.
+
+For v1 there is **no live data feed**. Everything runs on a built-in **simulation engine** that generates realistic traffic. The simulation must sit behind a clean adapter interface so a real feed can be swapped in later with zero UI changes.
+
+**There is NO login/authentication system. Do not build one. The app loads straight into the dashboard.**
+
+---
+
+## TECH STACK (mandatory — do not substitute)
+
+- **Frontend:** React + TypeScript + Vite
+- **3D:** Three.js (airspace view)
+- **2D:** SVG or Canvas (top-down airfield view)
+- **State:** Zustand (or React context if simpler)
+- **Styling:** Tailwind CSS, dark theme default
+- **Backend:** None for v1. The simulation engine runs client-side as an isolated module (`/src/sim/`). Structure it as if it were a remote service: the UI consumes it ONLY through a typed `DataFeedAdapter` interface (subscribe/query methods). No UI component may import sim internals directly.
+
+---
+
+## BRISBANE AIRPORT (YBBN) MODEL
+
+Model the real layout, simplified but recognisable:
+
+- **Two parallel runways**, oriented roughly NNE–SSW (headings 01/19):
+  - **01L/19R** (legacy runway, western side, 3,560 m)
+  - **01R/19L** (newer runway, eastern side, 3,300 m)
+  - Runways separated by ~2 km with terminal precinct between/west of them
+- **Domestic Terminal** (northern-central, west of 01R) and **International Terminal** (southern, western side)
+- **Taxiway network** connecting terminals to both runways (simplified: parallel taxiways alongside each runway, 3–4 connector taxiways each, one main cross-field taxiway link)
+- **Apron/gate areas** at both terminals (domestic: ~12 gates, international: ~8 gates)
+- Geography context in the 3D view: Moreton Bay coastline to the north/east, Brisbane River to the south. Simple flat colour polygons only — no map tiles, no satellite imagery.
+- **Airspace:** cylinder of interest ~30 nm radius around YBBN, surface to FL250. Arrivals flow predominantly straight-in to whichever runway direction is active; departures climb out on runway heading then fan out.
+
+Store the airport geometry in a single data file `/src/data/ybbn.ts` (runways, taxiways, gates, terminal footprints as coordinate arrays). All rendering reads from this file. Do not hardcode geometry in components.
+
+---
+
+## SIMULATION ENGINE (`/src/sim/`)
+
+Generates a continuous, realistic traffic scenario:
+
+1. **Aircraft entities:** callsign (QFA/VOZ/JST/ANZ prefixes + numbers), type (B738, A320, B789, A332, DH8D), origin/destination, assigned runway, flight phase (enroute-arrival, approach, landing, taxi-in, at-gate, taxi-out, takeoff, departure, enroute-departure).
+2. **Flight plans:** every aircraft has a full pre-computed plan: waypoint list with planned timestamps, assigned runway, assigned taxi route (ordered taxiway segments), assigned gate. Plans are the source of predictability.
+3. **Movement model:** aircraft follow their plans with small random deviations (±timing jitter, speed variance). Approach speeds ~140–160 kt, taxi ~15–25 kt, climb-out ~250 kt below 10,000 ft. Smooth interpolation every frame — no teleporting.
+4. **Traffic density:** configurable; default ~10–16 aircraft active at once, mix of arrivals/departures/ground movements. Include a morning-rush pattern: density multiplier peaks between simulated 06:00–09:00 local.
+5. **Weather:** simple simulated wind (direction/speed, drives active runway direction) plus 0–2 slow-moving precipitation cells (polygons with intensity) that drift across the region.
+6. **Scripted anomalies (for demo):** every 3–6 minutes the sim injects ONE of: (a) two aircraft with converging predicted paths, (b) taxi-route conflict at an intersection, (c) an aircraft deviating from its filed route, (d) runway occupancy overlap risk. These drive the alert system.
+7. **Sim clock:** runs in real time by default, exposes current sim time. Supports querying state at ANY time `t` in a window of [now − 30 min, now + 10 min]:
+   - **Past:** ring buffer of recorded actual states (30 min at 1 s resolution).
+   - **Future:** projected positions computed by blending flight plan + current position/velocity (current state weighted heavily at T+0–2 min, plan weighted heavily at T+5–10 min). Return a per-aircraft `confidence` value 1.0 → 0.4 as horizon extends.
+
+**DataFeedAdapter interface (the ONLY door between sim and UI):**
+```ts
+interface DataFeedAdapter {
+  subscribe(cb: (snapshot: WorldSnapshot) => void): Unsubscribe;
+  getSnapshotAt(t: number): WorldSnapshot;      // past or future
+  getAircraftDetail(id: string): AircraftDetail;
+  getActiveAlerts(): Alert[];
+  acknowledgeAlert(id: string): void;
+  getFeedHealth(): { status: 'live' | 'lagging' | 'stalled'; lastUpdate: number };
+}
+```
+
+---
+
+## MAIN DASHBOARD — TWO VIEWS
+
+Tab switcher at top of screen + hotkey **`V`** toggles between:
+
+### View A — 3D Airspace (default)
+- Three.js scene of the 30 nm airspace centred on YBBN
+- Camera performs a **slow continuous 360° orbit** around the airfield (one full rotation ≈ 90 s), always looking at the airfield centre, elevated ~30° above horizon
+- Ground plane: dark land, darker water polygons (bay/river), airfield rendered from `ybbn.ts` (runways as light strips, terminals as simple extruded blocks)
+- **Aircraft:** simple 3D markers (low-poly aircraft shape or oriented cone), coloured by phase (arrival = cyan, departure = orange, ground = white)
+- **Altitude stems:** thin vertical line from each airborne aircraft down to its ground-track position — mandatory, altitude is unreadable in 3D without it
+- **Trails:** fading breadcrumb trail of last 60 s
+- **Predicted path:** thin dashed line ahead of each aircraft showing next 3 min of projected path (toggleable, key `P`)
+- **Conflict highlighting:** when the conflict detector flags a pair, both aircraft + their predicted paths pulse amber (caution) or red (critical)
+- **Weather cells:** translucent volumes over their polygons
+- **Interactions:**
+  - Single-click an aircraft → camera smoothly zooms/flies to it, side panel shows details (callsign, type, phase, altitude, ground speed, heading, assigned runway/gate, plan progress, any active alerts on it)
+  - Double-click → **follow mode**: camera locks on and tracks the aircraft until Esc
+  - Click-drag → manual orbit control; after 30 s of no input, camera eases back into the slow auto-rotation
+  - **Esc = universal back-out**, one level at a time: detail zoom → follow → manual camera → auto-orbit
+
+### View B — 2D Top-Down Airfield
+- SVG/Canvas top-down of the airfield only (runways, taxiways, aprons, gates from `ybbn.ts`)
+- Ground traffic + short final/initial climb aircraft shown with position, heading, callsign label
+- Taxi routes: clicking a ground aircraft highlights its full assigned taxi route
+- Same conflict highlighting rules, same click-for-detail behaviour
+- Runway occupancy indicator strips (green = clear, amber = occupied, red = predicted overlap)
+
+Both views render from the SAME snapshot data. Switching views never resets time position or selection.
+
+---
+
+## TIME SCRUB BAR (bottom of screen, both views)
+
+- Horizontal timeline: **[−30 min … LIVE … +10 min]**
+- Default pinned at LIVE. Drag left = replay recorded past. Drag right = **project the future**
+- **Future mode rendering (non-negotiable):** aircraft render as translucent "ghosts", the entire viewport gets a distinct coloured border (e.g. purple), and a large watermark shows offset, e.g. **“PREDICTION T+07:30”**. It must be impossible to mistake prediction for live
+- Ghost opacity scales with per-aircraft confidence (sharp near-term, faint far-term)
+- Future conflicts detected in the projected window render with the same amber/red highlighting — this is how a controller "sees trouble before it exists"
+- Past mode gets its own border colour (e.g. blue) + “REPLAY T−12:00” watermark
+- Snap-back-to-LIVE button + key `L`
+- While scrubbed, live data continues recording in the background; a small “LIVE continues →” pulse reminds the user
+
+---
+
+## COLLAPSIBLE SIDE TOOL TABS (right edge)
+
+Vertical stack of collapsed tabs. Each expands into a panel. Tabs for v1:
+
+1. **Alerts** — active alert list
+2. **Conflict horizon** — table of predicted conflicts in next 10 min (aircraft pair, location, time-to-conflict, severity, one-line "why")
+3. **Traffic forecast** — next-2-hours demand chart: arrivals/departures per 15-min bin, with the simulated morning-rush hump visible; highlights predicted hotspot windows
+4. **Weather impact** — current wind, active runway direction, precipitation cells and which sectors/approaches they affect
+5. **Alert log** — full timestamped history of every alert raised, with acknowledged/dismissed status. Dismissed ≠ deleted
+
+**Alert behaviour (strict):**
+- **Advisory:** tab glows softly only. No auto-expand. No sound
+- **Caution:** tab glows amber AND its panel auto-expands with the warning
+- **Critical:** tab glows red, panel auto-expands, single audio chime (one chime, not repeating)
+- Auto-expanded alerts stay on screen until the controller explicitly dismisses (button) — they do not time out
+- Every alert shows a one-line WHY (e.g. "QFA523 & VOZ711 converging, predicted loss of separation in 94 s near BN north approach"). Never a bare warning
+- Dismissing writes to the alert log with timestamp
+
+---
+
+## PERSISTENT UI CHROME
+
+- **Top bar:** SilentWing wordmark, view tabs (Airspace / Airfield), sim-time clock (24 h), **data feed health indicator**
+- **Feed health (critical requirement):** green dot "LIVE" when snapshots are fresh; if the feed lags >3 s → amber "LAGGING"; >8 s → the ENTIRE viewport gets a red border + "DATA STALE — DO NOT USE" banner. A frozen picture that looks live is the most dangerous failure state; test this by adding a dev button that pauses the feed
+- **Status strip (top, under bar):** active aircraft count, active alerts count, ground movements count, sector load %
+- **Hotkeys:** `V` switch view, `P` toggle predicted paths, `L` snap to live, `Esc` back out, `Space` pause/resume camera auto-rotation
+- **Settings panel (gear icon):** colour-blind-safe palette toggle (swap cyan/orange/red set for a deuteranopia-safe set), predicted path lookahead length (1/3/5 min), audio on/off
+
+---
+
+## VISUAL DESIGN
+
+- Dark theme only for v1. Near-black background (#0A0E14 range), low-saturation UI chrome, high-contrast traffic symbology
+- Ops-room aesthetic: restrained, precise, zero decorative animation. The ONLY things that animate are aircraft, camera, and alert glows
+- All text ≥ 12 px. Callsign labels always legible against background
+
+---
+
+## BUILD PHASES — BUILD IN THIS ORDER, STOP AFTER EACH PHASE
+
+**Phase 1:** Project scaffold + `ybbn.ts` airport geometry + 2D top-down View B rendering the static airfield. STOP. Output the app running with the static airfield visible.
+
+**Phase 2:** Simulation engine + DataFeedAdapter + aircraft moving through full lifecycle (arrival → land → taxi → gate → taxi → depart) visible in View B. STOP.
+
+**Phase 3:** 3D View A: scene, auto-orbiting camera, aircraft markers, altitude stems, trails, view switching with `V`. STOP.
+
+**Phase 4:** Click-to-inspect, follow mode, Esc back-out chain, aircraft detail panel. STOP.
+
+**Phase 5:** Time scrub bar: past ring buffer + future projection + ghost rendering + prediction/replay watermarks and borders. STOP.
+
+**Phase 6:** Conflict detector + scripted anomalies + side tool tabs + full alert behaviour (advisory/caution/critical) + alert log. STOP.
+
+**Phase 7:** Weather cells, traffic forecast panel, feed health indicator + stale-data failsafe, settings panel, hotkeys polish. STOP.
+
+After EACH phase: report exactly what was built, list every file created/modified, and confirm the app runs without console errors. Do NOT summarise — show the raw file list and any raw error output. Do not proceed to the next phase until told to continue.
+
+---
+
+## HARD RULES
+
+1. Do NOT build authentication, user accounts, or a database. All state is in-memory.
+2. Do NOT use map tile services, satellite imagery, or any external APIs. All geometry is local data.
+3. Do NOT let any UI component import from `/src/sim/` internals — only through `DataFeedAdapter`.
+4. Do NOT add features not in this spec. If something is ambiguous, choose the simplest interpretation and note the decision in your report.
+5. Do NOT summarise build reports. Raw file lists, raw errors.
+6. The future-view MUST be visually unmistakable from live view at all times.
+7. Advisory-tier alerts must NEVER auto-expand or make sound.
+8. If a phase fails, report the failure with raw output. Do not silently work around it.

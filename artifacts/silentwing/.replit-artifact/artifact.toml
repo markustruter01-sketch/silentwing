@@ -1,0 +1,27 @@
+kind = "web"
+previewPath = "/"
+title = "SilentWing"
+version = "1.0.0"
+id = "artifacts/silentwing"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 20146
+
+[services.development]
+run = "pnpm --filter @workspace/silentwing run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/silentwing", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/silentwing/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20146"
+BASE_PATH = "/"

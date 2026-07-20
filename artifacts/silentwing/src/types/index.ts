@@ -1,0 +1,88 @@
+// ─── Core domain types ───────────────────────────────────────────────────────
+
+export type FlightPhase =
+  | 'enroute-arrival'
+  | 'approach'
+  | 'landing'
+  | 'taxi-in'
+  | 'at-gate'
+  | 'taxi-out'
+  | 'takeoff'
+  | 'departure'
+  | 'enroute-departure';
+
+export type AlertSeverity = 'advisory' | 'caution' | 'critical';
+export type AlertType =
+  | 'conflict'
+  | 'taxi-conflict'
+  | 'route-deviation'
+  | 'runway-incursion';
+
+export interface Position {
+  x: number; // meters east of airport center
+  y: number; // meters south of airport center (SVG convention)
+  alt: number; // feet MSL
+}
+
+export interface Aircraft {
+  id: string;
+  callsign: string;
+  type: string;
+  phase: FlightPhase;
+  position: Position;
+  heading: number; // degrees
+  groundSpeed: number; // knots
+  assignedRunway?: string;
+  assignedGate?: string;
+  origin?: string;
+  destination?: string;
+  confidence: number; // 0.4–1.0 for predictions
+}
+
+export interface Alert {
+  id: string;
+  type: AlertType;
+  severity: AlertSeverity;
+  aircraftIds: string[];
+  message: string; // one-line reason, e.g. "QFA523 & VOZ711 converging..."
+  raisedAt: number; // unix ms
+  acknowledgedAt?: number;
+  dismissedAt?: number;
+}
+
+export interface WeatherCell {
+  id: string;
+  polygon: Array<{ x: number; y: number }>;
+  intensity: number; // 0–1
+}
+
+export interface WorldSnapshot {
+  t: number; // unix ms
+  aircraft: Aircraft[];
+  alerts: Alert[];
+  weather: {
+    windDir: number; // degrees
+    windSpeed: number; // knots
+    activeRunwayDirection: '01' | '19';
+    precipitationCells: WeatherCell[];
+  };
+}
+
+export interface AircraftDetail extends Aircraft {
+  waypointList: Array<{ name: string; plannedEta: number }>;
+  taxiRoute: string[];
+  planProgress: number; // 0–1
+}
+
+export type Unsubscribe = () => void;
+
+// ─── DataFeedAdapter — the ONLY interface between sim and UI ──────────────────
+
+export interface DataFeedAdapter {
+  subscribe(cb: (snapshot: WorldSnapshot) => void): Unsubscribe;
+  getSnapshotAt(t: number): WorldSnapshot;
+  getAircraftDetail(id: string): AircraftDetail;
+  getActiveAlerts(): Alert[];
+  acknowledgeAlert(id: string): void;
+  getFeedHealth(): { status: 'live' | 'lagging' | 'stalled'; lastUpdate: number };
+}
