@@ -101,7 +101,7 @@ const TerminalsLayer: React.FC = () => (
       DOMESTIC
     </text>
     <text
-      x={-960} y={820}
+      x={-125} y={490}
       fill={C.label} fontSize={48} fontFamily="Inter, system-ui, sans-serif"
       fontWeight={400} letterSpacing={4} textAnchor="middle"
     >
@@ -307,20 +307,98 @@ const OverlayLayer: React.FC = () => {
   );
 };
 
-// ─── Aircraft layer (placeholder for Phase 2) ─────────────────────────────────
-const AircraftLayer: React.FC<{ aircraft: Aircraft[] }> = ({ aircraft }) => {
+// ─── Aircraft layer ────────────────────────────────────────────────────────────
+
+// Visual style per phase — a quick lookup table keeps the JSX clean
+const PHASE_STYLE: Record<string, { fill: string; stroke: string; opacity: number }> = {
+  'approach':           { fill: '#38BDF8', stroke: '#0284C7', opacity: 0.95 },
+  'landing':            { fill: '#60A5FA', stroke: '#2563EB', opacity: 0.95 },
+  'taxi-in':            { fill: '#F59E0B', stroke: '#92400E', opacity: 0.90 },
+  'at-gate':            { fill: '#4ADE80', stroke: '#166534', opacity: 0.80 },
+  'taxi-out':           { fill: '#FB923C', stroke: '#9A3412', opacity: 0.90 },
+  'takeoff':            { fill: '#818CF8', stroke: '#3730A3', opacity: 0.95 },
+  'departure':          { fill: '#C084FC', stroke: '#6B21A8', opacity: 0.90 },
+  'enroute-departure':  { fill: '#C084FC', stroke: '#6B21A8', opacity: 0.85 },
+  'enroute-arrival':    { fill: '#38BDF8', stroke: '#0284C7', opacity: 0.80 },
+};
+const DEFAULT_STYLE = { fill: '#94A3B8', stroke: '#475569', opacity: 0.80 };
+
+// Symbol size (metres in SVG coordinate space)
+const S = 80;
+
+interface AircraftLayerProps {
+  aircraft: Aircraft[];
+  onAircraftClick?: (id: string) => void;
+  selectedId?: string | null;
+}
+
+const AircraftLayer: React.FC<AircraftLayerProps> = ({ aircraft, onAircraftClick, selectedId }) => {
   if (!aircraft.length) return null;
+
   return (
     <g id="aircraft">
-      {aircraft.map(ac => (
-        <g key={ac.id} transform={`translate(${ac.position.x}, ${ac.position.y})`}>
-          <circle r={24} fill="white" opacity={0.9} />
-          <text x={0} y={-32} fontSize={36} textAnchor="middle" fill="#E2E8F0"
-            fontFamily="Inter, system-ui, sans-serif" fontWeight={600}>
-            {ac.callsign}
-          </text>
-        </g>
-      ))}
+      {aircraft.map(ac => {
+        const style = PHASE_STYLE[ac.phase] ?? DEFAULT_STYLE;
+        const isSelected = ac.id === selectedId;
+        const { x, y } = ac.position;
+
+        return (
+          <g
+            key={ac.id}
+            transform={`translate(${x},${y})`}
+            style={{ cursor: onAircraftClick ? 'pointer' : 'default' }}
+            onClick={() => onAircraftClick?.(ac.id)}
+          >
+            {/* Selection halo */}
+            {isSelected && (
+              <circle r={S * 0.85} fill="none" stroke="#FACC15" strokeWidth={6} opacity={0.7} />
+            )}
+
+            {/* Directional triangle — rotated to heading */}
+            <g transform={`rotate(${ac.heading})`}>
+              <polygon
+                points={`0,${-S} ${-S * 0.38},${S * 0.52} 0,${S * 0.28} ${S * 0.38},${S * 0.52}`}
+                fill={style.fill}
+                stroke={style.stroke}
+                strokeWidth={7}
+                opacity={style.opacity}
+              />
+            </g>
+
+            {/* Centre dot */}
+            <circle r={12} fill={style.stroke} opacity={0.9} />
+
+            {/* Callsign — always upright, above the symbol */}
+            <text
+              y={-(S + 22)}
+              fontSize={58}
+              textAnchor="middle"
+              fontFamily="'JetBrains Mono', 'Consolas', 'Courier New', monospace"
+              fontWeight={600}
+              fill={style.fill}
+              opacity={0.92}
+              style={{ userSelect: 'none' }}
+            >
+              {ac.callsign}
+            </text>
+
+            {/* Speed + altitude tag — below callsign */}
+            <text
+              y={-(S + 22) + 52}
+              fontSize={42}
+              textAnchor="middle"
+              fontFamily="'JetBrains Mono', 'Consolas', 'Courier New', monospace"
+              fontWeight={400}
+              fill={style.fill}
+              opacity={0.55}
+              style={{ userSelect: 'none' }}
+            >
+              {ac.groundSpeed > 0 ? `${ac.groundSpeed}kt` : ac.phase === 'at-gate' ? 'GATE' : ''}
+              {ac.position.alt > 50 ? ` A${Math.round(ac.position.alt / 100).toString().padStart(3, '0')}` : ''}
+            </text>
+          </g>
+        );
+      })}
     </g>
   );
 };
