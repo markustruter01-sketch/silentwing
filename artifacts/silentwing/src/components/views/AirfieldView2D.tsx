@@ -482,7 +482,11 @@ const AirfieldView2D: React.FC<AirfieldView2DProps> = ({
         <TerminalsLayer />
         <GatesLayer />
         <RunwaysLayer />
-        <AircraftLayer aircraft={aircraft} />
+        <AircraftLayer
+          aircraft={aircraft}
+          onAircraftClick={onAircraftClick}
+          selectedId={selectedAircraftId}
+        />
         <OverlayLayer />
       </svg>
 

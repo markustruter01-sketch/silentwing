@@ -24,6 +24,6 @@ export const TICK_MS = 100; // 10 Hz
 
 // Gate geometry — must match ybbn.ts gate generators
 export const DOM_GATE_Y  = -185;
-export const INTL_GATE_Y =  215;
+export const INTL_GATE_Y =  180;   // north face of intl terminal (y=200) − 20 m apron clearance
 export function domGateX(i: number)  { return -580 + i * 68; }
 export function intlGateX(i: number) { return -410 + i * 75; }

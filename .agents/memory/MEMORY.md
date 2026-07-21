@@ -1,0 +1,3 @@
+- [SilentWing phase log](silentwing-phases.md) — phase completion status, key architectural decisions per phase
+- [Three.js camera state machine](silentwing-camera.md) — CameraMode type, Esc chain, prop-sync pattern for rAF loop
+- [Taxi route geometry rules](silentwing-taxi-geometry.md) — why intl gates moved to y=180, INTL_APRON_W waypoint rationale

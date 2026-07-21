@@ -68,6 +68,13 @@ const ALPHA_DOM    = alpha(-90);
 const DOM_ENTRY    = { x: -720, y: -80 };
 const INTL_ENTRY   = { x: -560, y: 710 };
 
+// Apron approach point on the west side of the international terminal.
+// The terminal's west face is at x = −450; this sits 25 m further west.
+// From INTL_ENTRY → INTL_APRON_W the path travels at x ≤ −475 (west of the
+// terminal polygon), then the short east run at y = 180 is north of the
+// terminal's north face (y = 200) — so no leg crosses the building footprint.
+const INTL_APRON_W = { x: -475, y: 180 };
+
 // ── Route builders ────────────────────────────────────────────────────────────
 
 /**
@@ -93,12 +100,15 @@ export function routeDomesticArrival(gx: number, gy: number): Waypoint[] {
  */
 export function routeIntlArrival(gx: number, gy: number): Waypoint[] {
   return [
-    { ...APPROACH_SRC, alt: 2500, spd: SPD.approach,  phase: 'approach' },
-    { ...THR19R,        alt:    0, spd: SPD.touchdown,  phase: 'landing'  },
-    { ...W3_RW,         alt:    0, spd: SPD.rollout,    phase: 'landing'  },
-    { ...W3_ALPHA,      alt:    0, spd: SPD.taxi,       phase: 'taxi-in'  },
-    { ...INTL_ENTRY,    alt:    0, spd: SPD.slowTaxi,   phase: 'taxi-in'  },
-    { x: gx, y: gy,    alt:    0, spd: SPD.slowTaxi,   phase: 'at-gate'  },
+    { ...APPROACH_SRC,  alt: 2500, spd: SPD.approach,  phase: 'approach' },
+    { ...THR19R,         alt:    0, spd: SPD.touchdown,  phase: 'landing'  },
+    { ...W3_RW,          alt:    0, spd: SPD.rollout,    phase: 'landing'  },
+    { ...W3_ALPHA,       alt:    0, spd: SPD.taxi,       phase: 'taxi-in'  },
+    { ...INTL_ENTRY,     alt:    0, spd: SPD.slowTaxi,   phase: 'taxi-in'  },
+    // Route along terminal west face (x=−475, west of building at x=−450),
+    // then east along the apron at y=180 (north of terminal north face at y=200).
+    { ...INTL_APRON_W,   alt:    0, spd: SPD.slowTaxi,   phase: 'taxi-in'  },
+    { x: gx, y: gy,     alt:    0, spd: SPD.slowTaxi,   phase: 'at-gate'  },
   ];
 }
 
@@ -126,6 +136,9 @@ export function routeDomesticDeparture(gx: number, gy: number): Waypoint[] {
 export function routeIntlDeparture(gx: number, gy: number): Waypoint[] {
   return [
     { x: gx, y: gy,    alt:    0, spd: SPD.slowTaxi,   phase: 'taxi-out' },
+    // Reverse of arrival: west along apron face, then south along terminal
+    // west face to INTL_ENTRY — no leg crosses the building footprint.
+    { ...INTL_APRON_W,  alt:    0, spd: SPD.slowTaxi,   phase: 'taxi-out' },
     { ...INTL_ENTRY,    alt:    0, spd: SPD.slowTaxi,   phase: 'taxi-out' },
     { ...W3_ALPHA,      alt:    0, spd: SPD.taxi,        phase: 'taxi-out' },
     { ...W3_RW,         alt:    0, spd: SPD.rollout,     phase: 'taxi-out' },

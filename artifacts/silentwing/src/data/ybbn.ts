@@ -287,7 +287,7 @@ function intlGates(): Gate[] {
       id: `I${i + 1}`,
       terminal: 'international',
       x: -410 + i * 75,
-      y: 215,
+      y: 180,   // 20 m north of terminal north face (y=200) — gates are on the apron, not inside the building
     });
   }
   return gates;
