@@ -169,13 +169,17 @@ interface SceneState {
   lastClickTime: number;
   // dead-reckoning: timestamp of last rAF tick (ms) for dt calculation
   lastTickTime:  number;
-  // zoom/pan state
+  // zoom/pan/rotate state
   orbitRadius:      number;          // mutable zoom radius (starts at ORBIT_RADIUS)
+  orbitElevation:   number;          // camera height above scene origin (mutable via drag)
   orbitTarget:      THREE.Vector3;   // mutable orbit centre (panned by right-drag)
   rightDragActive:  boolean;
   rightDragLastX:   number;
   rightDragLastY:   number;
   panResumeTimer:   ReturnType<typeof setTimeout> | null;
+  leftDragActive:   boolean;         // left-drag arc-rotate
+  leftDragLastX:    number;
+  leftDragLastY:    number;
 }
 
 // ── Helper: begin fly-to animation toward an aircraft ────────────────────────
@@ -316,11 +320,15 @@ export default function AirspaceView3D({
       lastClickTime: 0,
       lastTickTime:  performance.now(),
       orbitRadius:      ORBIT_RADIUS,
+      orbitElevation:   ORBIT_HEIGHT,
       orbitTarget:      LOOK_AT.clone(),
       rightDragActive:  false,
       rightDragLastX:   0,
       rightDragLastY:   0,
       panResumeTimer:   null,
+      leftDragActive:   false,
+      leftDragLastX:    0,
+      leftDragLastY:    0,
     };
     sceneRef.current = st;
 
@@ -336,7 +344,7 @@ export default function AirspaceView3D({
           st.angle += ORBIT_SPEED;
           camera.position.set(
             st.orbitTarget.x + st.orbitRadius * Math.cos(st.angle),
-            ORBIT_HEIGHT,
+            st.orbitElevation,
             st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle),
           );
           camera.lookAt(st.orbitTarget);
@@ -447,16 +455,22 @@ export default function AirspaceView3D({
     // ── Scroll wheel — zoom camera in/out ───────────────────────────────────
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const factor   = e.deltaY < 0 ? 0.92 : 1.09; // up = zoom in
+      const factor = e.deltaY < 0 ? 0.92 : 1.09; // up = zoom in
       const MIN_R = 500, MAX_R = 20000;
-      const newR  = Math.min(Math.max(st.orbitRadius * factor, MIN_R), MAX_R);
-      const delta = newR - st.orbitRadius;
-      st.orbitRadius = newR;
-      // In non-orbit modes dolly camera directly along view axis
-      if (st.cameraMode !== 'orbit') {
+      st.orbitRadius = Math.min(Math.max(st.orbitRadius * factor, MIN_R), MAX_R);
+      // Recompute camera from orbit params (works in orbit and manual modes)
+      if (st.cameraMode === 'orbit' || st.cameraMode === 'manual') {
+        camera.position.set(
+          st.orbitTarget.x + st.orbitRadius * Math.cos(st.angle),
+          st.orbitElevation,
+          st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle),
+        );
+        camera.lookAt(st.orbitTarget);
+      } else {
+        // inspect / follow — dolly along view axis
         const dir = new THREE.Vector3();
         camera.getWorldDirection(dir);
-        camera.position.addScaledVector(dir, -delta);
+        camera.position.addScaledVector(dir, (e.deltaY < 0 ? 1 : -1) * st.orbitRadius * 0.08);
       }
     };
     canvas.addEventListener('wheel', onWheel, { passive: false });
@@ -475,14 +489,48 @@ export default function AirspaceView3D({
         canvas.setPointerCapture(e.pointerId);
         return;
       }
-      // Left button — record origin for drag-vs-click detection
-      st.mouseDownX = e.clientX;
-      st.mouseDownY = e.clientY;
+      if (e.button === 0) {
+        // Left button — start arc-rotate + record origin for click detection
+        st.leftDragActive = true;
+        st.leftDragLastX  = e.clientX;
+        st.leftDragLastY  = e.clientY;
+        st.mouseDownX     = e.clientX;
+        st.mouseDownY     = e.clientY;
+        canvas.setPointerCapture(e.pointerId);
+      }
     };
 
+    // ── Left-drag: arc-rotate around orbit target  ───────────────────────────
     // ── Right-drag: pan orbit target + camera laterally ─────────────────────
     const onPointerMove = (e: PointerEvent) => {
+      if (st.leftDragActive) {
+        const dx = e.clientX - st.leftDragLastX;
+        const dy = e.clientY - st.leftDragLastY;
+        st.leftDragLastX = e.clientX;
+        st.leftDragLastY = e.clientY;
+
+        // Horizontal mouse → rotate azimuth; vertical → tilt elevation
+        st.angle         -= dx * 0.005;                                    // rad/px
+        st.orbitElevation = Math.min(Math.max(st.orbitElevation + dy * 3, 200), 8000);
+
+        camera.position.set(
+          st.orbitTarget.x + st.orbitRadius * Math.cos(st.angle),
+          st.orbitElevation,
+          st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle),
+        );
+        camera.lookAt(st.orbitTarget);
+
+        // Pause auto-orbit while user is rotating manually
+        if (st.cameraMode === 'orbit') {
+          st.cameraMode = 'manual';
+          camModeRef.current('manual');
+        }
+        return;
+      }
+
       if (!st.rightDragActive) return;
+
+      // ── Right-drag pan ──────────────────────────────────────────────────────
       const dx = e.clientX - st.rightDragLastX;
       const dy = e.clientY - st.rightDragLastY;
       st.rightDragLastX = e.clientX;
@@ -525,29 +573,25 @@ export default function AirspaceView3D({
         st.rightDragActive = false;
         return;
       }
+      if (e.button !== 0) return;
+
+      st.leftDragActive = false;
 
       const dx   = e.clientX - st.mouseDownX;
       const dy   = e.clientY - st.mouseDownY;
       const dist = Math.sqrt(dx * dx + dy * dy);
 
-      if (dist > 6) {
-        // Left-drag — freeze camera (stop auto-orbit)
-        if (st.cameraMode === 'orbit') {
-          st.cameraMode = 'manual';
-          camModeRef.current('manual');
-          console.log('[3D CAM] left-drag → manual (auto-orbit paused; Esc to resume)');
-        }
-        return;
-      }
+      // If the pointer moved more than 6 px it was a rotate drag — don't raycast
+      if (dist > 6) return;
 
-      // Click — raycast against aircraft cones
+      // Short tap — raycast against aircraft cones
       const rect = canvas.getBoundingClientRect();
       const mx   = ((e.clientX - rect.left) / rect.width)  *  2 - 1;
       const my   = ((e.clientY - rect.top)  / rect.height) * -2 + 1;
       raycaster.setFromCamera(new THREE.Vector2(mx, my), camera);
       const hits = raycaster.intersectObjects([...st.coneToId.keys()]);
 
-      if (!hits.length) return; // clicked empty space
+      if (!hits.length) return; // tapped empty space
 
       const hitMesh = hits[0].object as THREE.Mesh;
       const acId    = st.coneToId.get(hitMesh);
