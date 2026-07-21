@@ -21,7 +21,7 @@ export type CameraMode = 'orbit' | 'manual' | 'inspect' | 'follow';
 
 // ── Scene constants ────────────────────────────────────────────────────────────
 const ALT_SCALE    = 0.15;
-const ORBIT_RADIUS = 4200;        // was 7200 — tightened to frame YBBN runways
+const ORBIT_RADIUS = 5200;        // default orbit radius (was 4200 — widened for airspace margin)
 const ORBIT_HEIGHT = 1600;        // was 2600 — lower angle, more runway visible
 const ORBIT_SPEED  = 0.00035;     // rad/frame ≈ 4.4 min/revolution at 60 fps
 const LOOK_AT      = new THREE.Vector3(0, 0, 0); // airfield centre (was y=700)
@@ -169,6 +169,13 @@ interface SceneState {
   lastClickTime: number;
   // dead-reckoning: timestamp of last rAF tick (ms) for dt calculation
   lastTickTime:  number;
+  // zoom/pan state
+  orbitRadius:      number;          // mutable zoom radius (starts at ORBIT_RADIUS)
+  orbitTarget:      THREE.Vector3;   // mutable orbit centre (panned by right-drag)
+  rightDragActive:  boolean;
+  rightDragLastX:   number;
+  rightDragLastY:   number;
+  panResumeTimer:   ReturnType<typeof setTimeout> | null;
 }
 
 // ── Helper: begin fly-to animation toward an aircraft ────────────────────────
@@ -308,6 +315,12 @@ export default function AirspaceView3D({
       lastClickAcId: null,
       lastClickTime: 0,
       lastTickTime:  performance.now(),
+      orbitRadius:      ORBIT_RADIUS,
+      orbitTarget:      LOOK_AT.clone(),
+      rightDragActive:  false,
+      rightDragLastX:   0,
+      rightDragLastY:   0,
+      panResumeTimer:   null,
     };
     sceneRef.current = st;
 
@@ -322,15 +335,15 @@ export default function AirspaceView3D({
         case 'orbit': {
           st.angle += ORBIT_SPEED;
           camera.position.set(
-            ORBIT_RADIUS * Math.cos(st.angle),
+            st.orbitTarget.x + st.orbitRadius * Math.cos(st.angle),
             ORBIT_HEIGHT,
-            ORBIT_RADIUS * Math.sin(st.angle),
+            st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle),
           );
-          camera.lookAt(LOOK_AT);
+          camera.lookAt(st.orbitTarget);
           break;
         }
         case 'manual': {
-          // Camera is frozen — user dragged it off auto-orbit. Esc resumes.
+          // Camera is frozen — panned or dragged off auto-orbit. Esc resumes.
           break;
         }
         case 'inspect': {
@@ -431,22 +444,98 @@ export default function AirspaceView3D({
     // ── Pointer events ───────────────────────────────────────────────────────
     const canvas = renderer.domElement;
 
+    // ── Scroll wheel — zoom camera in/out ───────────────────────────────────
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const factor   = e.deltaY < 0 ? 0.92 : 1.09; // up = zoom in
+      const MIN_R = 500, MAX_R = 20000;
+      const newR  = Math.min(Math.max(st.orbitRadius * factor, MIN_R), MAX_R);
+      const delta = newR - st.orbitRadius;
+      st.orbitRadius = newR;
+      // In non-orbit modes dolly camera directly along view axis
+      if (st.cameraMode !== 'orbit') {
+        const dir = new THREE.Vector3();
+        camera.getWorldDirection(dir);
+        camera.position.addScaledVector(dir, -delta);
+      }
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+
+    // ── Context menu — suppress right-click browser menu ────────────────────
+    const onContextMenu = (e: MouseEvent) => e.preventDefault();
+    canvas.addEventListener('contextmenu', onContextMenu);
+
+    // ── Pointer events ───────────────────────────────────────────────────────
     const onPointerDown = (e: PointerEvent) => {
+      if (e.button === 2) {
+        // Right button — start pan drag
+        st.rightDragActive = true;
+        st.rightDragLastX  = e.clientX;
+        st.rightDragLastY  = e.clientY;
+        canvas.setPointerCapture(e.pointerId);
+        return;
+      }
+      // Left button — record origin for drag-vs-click detection
       st.mouseDownX = e.clientX;
       st.mouseDownY = e.clientY;
     };
 
+    // ── Right-drag: pan orbit target + camera laterally ─────────────────────
+    const onPointerMove = (e: PointerEvent) => {
+      if (!st.rightDragActive) return;
+      const dx = e.clientX - st.rightDragLastX;
+      const dy = e.clientY - st.rightDragLastY;
+      st.rightDragLastX = e.clientX;
+      st.rightDragLastY = e.clientY;
+
+      const dir    = new THREE.Vector3();
+      camera.getWorldDirection(dir);
+      const right  = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0)).normalize();
+      const up     = new THREE.Vector3().crossVectors(right, dir).normalize();
+      const panScale = st.orbitRadius * 0.001;
+
+      const panVec = right.clone().multiplyScalar(-dx * panScale)
+                          .addScaledVector(up, dy * panScale);
+      camera.position.add(panVec);
+      st.orbitTarget.add(panVec);
+
+      // Pause auto-orbit during pan
+      if (st.cameraMode === 'orbit') {
+        st.cameraMode = 'manual';
+        camModeRef.current('manual');
+        console.log('[3D CAM] right-drag pan → manual (resumes in 30 s idle)');
+      }
+
+      // Reset 30 s idle timer — on expiry, re-sync angle and resume orbit
+      if (st.panResumeTimer !== null) clearTimeout(st.panResumeTimer);
+      st.panResumeTimer = setTimeout(() => {
+        st.panResumeTimer = null;
+        st.angle = Math.atan2(
+          camera.position.z - st.orbitTarget.z,
+          camera.position.x - st.orbitTarget.x,
+        );
+        st.cameraMode = 'orbit';
+        camModeRef.current('orbit');
+        console.log('[3D CAM] pan idle 30 s → orbit resumed');
+      }, 30_000);
+    };
+
     const onPointerUp = (e: PointerEvent) => {
+      if (e.button === 2) {
+        st.rightDragActive = false;
+        return;
+      }
+
       const dx   = e.clientX - st.mouseDownX;
       const dy   = e.clientY - st.mouseDownY;
       const dist = Math.sqrt(dx * dx + dy * dy);
 
       if (dist > 6) {
-        // Drag — freeze camera (stop auto-orbit)
+        // Left-drag — freeze camera (stop auto-orbit)
         if (st.cameraMode === 'orbit') {
           st.cameraMode = 'manual';
           camModeRef.current('manual');
-          console.log('[3D CAM] drag → manual (auto-orbit paused; Esc to resume)');
+          console.log('[3D CAM] left-drag → manual (auto-orbit paused; Esc to resume)');
         }
         return;
       }
@@ -482,6 +571,7 @@ export default function AirspaceView3D({
     };
 
     canvas.addEventListener('pointerdown', onPointerDown);
+    canvas.addEventListener('pointermove', onPointerMove);
     canvas.addEventListener('pointerup',   onPointerUp);
 
     // ── Keyboard handler: O = snap to orbit, Esc = back-out chain ───────────
@@ -534,8 +624,12 @@ export default function AirspaceView3D({
     return () => {
       ro.disconnect();
       cancelAnimationFrame(st.animId);
-      canvas.removeEventListener('pointerdown', onPointerDown);
-      canvas.removeEventListener('pointerup',   onPointerUp);
+      if (st.panResumeTimer !== null) clearTimeout(st.panResumeTimer);
+      canvas.removeEventListener('wheel',        onWheel);
+      canvas.removeEventListener('contextmenu',  onContextMenu);
+      canvas.removeEventListener('pointerdown',  onPointerDown);
+      canvas.removeEventListener('pointermove',  onPointerMove);
+      canvas.removeEventListener('pointerup',    onPointerUp);
       window.removeEventListener('keydown', onKey);
       st.acMap.forEach(b => { scene.remove(b.cone, b.stem, b.trail, b.label); disposeBundle(b); });
       st.acMap.clear();
@@ -709,7 +803,11 @@ export default function AirspaceView3D({
         <span className="font-mono text-[9px] tracking-wider text-slate-800">[DBLCLICK] FOLLOW</span>
         <span className="font-mono text-[9px] tracking-wider text-slate-800">[ESC] BACK</span>
         <span className="font-mono text-[9px] tracking-wider text-slate-800">[O] ORBIT</span>
+        <span className="font-mono text-[9px] tracking-wider text-slate-800">[SCROLL] ZOOM</span>
+        <span className="font-mono text-[9px] tracking-wider text-slate-800">[RMB] PAN</span>
         <span className="font-mono text-[9px] tracking-wider text-slate-800">[V] 2D VIEW</span>
+        <span className="font-mono text-[9px] tracking-wider text-slate-800">[P] PRED. PATHS</span>
+        <span className="font-mono text-[9px] tracking-wider text-slate-800">[L] SNAP LIVE</span>
       </div>
 
     </div>

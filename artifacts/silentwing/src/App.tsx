@@ -91,6 +91,9 @@ export default function App() {
     });
   }, []);
 
+  // ── Predicted paths toggle ───────────────────────────────────────────────
+  const [showPredictedPaths, setShowPredictedPaths] = useState(false);
+
   // ── Global keyboard handler ──────────────────────────────────────────────
   // The 3D view handles its own Esc chain internally; we handle 2D Esc here.
   const viewRef = useRef(view);
@@ -100,8 +103,27 @@ export default function App() {
     const tag = (e.target as HTMLElement)?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA') return;
 
-    if (e.key.toUpperCase() === 'V') {
+    const key = e.key.toUpperCase();
+
+    if (key === 'V') {
       setView(v => v === 'airspace' ? 'airfield' : 'airspace');
+      return;
+    }
+
+    // P — toggle predicted paths overlay (rendering deferred to Phase 5)
+    if (key === 'P') {
+      setShowPredictedPaths(prev => {
+        const next = !prev;
+        console.log(`[APP] P: predicted paths ${next ? 'ON' : 'OFF'}`);
+        return next;
+      });
+      return;
+    }
+
+    // L — snap data source to LIVE
+    if (key === 'L') {
+      console.log('[APP] L: snap to LIVE feed');
+      setDataSource('live');
       return;
     }
 

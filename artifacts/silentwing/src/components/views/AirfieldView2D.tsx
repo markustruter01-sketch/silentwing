@@ -431,7 +431,7 @@ const AirfieldView2D: React.FC<AirfieldView2DProps> = ({
   }, []);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 && e.button !== 2) return; // left or right drag pans
     dragRef.current = {
       startX: e.clientX,
       startY: e.clientY,
@@ -463,6 +463,7 @@ const AirfieldView2D: React.FC<AirfieldView2DProps> = ({
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
+      onContextMenu={e => e.preventDefault()}
     >
       <svg
         ref={svgRef}
