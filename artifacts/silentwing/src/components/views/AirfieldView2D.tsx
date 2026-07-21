@@ -1,15 +1,22 @@
 import React, { useCallback, useRef, useState, useEffect } from 'react';
 import {
-  RUNWAYS,
-  TAXIWAYS,
-  APRONS,
-  TERMINALS,
-  GATES,
+  REAL_RUNWAYS,
+  REAL_TAXIWAYS,
+  REAL_APRONS,
+  REAL_GATES,
+} from '@/data/ybbn_real';
+import {
   GEO_POLYGONS,
   VIEWBOX_STR,
   VIEWBOX,
 } from '@/data/ybbn';
 import type { Aircraft } from '@/types';
+
+// ── Y-flip: ybbn_real uses +y=north; this SVG uses +y=south ──────────────────
+// ADS-B adapter also uses +y=south, so this keeps geometry and aircraft aligned.
+function fy(coords: [number, number][]): [number, number][] {
+  return coords.map(([x, y]) => [x, -y] as [number, number]);
+}
 
 // ─── Colour palette ───────────────────────────────────────────────────────────
 const C = {
@@ -66,189 +73,129 @@ const GeographyLayer: React.FC = () => (
   </g>
 );
 
+// ── Real airport geometry layers — all Y-flipped via fy() ────────────────────
+
 const ApronsLayer: React.FC = () => (
   <g id="aprons">
-    {APRONS.map(a => (
+    {REAL_APRONS.map((apron, i) => (
       <polygon
-        key={a.id}
-        points={pts(a.corners)}
+        key={i}
+        points={pts(fy(apron))}
         fill={C.apron}
         stroke={C.apronStroke}
-        strokeWidth={8}
+        strokeWidth={6}
       />
     ))}
   </g>
 );
 
-const TerminalsLayer: React.FC = () => (
-  <g id="terminals">
-    {TERMINALS.map(t => (
-      <g key={t.id}>
-        <polygon
-          points={pts(t.corners)}
-          fill={C.terminal}
-          stroke={C.terminalLine}
-          strokeWidth={10}
-        />
-      </g>
-    ))}
-    {/* Terminal labels */}
-    <text
-      x={-220} y={-460}
-      fill={C.label} fontSize={52} fontFamily="Inter, system-ui, sans-serif"
-      fontWeight={400} letterSpacing={4} textAnchor="middle"
-    >
-      DOMESTIC
-    </text>
-    <text
-      x={-125} y={490}
-      fill={C.label} fontSize={48} fontFamily="Inter, system-ui, sans-serif"
-      fontWeight={400} letterSpacing={4} textAnchor="middle"
-    >
-      INTERNATIONAL
-    </text>
-  </g>
-);
-
 const GatesLayer: React.FC = () => (
   <g id="gates">
-    {GATES.map(g => (
-      <g key={g.id}>
-        <circle cx={g.x} cy={g.y} r={22} fill={C.apron} stroke={C.gateStroke} strokeWidth={5} />
-        <text
-          x={g.x} y={g.y + 8}
-          fill={C.label} fontSize={20} fontFamily="Inter, system-ui, sans-serif"
-          fontWeight={500} textAnchor="middle"
-        >
-          {g.id}
-        </text>
-      </g>
-    ))}
+    {REAL_GATES.map((g, i) => {
+      const [gx, gy] = [g.pos[0], -g.pos[1]]; // Y-flip
+      return (
+        <g key={i}>
+          <circle cx={gx} cy={gy} r={16} fill={C.apron} stroke={C.gateStroke} strokeWidth={3} />
+          {g.ref ? (
+            <text
+              x={gx} y={gy + 5}
+              fill={C.label} fontSize={13} fontFamily="Inter, system-ui, sans-serif"
+              fontWeight={500} textAnchor="middle"
+            >
+              {g.ref}
+            </text>
+          ) : null}
+        </g>
+      );
+    })}
   </g>
 );
 
 const TaxiwaysLayer: React.FC = () => (
   <g id="taxiways">
-    {TAXIWAYS.map(t => (
-      <g key={t.id}>
-        {/* Taxiway surface */}
-        <polyline
-          points={polyline(t.points)}
-          fill="none"
-          stroke={C.taxiway}
-          strokeWidth={t.width}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        {/* Taxiway centreline */}
-        <polyline
-          points={polyline(t.points)}
-          fill="none"
-          stroke={C.taxiCL}
-          strokeWidth={2}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeDasharray="40 30"
-        />
-      </g>
-    ))}
+    {REAL_TAXIWAYS.map((t, i) => {
+      const ptsStr = polyline(fy(t.coords));
+      return (
+        <g key={i}>
+          {/* Taxiway surface */}
+          <polyline
+            points={ptsStr}
+            fill="none"
+            stroke={C.taxiway}
+            strokeWidth={22}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          {/* Centreline */}
+          <polyline
+            points={ptsStr}
+            fill="none"
+            stroke={C.taxiCL}
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeDasharray="30 20"
+          />
+        </g>
+      );
+    })}
   </g>
 );
 
-// Threshold bar rendering
-function ThresholdBars({ rw }: { rw: typeof RUNWAYS[0] }) {
-  const H = (rw.id === '01L_19R' ? 10 : 10) * Math.PI / 180;
-  const sinH = Math.sin(H);
-  const cosH = Math.cos(H);
-  const perpX = cosH;  // east
-  const perpY = sinH;
-
-  function bar(cx: number, cy: number, inside: boolean) {
-    const DIR = inside ? 1 : -1; // inward
-    const barW = rw.width * 0.7;
-    const barH = 12;
-    const segments = 8;
-    const spacing = barW / (segments - 1);
-    return Array.from({ length: segments }, (_, i) => {
-      const offset = -barW / 2 + i * spacing;
-      const bx = cx + offset * perpX + DIR * barH * sinH;
-      const by = cy + offset * perpY - DIR * barH * cosH;
-      return (
-        <line
-          key={i}
-          x1={bx - sinH * 30} y1={by + cosH * 30}
-          x2={bx + sinH * 30} y2={by - cosH * 30}
-          stroke={C.thresholdBar}
-          strokeWidth={4}
-          opacity={0.9}
-        />
-      );
-    });
-  }
-
-  const [n01x, n01y] = rw.threshold01;
-  const [n19x, n19y] = rw.threshold19;
-
-  return (
-    <g>
-      {bar(n01x, n01y, true)}
-      {bar(n19x, n19y, true)}
-    </g>
-  );
-}
-
 const RunwaysLayer: React.FC = () => (
   <g id="runways">
-    {RUNWAYS.map(rw => (
-      <g key={rw.id}>
-        {/* Runway surface */}
-        <polygon
-          points={pts(rw.corners)}
-          fill={C.runway}
-          stroke={C.runwayEdge}
-          strokeWidth={2}
-        />
-        {/* Centreline */}
-        <line
-          x1={rw.centerline[0][0]} y1={rw.centerline[0][1]}
-          x2={rw.centerline[1][0]} y2={rw.centerline[1][1]}
-          stroke={C.runwayCL}
-          strokeWidth={3}
-          strokeDasharray="80 50"
-          opacity={0.5}
-        />
-        {/* Threshold bars */}
-        <ThresholdBars rw={rw} />
-        {/* Designator text — 01 end (north) */}
-        <text
-          x={rw.threshold01[0] + 50 * Math.sin((10 * Math.PI) / 180)}
-          y={rw.threshold01[1] - 50 * Math.cos((10 * Math.PI) / 180) + 280}
-          fill={C.designator}
-          fontSize={90}
-          fontFamily="Inter, system-ui, sans-serif"
-          fontWeight={700}
-          textAnchor="middle"
-          transform={`rotate(10, ${rw.threshold01[0]}, ${rw.threshold01[1] + 200})`}
-          opacity={0.8}
-        >
-          {rw.designator01}
-        </text>
-        {/* Designator text — 19 end (south) */}
-        <text
-          x={rw.threshold19[0] + 50 * Math.sin((10 * Math.PI) / 180)}
-          y={rw.threshold19[1] + 50 * Math.cos((10 * Math.PI) / 180) - 280}
-          fill={C.designator}
-          fontSize={90}
-          fontFamily="Inter, system-ui, sans-serif"
-          fontWeight={700}
-          textAnchor="middle"
-          transform={`rotate(190, ${rw.threshold19[0]}, ${rw.threshold19[1] - 200})`}
-          opacity={0.8}
-        >
-          {rw.designator19}
-        </text>
-      </g>
-    ))}
+    {REAL_RUNWAYS.map((rw, i) => {
+      const coords  = fy(rw.coords);
+      const ptsStr  = polyline(coords);
+      const firstPt = coords[0];
+      const lastPt  = coords[coords.length - 1];
+      // Lower y_scene = further north (SVG +y is south)
+      const firstIsNorth = firstPt[1] < lastPt[1];
+      const northPt = firstIsNorth ? firstPt : lastPt; // 19x threshold
+      const southPt = firstIsNorth ? lastPt : firstPt; // 01x threshold
+      const [des01, des19] = rw.ref.split('/');
+      return (
+        <g key={i}>
+          {/* Runway surface — thick polyline (52 m ≈ real width + visibility margin) */}
+          <polyline
+            points={ptsStr}
+            fill="none"
+            stroke={C.runway}
+            strokeWidth={52}
+            strokeLinecap="butt"
+            strokeLinejoin="round"
+          />
+          {/* Centreline */}
+          <polyline
+            points={ptsStr}
+            fill="none"
+            stroke={C.runwayCL}
+            strokeWidth={2.5}
+            strokeLinecap="round"
+            strokeDasharray="80 50"
+            opacity={0.5}
+          />
+          {/* 19x designator at north threshold */}
+          <text
+            x={northPt[0]} y={northPt[1] - 60}
+            fill={C.designator} fontSize={80}
+            fontFamily="Inter, system-ui, sans-serif" fontWeight={700}
+            textAnchor="middle"
+            transform={`rotate(190, ${northPt[0]}, ${northPt[1]})`}
+            opacity={0.75}
+          >{des19}</text>
+          {/* 01x designator at south threshold */}
+          <text
+            x={southPt[0]} y={southPt[1] + 60}
+            fill={C.designator} fontSize={80}
+            fontFamily="Inter, system-ui, sans-serif" fontWeight={700}
+            textAnchor="middle"
+            transform={`rotate(10, ${southPt[0]}, ${southPt[1]})`}
+            opacity={0.75}
+          >{des01}</text>
+        </g>
+      );
+    })}
   </g>
 );
 
@@ -480,7 +427,6 @@ const AirfieldView2D: React.FC<AirfieldView2DProps> = ({
         <GeographyLayer />
         <ApronsLayer />
         <TaxiwaysLayer />
-        <TerminalsLayer />
         <GatesLayer />
         <RunwaysLayer />
         <AircraftLayer

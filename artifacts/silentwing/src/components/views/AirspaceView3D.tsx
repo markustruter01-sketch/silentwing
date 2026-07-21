@@ -14,7 +14,7 @@ import * as THREE from 'three';
 import { useEffect, useRef } from 'react';
 import type { Aircraft } from '@/types';
 import { isAirborne } from '@/types';
-import { RUNWAYS } from '@/data/ybbn';
+import { REAL_RUNWAYS, REAL_TAXIWAYS, REAL_APRONS } from '@/data/ybbn_real';
 
 // ── Camera mode — exported so App can type-check ──────────────────────────────
 export type CameraMode = 'orbit' | 'manual' | 'inspect' | 'follow';
@@ -99,22 +99,48 @@ function buildAltRings(): THREE.Group {
   return g;
 }
 
-// ── Runway outlines on the ground plane ───────────────────────────────────────
-function buildRunwayFootprints(): THREE.LineSegments {
-  const positions: number[] = [];
-  for (const rw of RUNWAYS) {
-    const c = rw.corners, n = c.length;
-    for (let i = 0; i < n; i++) {
-      const [ax, ay] = c[i], [bx, by] = c[(i + 1) % n];
-      positions.push(ax, 0, ay, bx, 0, by);
+// ── Real YBBN ground geometry — runways, taxiways, apron ─────────────────────
+// ybbn_real.ts uses +y=north; scene uses +y=south (same as ADS-B adapter).
+// Apply Y-flip so geometry and live aircraft share one coordinate frame.
+function flipRealY(coords: [number, number][]): [number, number][] {
+  return coords.map(([x, y]) => [x, -y] as [number, number]);
+}
+
+function buildGroundGeometry(): THREE.Group {
+  const g = new THREE.Group();
+
+  // Runways — bright centreline, 2 polylines
+  const rwMat = new THREE.LineBasicMaterial({ color: 0xC8CDD4, transparent: true, opacity: 0.55 });
+  for (const rw of REAL_RUNWAYS) {
+    const pts = flipRealY(rw.coords).map(([x, y]) => new THREE.Vector3(x, 0, y));
+    g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), rwMat));
+  }
+
+  // Taxiways — 326 segments merged into one LineSegments draw call
+  const twPos: number[] = [];
+  for (const tw of REAL_TAXIWAYS) {
+    const coords = flipRealY(tw.coords);
+    for (let i = 0; i < coords.length - 1; i++) {
+      const [ax, ay] = coords[i], [bx, by] = coords[i + 1];
+      twPos.push(ax, 0, ay, bx, 0, by);
     }
   }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  return new THREE.LineSegments(
-    geo,
-    new THREE.LineBasicMaterial({ color: 0xC8CDD4, transparent: true, opacity: 0.40 }),
-  );
+  if (twPos.length) {
+    const twGeo = new THREE.BufferGeometry();
+    twGeo.setAttribute('position', new THREE.Float32BufferAttribute(twPos, 3));
+    g.add(new THREE.LineSegments(twGeo,
+      new THREE.LineBasicMaterial({ color: 0x78350F, transparent: true, opacity: 0.50 })));
+  }
+
+  // Apron polygon outline
+  const apronMat = new THREE.LineBasicMaterial({ color: 0x334155, transparent: true, opacity: 0.60 });
+  for (const apron of REAL_APRONS) {
+    const coords = flipRealY(apron);
+    const pts = [...coords, coords[0]].map(([x, y]) => new THREE.Vector3(x, 0, y));
+    g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), apronMat));
+  }
+
+  return g;
 }
 
 // ── Per-aircraft Three.js bundle ──────────────────────────────────────────────
@@ -296,7 +322,7 @@ export default function AirspaceView3D({
     discGeo.rotateX(-Math.PI / 2);
     scene.add(new THREE.Mesh(discGeo, new THREE.MeshBasicMaterial({ color: 0x0A0F18 })));
 
-    scene.add(buildRunwayFootprints());
+    scene.add(buildGroundGeometry());
     scene.add(buildAltRings());
 
     // Initialise mutable state

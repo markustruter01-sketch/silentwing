@@ -1,0 +1,122 @@
+# SILENTWING — SWAP IMAGINED AIRPORT FOR REAL YBBN GEOMETRY
+
+**ENVIRONMENT:** Existing SilentWing Replit dev project. This is an isolated
+structural task. Do NOT proceed to any numbered Phase. Do NOT bundle other
+changes. Stop after this task and report.
+
+**A file named `ybbn_real.ts` has been uploaded to the project.** It contains
+the REAL Brisbane Airport geometry (runways, taxiways, aprons, gates) derived
+from OpenStreetMap aeroway data, already projected into local scene metres using
+the SAME equirectangular projection frame as the ADS-B ingest adapter (origin
+YBBN lat -27.384, lon 153.117; x = (lon-lon0)*111320*cos(lat0), y = (lat-lat0)*110540,
+north = +y).
+
+---
+
+## GOAL
+
+Replace the imagined/placeholder airport geometry with this real geometry, so
+both the 2D airfield view and the 3D airspace view draw the actual Brisbane
+runways and taxiways. Because `ybbn_real.ts` uses the identical projection frame
+as the live ADS-B adapter, real aircraft must land on the real runways with no
+extra alignment work.
+
+---
+
+## WHAT `ybbn_real.ts` EXPORTS
+
+```ts
+export const YBBN_ORIGIN = { lat: -27.384, lon: 153.117 };
+export interface Polyline { ref: string; coords: [number, number][]; }
+export interface GatePos { ref: string; pos: [number, number]; }
+export const REAL_RUNWAYS: Polyline[];   // 2 runways (01L/19R, 01R/19L)
+export const REAL_TAXIWAYS: Polyline[];  // 326 taxiway segments
+export const REAL_APRONS: [number, number][][];  // apron polygon(s)
+export const REAL_GATES: GatePos[];      // 255 gate/stand positions
+```
+
+Each `coords` / `pos` value is already in scene metres (x east, y north),
+centred on YBBN. Do NOT re-project, re-scale, or rotate them. Draw them as-is.
+
+---
+
+## TASKS
+
+### 1. Verify the projection frame matches
+Before drawing anything, confirm the existing scene coordinate convention:
+- Report the sign convention the scene currently uses for Y (is +y north or
+  +y south?). `ybbn_real.ts` uses +y = north.
+- Report the projection the ADS-B adapter uses to place live aircraft.
+- **If the scene's Y convention is +y = south (or otherwise differs), flip the
+  sign on the REAL_* Y coordinates at load time so geometry and live aircraft
+  share ONE frame.** State clearly which way you resolved it. This is the single
+  most important step — if geometry and aircraft disagree on the frame, real
+  planes won't sit on real runways.
+
+### 2. 2D Airfield view — draw real geometry
+- Render REAL_RUNWAYS as filled/thick light strips (runways).
+- Render REAL_TAXIWAYS as thinner amber centrelines.
+- Render REAL_APRONS as filled dim polygons beneath the taxiways.
+- Render REAL_GATES as small gate markers.
+- Keep the existing pan/zoom, north arrow, scale bar, and aircraft layer.
+- The aircraft layer must render ON TOP of the airport geometry.
+
+### 3. 3D Airspace view — draw real geometry on the ground plane
+- Render the real runways and taxiways flat on the ground plane (y=0 height)
+  from REAL_RUNWAYS / REAL_TAXIWAYS, replacing the placeholder runway strips.
+- Runways as light surfaces, taxiways as dim amber lines, apron as a dim polygon.
+- Keep altitude stems, trails, orbit camera, aircraft markers unchanged.
+
+### 4. Remove the imagined geometry
+- Delete / replace the old placeholder geometry in the existing `ybbn.ts`
+  (the imagined runways, taxiways, terminals, gates). Anything that used the old
+  coordinates must now read from `ybbn_real.ts`.
+- **The SIMULATION's aircraft routes referenced the old imagined waypoints
+  (W3_ALPHA, INTL_ENTRY, gate coords, etc.). These will now be geometrically
+  wrong.** For THIS task, do the minimum to keep the sim from crashing: if the
+  sim route waypoints no longer resolve, keep a minimal internal fallback set of
+  waypoints for the sim ONLY (clearly commented as sim-scaffold, not real
+  geometry) so the app still runs in Simulation mode. Do NOT spend effort making
+  sim taxi routes follow the real taxiways — the sim is scaffolding; real
+  alignment matters for LIVE data, which uses real positions directly and needs
+  no routes. State exactly what you did for the sim.
+
+### 5. Keep terminals sane
+- OSM aeroway data may not include terminal building footprints. If the old
+  DOMESTIC / INTERNATIONAL terminal blocks are gone, that is acceptable — the
+  apron polygon and gate positions convey the terminal areas. Do not fabricate
+  new terminal boxes. If you want light terminal context, you may draw a convex
+  hull around each gate cluster as a dim block, but this is optional and must be
+  clearly derived from REAL_GATES, not invented.
+
+---
+
+## HARD RULES
+
+1. Do NOT re-project, re-scale, or rotate the REAL_* coordinates. They are
+   final scene metres. The only permitted transform is a Y sign-flip IF the
+   scene uses +y = south, applied uniformly.
+2. Geometry and live ADS-B aircraft MUST end up in the same coordinate frame.
+   Verify by checking that a live aircraft on final approach visually tracks
+   down a real runway centreline.
+3. Do NOT invent runways, taxiways, or terminals. Draw only what `ybbn_real.ts`
+   provides (terminal hull from gate clusters is the sole optional exception).
+4. Do NOT touch aircraft rendering, camera, trails, stems, alerts, or the
+   data-source toggle.
+5. Do NOT proceed to any numbered Phase.
+6. Keep the app running in BOTH Simulation and Live ADS-B modes.
+
+---
+
+## REPORT AFTER BUILDING (raw, no summaries)
+
+1. Raw file list created/modified.
+2. The Y sign-convention finding and exactly how you reconciled `ybbn_real.ts`
+   with the scene + ADS-B frame (flip or no flip, and why).
+3. Confirm counts actually drawn: how many runways, taxiways, aprons, gates
+   rendered in each view.
+4. State what you did to keep the SIM running after removing imagined waypoints.
+5. Explicitly: in LIVE mode, does a real aircraft on approach track down a real
+   runway centreline? Describe how you verified (or state you could not verify
+   in-browser and it needs user confirmation).
+6. Any old imagined-geometry references left in the codebase — list them.
