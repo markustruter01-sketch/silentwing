@@ -25,8 +25,13 @@ const ORBIT_RADIUS = 7200;
 const ORBIT_HEIGHT = 2600;
 const ORBIT_SPEED  = 0.00035;     // rad/frame ≈ 4.4 min/revolution at 60 fps
 const LOOK_AT      = new THREE.Vector3(0, 700, 0);
-const LABEL_LIFT   = 210;         // Three.js Y-units above cone
-const TRAIL_MAX    = 600;         // 10 Hz × 60 s
+const LABEL_LIFT      = 210;      // Three.js Y-units above cone
+const TRAIL_MAX       = 600;      // 10 Hz × 60 s
+// Label opacity fades between these camera-to-label distances (Three.js units).
+// At orbit distance (~7 600) all labels are invisible; at inspect distance
+// (~1 500) they are fully opaque. Selected aircraft label is always full opacity.
+const LABEL_FULL_DIST = 2800;     // below this → opacity 1.0
+const LABEL_HIDE_DIST = 4500;     // above this → opacity 0.0
 
 // Camera offset from aircraft for inspect / follow modes
 // (south and above: Z=south in Three.js coordinate space)
@@ -350,6 +355,22 @@ export default function AirspaceView3D({
         }
       }
 
+      // ── Label declutter: scale opacity with camera distance ─────────────
+      // Runs every frame so the fade tracks smoothly as the camera moves.
+      for (const [id, b] of st.acMap) {
+        const lm = b.label.material as THREE.SpriteMaterial;
+        const d  = camera.position.distanceTo(b.label.position);
+        if (id === st.selectedAcId) {
+          lm.opacity = 1.0; // selected aircraft label always visible
+        } else if (d <= LABEL_FULL_DIST) {
+          lm.opacity = 1.0;
+        } else if (d >= LABEL_HIDE_DIST) {
+          lm.opacity = 0.0;
+        } else {
+          lm.opacity = 1.0 - (d - LABEL_FULL_DIST) / (LABEL_HIDE_DIST - LABEL_FULL_DIST);
+        }
+      }
+
       renderer.render(scene, camera);
     };
     tick();
@@ -420,11 +441,24 @@ export default function AirspaceView3D({
     canvas.addEventListener('pointerdown', onPointerDown);
     canvas.addEventListener('pointerup',   onPointerUp);
 
-    // ── Esc back-out chain ───────────────────────────────────────────────────
+    // ── Keyboard handler: O = snap to orbit, Esc = back-out chain ───────────
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+      // O — direct jump to auto-orbit from any state, clears selection
+      if (e.key.toUpperCase() === 'O') {
+        const prev = st.cameraMode;
+        st.cameraMode   = 'orbit';
+        st.selectedAcId = null;
+        st.flyProgress  = 1;
+        selectRef.current(null);
+        camModeRef.current('orbit');
+        console.log(`[3D CAM] O: ${prev} → orbit  [snap; selection cleared]`);
+        return;
+      }
+
+      if (e.key !== 'Escape') return;
 
       const prev = st.cameraMode;
 
@@ -631,6 +665,7 @@ export default function AirspaceView3D({
         <span className="font-mono text-[9px] tracking-wider text-slate-800">[CLICK] INSPECT</span>
         <span className="font-mono text-[9px] tracking-wider text-slate-800">[DBLCLICK] FOLLOW</span>
         <span className="font-mono text-[9px] tracking-wider text-slate-800">[ESC] BACK</span>
+        <span className="font-mono text-[9px] tracking-wider text-slate-800">[O] ORBIT</span>
         <span className="font-mono text-[9px] tracking-wider text-slate-800">[V] 2D VIEW</span>
       </div>
 
