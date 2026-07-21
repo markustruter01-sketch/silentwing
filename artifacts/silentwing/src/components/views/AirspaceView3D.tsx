@@ -21,10 +21,11 @@ export type CameraMode = 'orbit' | 'manual' | 'inspect' | 'follow';
 
 // ── Scene constants ────────────────────────────────────────────────────────────
 const ALT_SCALE    = 0.15;
-const ORBIT_RADIUS = 7200;
-const ORBIT_HEIGHT = 2600;
+const ORBIT_RADIUS = 4200;        // was 7200 — tightened to frame YBBN runways
+const ORBIT_HEIGHT = 1600;        // was 2600 — lower angle, more runway visible
 const ORBIT_SPEED  = 0.00035;     // rad/frame ≈ 4.4 min/revolution at 60 fps
-const LOOK_AT      = new THREE.Vector3(0, 700, 0);
+const LOOK_AT      = new THREE.Vector3(0, 0, 0); // airfield centre (was y=700)
+const KT_TO_MPS    = 0.514444;    // knots → metres per second for dead-reckoning
 const LABEL_LIFT      = 210;      // Three.js Y-units above cone
 const TRAIL_MAX       = 600;      // 10 Hz × 60 s
 // Label opacity fades between these camera-to-label distances (Three.js units).
@@ -123,6 +124,10 @@ interface AcBundle {
   trail:    THREE.Line;
   label:    THREE.Sprite;
   trailBuf: THREE.Vector3[];
+  /** Smoothly-interpolated display position — advanced each rAF frame. */
+  drPos:    THREE.Vector3;
+  /** Latest ground-truth position from poll — drPos lerps toward this. */
+  drTarget: THREE.Vector3;
 }
 
 function disposeBundle(b: AcBundle): void {
@@ -162,6 +167,8 @@ interface SceneState {
   mouseDownY:    number;
   lastClickAcId: string | null;
   lastClickTime: number;
+  // dead-reckoning: timestamp of last rAF tick (ms) for dt calculation
+  lastTickTime:  number;
 }
 
 // ── Helper: begin fly-to animation toward an aircraft ────────────────────────
@@ -300,6 +307,7 @@ export default function AirspaceView3D({
       mouseDownY:    0,
       lastClickAcId: null,
       lastClickTime: 0,
+      lastTickTime:  performance.now(),
     };
     sceneRef.current = st;
 
@@ -334,34 +342,69 @@ export default function AirspaceView3D({
             const lk = new THREE.Vector3().lerpVectors(st.flyLookFrom, st.flyLookTo, t);
             camera.lookAt(lk);
           } else {
-            // Arrived — keep lookAt on aircraft's current position
+            // Arrived — track the aircraft's dead-reckoned display position
             if (st.selectedAcId) {
-              const ac = st.latestAircraftMap.get(st.selectedAcId);
-              if (ac) camera.lookAt(toV3(ac.position.x, ac.position.y, ac.position.alt));
+              const b = st.acMap.get(st.selectedAcId);
+              if (b) camera.lookAt(b.drPos);
             }
           }
           break;
         }
         case 'follow': {
           if (st.selectedAcId) {
-            const ac = st.latestAircraftMap.get(st.selectedAcId);
-            if (ac) {
-              const acPos = toV3(ac.position.x, ac.position.y, ac.position.alt);
-              camera.position.copy(acPos.clone().add(FOLLOW_OFFSET));
-              camera.lookAt(acPos);
+            const b = st.acMap.get(st.selectedAcId);
+            if (b) {
+              // Follow the interpolated drPos so the camera never jerks on poll
+              camera.position.copy(b.drPos.clone().add(FOLLOW_OFFSET));
+              camera.lookAt(b.drPos);
             }
           }
           break;
         }
       }
 
-      // ── Label declutter: scale opacity with camera distance ─────────────
-      // Runs every frame so the fade tracks smoothly as the camera moves.
+      // ── Dead-reckoning + position correction + label declutter ──────────
+      // All three combined so visual positions are settled before the
+      // label distance test runs in the same frame.
+      const nowTick = performance.now();
+      const dtMs    = Math.min(nowTick - st.lastTickTime, 100); // clamp: tab wake-up
+      st.lastTickTime = nowTick;
+      const dtS       = dtMs / 1000;
+      const lerpAlpha = 1 - Math.exp(-dtMs / 800); // ~800 ms correction time-constant
+
       for (const [id, b] of st.acMap) {
+        // Guard: bundles spawned before this code version (HMR mid-session)
+        // may lack drPos/drTarget. Skip — they'll be replaced next data tick.
+        if (!b.drPos || !b.drTarget) continue;
+
+        // ── Dead-reckon: advance drPos along heading × gs ──────────────
+        const acLive = st.latestAircraftMap.get(id);
+        if (acLive) {
+          const gsMps = acLive.groundSpeed * KT_TO_MPS;
+          if (gsMps > 1.03) { // > ~2 kt — skip stationary ground traffic
+            const headRad = acLive.heading * (Math.PI / 180);
+            // heading 0 = north = −Z in scene (sim Y is south → Three.js Z)
+            b.drPos.x += gsMps * Math.sin(headRad) * dtS;
+            b.drPos.z -= gsMps * Math.cos(headRad) * dtS;
+          }
+          // Correct toward ground-truth; also pulls altitude into drPos.y
+          b.drPos.lerp(b.drTarget, lerpAlpha);
+        }
+
+        // ── Apply drPos to all visuals ─────────────────────────────────
+        b.cone.position.copy(b.drPos);
+        b.label.position.set(b.drPos.x, b.drPos.y + LABEL_LIFT, b.drPos.z);
+        b.stem.geometry.setFromPoints([
+          new THREE.Vector3(b.drPos.x, 0,         b.drPos.z),
+          new THREE.Vector3(b.drPos.x, b.drPos.y, b.drPos.z),
+        ]);
+        b.stem.geometry.computeBoundingSphere();
+
+        // ── Label opacity: distance-based declutter ────────────────────
         const lm = b.label.material as THREE.SpriteMaterial;
         const d  = camera.position.distanceTo(b.label.position);
         if (id === st.selectedAcId) {
-          lm.opacity = 1.0; // selected aircraft label always visible
+          lm.opacity = 1.0; // selected label always full opacity
         } else if (d <= LABEL_FULL_DIST) {
           lm.opacity = 1.0;
         } else if (d >= LABEL_HIDE_DIST) {
@@ -560,7 +603,9 @@ export default function AirspaceView3D({
         scene.add(label);
 
         const trailBuf: THREE.Vector3[] = [pos.clone(), pos.clone()];
-        acMap.set(ac.id, { cone, stem, trail, label, trailBuf });
+        // drPos and drTarget start at the spawn position — no lerp on first frame
+        acMap.set(ac.id, { cone, stem, trail, label, trailBuf,
+          drPos: pos.clone(), drTarget: pos.clone() });
 
       } else {
         // ── Update ────────────────────────────────────────────────────────
@@ -568,21 +613,19 @@ export default function AirspaceView3D({
         const b  = acMap.get(ac.id)!;
         const cm = b.cone.material as THREE.MeshLambertMaterial;
 
-        b.cone.position.copy(pos);
+        // Ground-truth has arrived — update the dead-reckoning target.
+        // The tick loop lerps drPos toward drTarget; cone/label/stem positions
+        // are written from drPos each rAF frame — no hard-snap here.
+        b.drTarget.copy(pos);
+
+        // Heading and colour snap immediately (no perceptible jerk)
         b.cone.rotation.y = headY;
         // Selected aircraft: gold highlight
         cm.color.setHex(isSelected ? 0xFACC15 : hex);
         cm.emissive.setHex(isSelected ? 0xFACC15 : hex);
         cm.emissiveIntensity = isSelected ? 0.70 : 0.30;
 
-        b.stem.geometry.setFromPoints([
-          new THREE.Vector3(pos.x, 0, pos.z),
-          new THREE.Vector3(pos.x, pos.y, pos.z),
-        ]);
-        b.stem.geometry.computeBoundingSphere();
-
-        b.label.position.set(pos.x, pos.y + LABEL_LIFT, pos.z);
-
+        // Trail records ground-truth positions (not interpolated drPos)
         // Trail — write into pre-allocated buffer
         b.trailBuf.push(pos.clone());
         if (b.trailBuf.length > TRAIL_MAX) b.trailBuf.shift();
