@@ -140,6 +140,10 @@ export class AdsbAdapter implements DataFeedAdapter {
   private lastError: string | null = null;
   private timer:    ReturnType<typeof setInterval> | null = null;
   private visHandler: (() => void) | null = null;
+  // FIX 1: out-of-order guard — server epoch (seconds) of last accepted snapshot
+  private latestNow = -Infinity;
+  // FIX 1: in-flight guard — prevents concurrent overlapping requests
+  private inFlight  = false;
 
   constructor() {
     this.latest = this._empty(Date.now());
@@ -232,6 +236,9 @@ export class AdsbAdapter implements DataFeedAdapter {
   }
 
   private async _poll(): Promise<void> {
+    // FIX 1: in-flight guard — skip if a previous request has not yet resolved
+    if (this.inFlight) return;
+    this.inFlight = true;
     try {
       const res = await fetch('/api/adsb');
 
@@ -242,6 +249,16 @@ export class AdsbAdapter implements DataFeedAdapter {
       }
 
       const data = await res.json() as { ac?: RawAc[]; now?: number; total?: number };
+
+      // FIX 1: timestamp guard — discard snapshots older than the last accepted one.
+      // data.now is a Unix epoch in seconds from the ADS-B Exchange server.
+      const snapshotNow = data.now ?? (Date.now() / 1000);
+      if (snapshotNow <= this.latestNow) {
+        console.warn(`[ADSB] discarding stale snapshot (now=${snapshotNow} <= accepted=${this.latestNow})`);
+        return;
+      }
+      this.latestNow = snapshotNow;
+
       this.lastError = null;
       this.lastPoll  = Date.now();
 
@@ -258,7 +275,6 @@ export class AdsbAdapter implements DataFeedAdapter {
 
       const airborne = aircraft.filter(a => a.position.alt > 50).length;
 
-      // Logged per-poll count: aircraft count (not the key)
       console.log(
         `[ADSB] poll ok — raw=${rawList.length} ingested=${aircraft.length}` +
         ` airborne=${airborne} ground-vehicle=${gvCount}`,
@@ -280,6 +296,9 @@ export class AdsbAdapter implements DataFeedAdapter {
     } catch (err) {
       this.lastError = String(err);
       console.warn('[ADSB] poll error:', err);
+    } finally {
+      // Always clear the in-flight flag so the next scheduled poll can proceed
+      this.inFlight = false;
     }
   }
 

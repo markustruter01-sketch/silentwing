@@ -25,7 +25,9 @@ const ORBIT_RADIUS = 5200;        // default orbit radius (was 4200 — widened 
 const ORBIT_HEIGHT = 1600;        // was 2600 — lower angle, more runway visible
 const ORBIT_SPEED  = 0.00035;     // rad/frame ≈ 4.4 min/revolution at 60 fps
 const LOOK_AT      = new THREE.Vector3(0, 0, 0); // airfield centre (was y=700)
-const KT_TO_MPS    = 0.514444;    // knots → metres per second for dead-reckoning
+// Interpolation time constant: renderPos glides to targetPos with this smoothing.
+// ~600 ms means ~63 % of the gap closed in one time-constant; fully settled in ~2 s.
+const INTERP_TAU   = 600;          // ms
 const LABEL_LIFT      = 210;      // Three.js Y-units above cone
 const TRAIL_MAX       = 600;      // 10 Hz × 60 s
 // Label opacity fades between these camera-to-label distances (Three.js units).
@@ -159,13 +161,12 @@ interface AcBundle {
   trail:    THREE.Line;
   label:    THREE.Sprite;
   trailBuf: THREE.Vector3[];
-  /** Pure dead-reckoned display position — advanced every rAF frame along
-   *  last-known heading × groundspeed. Never pulled toward a stale fixed point. */
-  drPos:      THREE.Vector3;
-  /** Pending correction offset accumulated on each poll arrival.
-   *  Decays to zero over ~1.5 s so corrections appear as small nudges,
-   *  never freezes or snaps. */
-  corrOffset: THREE.Vector3;
+  /** Smoothly interpolated display position — glides toward targetPos every rAF frame.
+   *  Never predicted ahead of the data; never moves backwards. */
+  renderPos: THREE.Vector3;
+  /** Latest real position from the most recent poll — overwritten on each poll,
+   *  never accumulated. The per-frame lerp handles the smooth transition. */
+  targetPos: THREE.Vector3;
 }
 
 function disposeBundle(b: AcBundle): void {
@@ -205,7 +206,7 @@ interface SceneState {
   mouseDownY:    number;
   lastClickAcId: string | null;
   lastClickTime: number;
-  // dead-reckoning: timestamp of last rAF tick (ms) for dt calculation
+  // interpolation: timestamp of last rAF tick (ms) for dt calculation
   lastTickTime:  number;
   // zoom/pan/rotate state
   orbitRadius:      number;          // mutable zoom radius (starts at ORBIT_RADIUS)
@@ -401,10 +402,10 @@ export default function AirspaceView3D({
             const lk = new THREE.Vector3().lerpVectors(st.flyLookFrom, st.flyLookTo, t);
             camera.lookAt(lk);
           } else {
-            // Arrived — track the aircraft's dead-reckoned display position
+            // Arrived — track the aircraft's interpolated display position
             if (st.selectedAcId) {
               const b = st.acMap.get(st.selectedAcId);
-              if (b) camera.lookAt(b.drPos);
+              if (b) camera.lookAt(b.renderPos);
             }
           }
           break;
@@ -413,67 +414,43 @@ export default function AirspaceView3D({
           if (st.selectedAcId) {
             const b = st.acMap.get(st.selectedAcId);
             if (b) {
-              // Follow the interpolated drPos so the camera never jerks on poll
-              camera.position.copy(b.drPos.clone().add(FOLLOW_OFFSET));
-              camera.lookAt(b.drPos);
+              // Follow renderPos so the camera moves smoothly between polls
+              camera.position.copy(b.renderPos.clone().add(FOLLOW_OFFSET));
+              camera.lookAt(b.renderPos);
             }
           }
           break;
         }
       }
 
-      // ── Dead-reckoning + position correction + label declutter ──────────
-      // All three combined so visual positions are settled before the
-      // label distance test runs in the same frame.
-      const nowTick  = performance.now();
-      const dtMs     = Math.min(nowTick - st.lastTickTime, 100); // clamp: tab wake-up
+      // ── Position interpolation — glide renderPos toward targetPos ────────
+      // FIX 2: no dead-reckoning, no offset accumulation.
+      // Each frame renderPos moves a fraction of the remaining gap to targetPos.
+      // TAU ~600 ms: 63 % closed per time-constant; aircraft never move backwards.
+      const nowTick   = performance.now();
+      const dtMs      = Math.min(nowTick - st.lastTickTime, 100); // clamp: tab wake-up
       st.lastTickTime = nowTick;
-      const dtS      = dtMs / 1000;
-      // Fraction of the pending correction offset to drain this frame.
-      // Time constant ~1 500 ms → correction fully absorbed in ~3–4 s; imperceptible nudge.
-      const corrAlpha = 1 - Math.exp(-dtMs / 1500);
+      const lerpAlpha = 1 - Math.exp(-dtMs / INTERP_TAU);
 
-      for (const [id, b] of st.acMap) {
-        // Guard: bundles spawned before this code version (HMR mid-session)
-        // may lack drPos/corrOffset. Skip — they'll be replaced next data tick.
-        if (!b.drPos || !b.corrOffset) continue;
+      for (const [, b] of st.acMap) {
+        // Guard: stale bundles from HMR mid-session may lack the new fields
+        if (!b.renderPos || !b.targetPos) continue;
 
-        // ── Step 1: Pure dead-reckoning — advance drPos every frame ────
-        // drPos is the authoritative display position; it advances continuously
-        // along last-known heading × groundspeed with NO pull toward a fixed point.
-        const acLive = st.latestAircraftMap.get(id);
-        if (acLive) {
-          const gsMps = acLive.groundSpeed * KT_TO_MPS;
-          if (gsMps > 1.03) { // > ~2 kt — skip stationary ground traffic
-            const headRad = acLive.heading * (Math.PI / 180);
-            // heading 0 = north = −Z in scene (sim Y is south → Three.js Z)
-            b.drPos.x += gsMps * Math.sin(headRad) * dtS;
-            b.drPos.z -= gsMps * Math.cos(headRad) * dtS;
-          }
+        // Glide toward the latest real fix — simple, never backwards
+        b.renderPos.lerp(b.targetPos, lerpAlpha);
+        // FIX 3: clamp altitude — cone never sinks below the ground plane
+        b.renderPos.y = Math.max(0, b.renderPos.y);
 
-          // ── Step 2: Drain correction offset (poll nudge) ────────────
-          // corrOffset was accumulated on poll arrival as (groundTruth − drPos).
-          // Each frame we apply a small fraction into drPos and shrink the offset,
-          // so the correction is spread over ~1.5 s as an additive nudge.
-          // This never opposes the forward advance — both are additive.
-          if (!b.corrOffset.equals(new THREE.Vector3())) {
-            b.drPos.addScaledVector(b.corrOffset, corrAlpha);
-            b.corrOffset.multiplyScalar(1 - corrAlpha);
-            // Zero out negligible residual to avoid drift accumulation
-            if (b.corrOffset.lengthSq() < 0.01) b.corrOffset.set(0, 0, 0);
-          }
-        }
-
-        // ── Apply drPos to all visuals ─────────────────────────────────
-        b.cone.position.copy(b.drPos);
-        b.label.position.set(b.drPos.x, b.drPos.y + LABEL_LIFT, b.drPos.z);
+        // Apply renderPos to all visuals
+        b.cone.position.copy(b.renderPos);
+        b.label.position.set(b.renderPos.x, b.renderPos.y + LABEL_LIFT, b.renderPos.z);
         b.stem.geometry.setFromPoints([
-          new THREE.Vector3(b.drPos.x, 0,         b.drPos.z),
-          new THREE.Vector3(b.drPos.x, b.drPos.y, b.drPos.z),
+          new THREE.Vector3(b.renderPos.x, 0,              b.renderPos.z),
+          new THREE.Vector3(b.renderPos.x, b.renderPos.y,  b.renderPos.z),
         ]);
         b.stem.geometry.computeBoundingSphere();
 
-        // ── Label opacity: all identifiers always visible ──────────────
+        // All identifiers always visible
         const lm = b.label.material as THREE.SpriteMaterial;
         lm.opacity = 1.0;
       }
@@ -784,9 +761,9 @@ export default function AirspaceView3D({
         scene.add(label);
 
         const trailBuf: THREE.Vector3[] = [pos.clone(), pos.clone()];
-        // drPos starts at spawn position; corrOffset starts at zero (no snap on first frame)
+        // renderPos and targetPos both start at spawn position — no jump on first frame
         acMap.set(ac.id, { cone, stem, trail, label, trailBuf,
-          drPos: pos.clone(), corrOffset: new THREE.Vector3() });
+          renderPos: pos.clone(), targetPos: pos.clone() });
 
       } else {
         // ── Update ────────────────────────────────────────────────────────
@@ -794,10 +771,9 @@ export default function AirspaceView3D({
         const b  = acMap.get(ac.id)!;
         const cm = b.cone.material as THREE.MeshLambertMaterial;
 
-        // Ground-truth has arrived — compute positional error and accumulate it
-        // as a correction offset. The tick loop will drain corrOffset into drPos
-        // over ~1.5 s (small nudge) while pure DR continues advancing each frame.
-        b.corrOffset.add(pos.clone().sub(b.drPos));
+        // FIX 2: overwrite targetPos with the latest real fix.
+        // The per-frame lerp handles the smooth visual transition — no accumulation.
+        b.targetPos.copy(pos);
 
         // Heading and colour snap immediately (no perceptible jerk)
         b.cone.rotation.y = headY;

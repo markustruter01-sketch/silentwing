@@ -1,0 +1,41 @@
+FIX all four diagnosed root causes. Replace the dead-reckoning approach with
+smooth interpolation toward known positions — do NOT predict ahead of the data.
+
+FIX 1 — Timestamp guard (out-of-order polls):
+In the adapter, store data.now as the snapshot time. On each resolved poll,
+if data.now <= the previously stored now, DISCARD it (do not call subscribers).
+Only newer snapshots propagate. Also switch the poll loop so a new poll does
+not fire while the previous fetch is still in flight (guard with an in-flight
+flag, not bare setInterval).
+
+FIX 2 — Replace dead-reckoning with position interpolation (X, Y, AND Z):
+For each aircraft keep: renderPos (currently displayed) and targetPos (latest
+known real position, including altitude Y). Every frame, move renderPos toward
+targetPos with a smoothing lerp: renderPos.lerp(targetPos, 1 - exp(-dt/TAU))
+with TAU ~ 600ms. Apply this to X, Y, AND Z equally — Y (altitude) MUST
+interpolate the same way so there is no underground sink.
+  - Do NOT advance position ahead along heading. Do NOT predict future
+    position. Only interpolate toward the most recent real fix.
+  - This is set-target-and-glide, NOT accumulate-offset. Remove corrOffset and
+    its .add() accumulation entirely.
+  - When a new poll arrives, just update targetPos (overwrite, not add). The
+    per-frame lerp handles the smooth transition.
+
+FIX 3 — Clamp altitude to ground:
+After interpolation, clamp renderPos.y to >= 0 so a cone can never render below
+the ground plane, even mid-transition. Ground aircraft (alt 0) sit exactly on
+the plane.
+
+FIX 4 — Optional light lead (only if motion looks laggy after Fix 2):
+Do NOT implement yet. First confirm plain interpolation looks smooth. Only if
+aircraft visibly lag their true position should we add a small fixed lead;
+report back before adding it.
+
+After fixing, report RAW:
+  a. The new tick interpolation code (X/Y/Z).
+  b. The timestamp-guard code and the in-flight guard.
+  c. Confirm corrOffset and all dead-reckoning heading-advance code is REMOVED.
+  d. Confirm: between two polls, does an aircraft glide smoothly toward its last
+     known position without ever moving backwards or below ground? 
+  e. Does altitude (Y) now interpolate smoothly through the ground<->airborne
+     transition with no sink-and-snap?
