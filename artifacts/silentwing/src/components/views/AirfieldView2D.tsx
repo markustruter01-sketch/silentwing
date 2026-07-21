@@ -161,7 +161,7 @@ const RunwaysLayer: React.FC = () => (
             points={ptsStr}
             fill="none"
             stroke={C.runway}
-            strokeWidth={52}
+            strokeWidth={66}
             strokeLinecap="butt"
             strokeLinejoin="round"
           />

@@ -109,11 +109,20 @@ function flipRealY(coords: [number, number][]): [number, number][] {
 function buildGroundGeometry(): THREE.Group {
   const g = new THREE.Group();
 
-  // Runways — bright centreline, 2 polylines
-  const rwMat = new THREE.LineBasicMaterial({ color: 0xC8CDD4, transparent: true, opacity: 0.55 });
+  // Runways — 3 parallel lines (centre ± 20 m) so they read ~3× wider than taxiways
+  const rwMat = new THREE.LineBasicMaterial({ color: 0xC8CDD4, transparent: true, opacity: 0.60 });
+  const RW_HALF_WIDTH = 20; // metres offset each side of centreline
   for (const rw of REAL_RUNWAYS) {
-    const pts = flipRealY(rw.coords).map(([x, y]) => new THREE.Vector3(x, 0, y));
-    g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), rwMat));
+    const base = flipRealY(rw.coords);
+    // Perpendicular direction derived from overall runway axis
+    const [x0, z0] = base[0], [xN, zN] = base[base.length - 1];
+    const axLen = Math.hypot(xN - x0, zN - z0) || 1;
+    const px = ((zN - z0) / axLen) * RW_HALF_WIDTH; // perp X
+    const pz = (-(xN - x0) / axLen) * RW_HALF_WIDTH; // perp Z
+    for (const [ox, oz] of [[0, 0], [px, pz], [-px, -pz]] as [number,number][]) {
+      const pts = base.map(([x, z]) => new THREE.Vector3(x + ox, 0, z + oz));
+      g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), rwMat));
+    }
   }
 
   // Taxiways — 326 segments merged into one LineSegments draw call
@@ -447,18 +456,9 @@ export default function AirspaceView3D({
         ]);
         b.stem.geometry.computeBoundingSphere();
 
-        // ── Label opacity: distance-based declutter ────────────────────
+        // ── Label opacity: all identifiers always visible ──────────────
         const lm = b.label.material as THREE.SpriteMaterial;
-        const d  = camera.position.distanceTo(b.label.position);
-        if (id === st.selectedAcId) {
-          lm.opacity = 1.0; // selected label always full opacity
-        } else if (d <= LABEL_FULL_DIST) {
-          lm.opacity = 1.0;
-        } else if (d >= LABEL_HIDE_DIST) {
-          lm.opacity = 0.0;
-        } else {
-          lm.opacity = 1.0 - (d - LABEL_FULL_DIST) / (LABEL_HIDE_DIST - LABEL_FULL_DIST);
-        }
+        lm.opacity = 1.0;
       }
 
       renderer.render(scene, camera);
@@ -732,7 +732,7 @@ export default function AirspaceView3D({
       if (!acMap.has(ac.id)) {
         // ── Spawn ──────────────────────────────────────────────────────────
 
-        const coneGeo = new THREE.ConeGeometry(55, 170, 4, 1);
+        const coneGeo = new THREE.ConeGeometry(27.5, 85, 4, 1);
         coneGeo.rotateX(-Math.PI / 2); // apex faces −Z (north)
         const coneMat = new THREE.MeshLambertMaterial({
           color: hex, emissive: hex, emissiveIntensity: 0.30,
