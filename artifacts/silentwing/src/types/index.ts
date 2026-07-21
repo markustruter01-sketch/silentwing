@@ -37,6 +37,9 @@ export interface Aircraft {
   origin?: string;
   destination?: string;
   confidence: number; // 0.4–1.0 for predictions
+  /** Set by the ADS-B adapter for category-C2 entries and TWR stations.
+   *  Views may optionally hide these; they are never silently dropped. */
+  isGroundVehicle?: boolean;
 }
 
 export interface Alert {

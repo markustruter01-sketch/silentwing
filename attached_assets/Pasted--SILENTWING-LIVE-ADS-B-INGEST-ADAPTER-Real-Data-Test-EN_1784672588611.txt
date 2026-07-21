@@ -1,0 +1,172 @@
+# SILENTWING — LIVE ADS-B INGEST ADAPTER (Real-Data Test)
+
+**ENVIRONMENT:** Existing SilentWing Replit dev project. This does NOT touch
+Phase 5+. This is a parallel task: build a SECOND DataFeedAdapter that reads
+real ADS-B Exchange data instead of the simulation, behind the identical
+interface. The goal is to prove the architecture ingests real data with ZERO
+changes to the 2D/3D view components.
+
+Do NOT proceed to any numbered Phase. Do NOT modify view components except
+where explicitly noted. Stop after this task and report.
+
+---
+
+## WHAT THIS PROVES
+
+The whole SilentWing architecture rests on one claim: views consume data only
+through the `DataFeedAdapter` interface, so the data source can be swapped. This
+task swaps the sim for a real feed. If the existing views render real aircraft
+with no changes to them, the architecture is validated.
+
+---
+
+## DATA SOURCE
+
+ADS-B Exchange REST API via RapidAPI. Endpoint: aircraft within a radius of a
+lat/lon point. Real example request (London — we will repoint to Brisbane):
+
+```
+GET https://adsbexchange-com1.p.rapidapi.com/v2/lat/{lat}/lon/{lon}/dist/{nm}/
+Headers:
+  x-rapidapi-host: adsbexchange-com1.p.rapidapi.com
+  x-rapidapi-key: <FROM SECRETS — never hardcode>
+```
+
+**Brisbane target:** lat `-27.384`, lon `153.117`, dist `50` (nm).
+
+**API KEY HANDLING (mandatory):**
+- The RapidAPI key MUST be read from a Replit Secret named `ADSBX_API_KEY`.
+- NEVER hardcode the key. NEVER log the key. NEVER put it in client-side code
+  that ships to the browser.
+- Because the key must stay server-side, requests to ADS-B Exchange MUST be
+  proxied through a tiny server route, not called directly from the React app.
+  Add a minimal server endpoint (see below).
+
+---
+
+## REAL RESPONSE SCHEMA (from a live pull — handle ALL of these quirks)
+
+Top level: `{ ac: [...], msg, now (epoch ms), total, ctime, ptime }`
+
+Each entry in `ac[]` — fields are OFTEN MISSING or DIRTY. Handle defensively:
+
+| field         | meaning                    | quirks to handle                                  |
+|---------------|----------------------------|---------------------------------------------------|
+| `hex`         | unique aircraft id         | always present; use as the stable ID              |
+| `flight`      | callsign                   | TRAILING SPACES; may be missing; may be garbage like `@@@@@@@@` |
+| `r`           | registration               | may be missing                                    |
+| `t`           | aircraft type (e.g. B738)  | may be missing                                    |
+| `lat` / `lon` | position                   | usually present; skip entry if absent             |
+| `track`       | true ground track (heading)| may be missing; fall back to `true_heading` then `mag_heading`; else null |
+| `gs`          | ground speed (kt)          | may be missing                                    |
+| `alt_baro`    | barometric altitude (ft)   | **CRITICAL: number when airborne, STRING `"ground"` when on ground** |
+| `alt_geom`    | geometric altitude (ft)    | may be present even when `alt_baro` = "ground"    |
+| `squawk`      | transponder code           | may be missing                                    |
+| `emergency`   | emergency status           | may be missing or "none"                          |
+| `category`    | emitter category           | e.g. A3=large, A5=heavy, C2=ground vehicle, TWR=tower |
+
+**MANDATORY normalisation rules in the adapter:**
+1. `alt_baro === "ground"` → altitude = 0, onGround = true. Numeric → that value, onGround = false. This is the #1 crash risk; write it first.
+2. Trim `flight` whitespace. If empty, all-`@`, or missing → display `hex` as the callsign instead.
+3. Skip any entry with no `lat` or no `lon`.
+4. Filter out non-aircraft where sensible: `category` C2 (ground vehicles), and `t`/`r` equal to `TWR` (ground tower stations) — flag these as `isGroundVehicle` and let the view optionally hide them. Do NOT delete them silently; keep them tagged.
+5. Derive airborne/ground with the EXISTING `isAirborne()` logic based on the normalised altitude — do not invent a second classifier.
+6. `now` is the snapshot epoch-ms; use it as the snapshot timestamp.
+
+---
+
+## COORDINATE MAPPING (real lat/lon → existing scene coordinates)
+
+The sim uses a local metric X/Y grid centred on YBBN. Real data is lat/lon.
+Add a projection function converting lat/lon → the scene's X/Y metres, centred
+on YBBN (lat −27.384, lon 153.117):
+
+- Use an equirectangular approximation (good enough at this scale):
+  - `x = (lon - LON0) * 111320 * cos(LAT0_rad)`
+  - `y = (lat - LAT0) * 110540`   (note: north = +y; confirm sign matches the sim's existing convention and flip if the sim uses +y = south)
+- Put LAT0/LON0 in one constants block. Verify the sign convention against how the sim already places aircraft, so real and sim data use the SAME frame.
+- Altitude → 3D Y-height uses the EXISTING altitude scale from the sim's 3D view. Do not introduce a new scale.
+
+---
+
+## SERVER PROXY ROUTE (keeps the key server-side)
+
+Add a minimal server route (Express, or Vite dev-server middleware — whichever
+the project already uses):
+
+```
+GET /api/adsb
+  → reads ADSBX_API_KEY from process.env
+  → fetches the Brisbane radius endpoint
+  → returns the raw JSON to the client unchanged
+  → on upstream error, returns { error, status } with the real status code
+```
+
+The client polls `/api/adsb`, never the RapidAPI URL directly.
+
+---
+
+## THE ADAPTER
+
+Create `/src/feed/adsbAdapter.ts` implementing the SAME `DataFeedAdapter`
+interface the sim implements. It must:
+
+- Poll `/api/adsb` on a configurable interval (default 8 s; expose it).
+- Normalise each `ac[]` entry per the rules above into the app's existing
+  aircraft snapshot shape (same `WorldSnapshot` / aircraft type the sim emits).
+  Fields with no real-data equivalent (phase, assignedGate, filed route) →
+  set to null/undefined; the views already tolerate missing detail.
+- Maintain per-aircraft trail history client-side (the API gives only current
+  position), keyed by `hex`, same 60 s window the sim uses.
+- Track feed health for the existing indicator: time since last successful
+  poll → live / lagging / stalled, using the SAME thresholds the sim path uses.
+- Expose `getFeedHealth()` reporting real HTTP failures (rate-limit 429,
+  auth 403, network) as stalled, so the existing STALE banner fires on real
+  outages.
+
+**Budget guard (important — the API is rate-limited):**
+- Only poll while the browser tab is visible (use the Page Visibility API);
+  pause polling when hidden. This protects the request quota.
+- Log each poll's aircraft count to the console (not the key).
+
+---
+
+## WIRING (minimal, reversible)
+
+- Add a source toggle in the existing settings panel: **Data Source →
+  {Simulation | Live ADS-B (Brisbane)}**. Default stays Simulation.
+- Selecting Live ADS-B swaps the adapter instance the app consumes. NOTHING
+  else in the views changes. This toggle IS the proof.
+- Switching back to Simulation restores the sim with no reload.
+
+---
+
+## HARD RULES
+
+1. API key ONLY from Secret `ADSBX_API_KEY`, server-side only, never logged,
+   never in client bundle.
+2. Client calls `/api/adsb`, never RapidAPI directly.
+3. Do NOT modify the 2D/3D view components' rendering logic. The only permitted
+   UI change is adding the data-source toggle in settings. If a view needs a
+   change to display real data, STOP and report why — that would mean the
+   architecture isn't as swappable as claimed, which is exactly what we're testing.
+4. `alt_baro === "ground"` handling is mandatory and must be written before
+   anything else.
+5. Do NOT proceed to Phase 5 or any numbered phase.
+6. Poll only when tab visible.
+
+---
+
+## REPORT AFTER BUILDING (raw, no summaries)
+
+1. Raw file list created/modified.
+2. The exact normalisation function for one real `ac[]` entry, shown
+   transforming: (a) an airborne entry, (b) a `"ground"` entry, (c) an entry
+   with missing `flight`. Show input → output for all three.
+3. Confirm with raw console output: number of aircraft ingested on one live
+   poll of the Brisbane box, and how many were tagged ground-vehicle/filtered.
+4. Confirm the API key does NOT appear anywhere in the client bundle (grep the
+   built client for the secret name and confirm absent).
+5. State explicitly: did ANY view component require modification to render real
+   data? Yes/No. If yes, exactly what and why.
+6. Raw browser console output for one live poll — full, unedited.

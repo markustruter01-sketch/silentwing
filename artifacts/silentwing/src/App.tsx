@@ -5,10 +5,12 @@ import AirfieldView2D from '@/components/views/AirfieldView2D';
 import AirspaceView3D, { type CameraMode } from '@/components/views/AirspaceView3D';
 import AircraftDetailPanel from '@/components/panels/AircraftDetailPanel';
 import { getSimAdapter } from '@/sim/engine';
+import { AdsbAdapter } from '@/feed/adsbAdapter';
 import type { DataFeedAdapter, WorldSnapshot } from '@/types';
 import { isAirborne } from '@/types';
 
 type View = 'airspace' | 'airfield';
+export type DataSource = 'sim' | 'live';
 
 // Derive a rough sector-load from aircraft count (≤ 99 %)
 // NOTE: placeholder — will be replaced with a real demand metric in Phase 7.
@@ -19,15 +21,32 @@ function sectorLoad(count: number) {
 export default function App() {
   const [view, setView] = useState<View>('airfield');
 
-  // Adapter is created once for the lifetime of the page
-  const adapter: DataFeedAdapter = useMemo(() => getSimAdapter(), []);
+  // ── Data source toggle ───────────────────────────────────────────────────
+  const [dataSource, setDataSource] = useState<DataSource>('sim');
 
-  // World snapshot — updated at the sim tick rate (10 Hz)
+  // Adapter is (re-)created whenever dataSource changes.
+  // useMemo keeps the same instance as long as dataSource is stable.
+  const adapter = useMemo<DataFeedAdapter>(() => {
+    return dataSource === 'live' ? new AdsbAdapter() : getSimAdapter();
+  }, [dataSource]);
+
+  // Destroy the ADS-B adapter instance when it's replaced (dataSource change
+  // or component unmount). The sim adapter is a singleton and must NOT be
+  // destroyed — only the ADS-B adapter has a destroy() method.
+  useEffect(() => {
+    return () => {
+      if (adapter instanceof AdsbAdapter) adapter.destroy();
+    };
+  }, [adapter]);
+
+  // ── World snapshot ───────────────────────────────────────────────────────
+  // Resets immediately when adapter changes so stale aircraft don't linger.
   const [snapshot, setSnapshot] = useState<WorldSnapshot>(() =>
     adapter.getSnapshotAt(Date.now()),
   );
 
   useEffect(() => {
+    setSnapshot(adapter.getSnapshotAt(Date.now()));
     const unsub = adapter.subscribe(setSnapshot);
     return unsub;
   }, [adapter]);
@@ -39,14 +58,22 @@ export default function App() {
   // Derive the selected aircraft object from the current snapshot
   const selectedAc = snapshot.aircraft.find(a => a.id === selectedAcId) ?? null;
 
-  // If the selected aircraft leaves the snapshot (despawned), clear selection
+  // If the selected aircraft leaves the snapshot (despawned / source switched),
+  // clear selection.
   useEffect(() => {
     if (selectedAcId && !snapshot.aircraft.find(a => a.id === selectedAcId)) {
-      console.log(`[APP] selected aircraft ${selectedAcId} despawned — clearing selection`);
+      console.log(`[APP] selected aircraft ${selectedAcId} left snapshot — clearing selection`);
       setSelectedAcId(null);
       setCameraMode(prev => (prev === 'orbit' ? 'orbit' : 'manual'));
     }
   }, [snapshot.aircraft, selectedAcId]);
+
+  // Also clear selection when the data source changes (IDs are not shared
+  // between sim and live feeds).
+  useEffect(() => {
+    setSelectedAcId(null);
+    setCameraMode('orbit');
+  }, [dataSource]);
 
   // Close panel helper — used by × button and by 2D Esc
   const handleClosePanel = useCallback(() => {
@@ -102,6 +129,8 @@ export default function App() {
         activeView={view}
         onViewChange={setView}
         feedStatus={feedHealth.status}
+        dataSource={dataSource}
+        onDataSourceChange={setDataSource}
       />
       <StatusStrip
         aircraftCount={snapshot.aircraft.length}

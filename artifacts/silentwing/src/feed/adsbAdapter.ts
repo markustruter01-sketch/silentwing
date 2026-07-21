@@ -1,0 +1,299 @@
+// ─── ADS-B Exchange DataFeedAdapter ──────────────────────────────────────────
+//
+// Implements the same DataFeedAdapter interface the sim implements.
+// Polls /api/adsb (server-side proxy; key never reaches the client bundle).
+// Normalises raw ADS-B Exchange ac[] entries into the app's Aircraft shape.
+// Pauses polling when the browser tab is hidden (Page Visibility API).
+//
+// Architecture note: per-aircraft trail history is maintained by the 3D view
+// (AirspaceView3D) from successive WorldSnapshot deliveries — identical to how
+// it works with the sim.  The adapter only needs to deliver correct current
+// positions on each poll; the view accumulates the trail.
+
+import type {
+  DataFeedAdapter,
+  WorldSnapshot,
+  Aircraft,
+  AircraftDetail,
+  Alert,
+  FlightPhase,
+  Unsubscribe,
+} from '../types';
+
+// ── Coordinate origin — YBBN centre ──────────────────────────────────────────
+// All sim coordinates are in metres, origin = YBBN centre, +x east, +y south
+// (SVG convention: +y points downward/south on screen).
+const LAT0     = -27.384;
+const LON0     = 153.117;
+const LAT0_RAD = LAT0 * (Math.PI / 180);
+
+/**
+ * Equirectangular projection: WGS-84 lat/lon → scene metres.
+ * Centred on YBBN.  Same +x = east, +y = south frame the sim uses.
+ */
+function project(lat: number, lon: number): { x: number; y: number } {
+  const x =  (lon - LON0) * 111_320 * Math.cos(LAT0_RAD); // east → +x
+  const y = -(lat - LAT0) * 110_540;                       // north = −y (SVG south = +y)
+  return { x, y };
+}
+
+// ── Phase heuristic — altitude only ──────────────────────────────────────────
+// Real ADS-B carries no flight-phase field.  Altitude gives a usable proxy.
+// The view uses phase for colour/symbol only; inaccuracies are cosmetic.
+function derivePhase(altFt: number): FlightPhase {
+  if (altFt <    50) return 'taxi-in';          // on the ground
+  if (altFt <   500) return 'landing';           // low-level / final
+  if (altFt < 3_000) return 'approach';          // descending into terminal area
+  return 'enroute-arrival';                      // cruise / high-level
+}
+
+// ── Callsign sanitisation ─────────────────────────────────────────────────────
+// flight field has trailing spaces, may be all '@', may be absent.
+const GARBAGE_RE = /^[@\s]+$/;
+
+function sanitiseCallsign(flight: unknown, hex: string): string {
+  if (typeof flight !== 'string') return hex;
+  const t = flight.trim();
+  if (!t || GARBAGE_RE.test(t)) return hex;
+  return t;
+}
+
+// ── Raw ADS-B entry shape ─────────────────────────────────────────────────────
+// Only the fields we actually read are typed; extra fields are ignored.
+interface RawAc {
+  hex:           string;
+  flight?:       string;
+  r?:            string;
+  t?:            string;
+  lat?:          number;
+  lon?:          number;
+  track?:        number;
+  true_heading?: number;
+  mag_heading?:  number;
+  gs?:           number;
+  alt_baro?:     number | 'ground';  // ← CRITICAL: string "ground" when on ground
+  alt_geom?:     number;
+  category?:     string;
+}
+
+// ── Normalise one raw entry → Aircraft (or null if invalid) ──────────────────
+function normalise(raw: RawAc): (Aircraft & { isGroundVehicle: boolean }) | null {
+  // Rule 3: skip entries with no position
+  if (raw.lat == null || raw.lon == null) return null;
+
+  // Rule 1 (CRITICAL — written first): alt_baro may be string "ground"
+  let altFt: number;
+  if (raw.alt_baro === 'ground') {
+    altFt = 0;
+  } else if (typeof raw.alt_baro === 'number') {
+    altFt = raw.alt_baro;
+  } else {
+    // alt_baro missing — fall back to alt_geom, then assume ground
+    altFt = typeof raw.alt_geom === 'number' ? raw.alt_geom : 0;
+  }
+
+  // Rule 4: ground-vehicle tagging (C2 category, or t/r = TWR)
+  const isGroundVehicle =
+    raw.category === 'C2' ||
+    raw.t === 'TWR'       ||
+    raw.r === 'TWR';
+
+  // Rule 2: callsign
+  const callsign = sanitiseCallsign(raw.flight, raw.hex);
+
+  // Heading fallback chain
+  const heading = raw.track ?? raw.true_heading ?? raw.mag_heading ?? 0;
+
+  const { x, y } = project(raw.lat, raw.lon);
+
+  return {
+    id:             raw.hex,
+    callsign,
+    type:           raw.t ?? 'UNKN',
+    phase:          isGroundVehicle ? 'taxi-in' : derivePhase(altFt),
+    position:       { x, y, alt: altFt },
+    heading,
+    groundSpeed:    Math.round(raw.gs ?? 0),
+    assignedRunway: undefined,
+    assignedGate:   undefined,
+    origin:         undefined,
+    destination:    'YBBN',
+    confidence:     1.0,
+    isGroundVehicle,
+  };
+}
+
+// ── Feed health thresholds ────────────────────────────────────────────────────
+// Same intent as the sim's getFeedHealth() — drives the existing LIVE / LAGGING
+// / STALLED indicator in TopBar without any changes to that component.
+const HEALTH_LAGGING_MS = 10_000;   // > 10 s since last good poll → lagging
+const HEALTH_STALLED_MS = 30_000;   // > 30 s                      → stalled
+
+// ── ADS-B adapter ─────────────────────────────────────────────────────────────
+
+export const POLL_INTERVAL_MS = 8_000; // configurable; exposed for callers
+
+export class AdsbAdapter implements DataFeedAdapter {
+  private subs      = new Set<(s: WorldSnapshot) => void>();
+  private latest:   WorldSnapshot;
+  private lastPoll  = 0;             // ms timestamp of last successful poll
+  private lastError: string | null = null;
+  private timer:    ReturnType<typeof setInterval> | null = null;
+  private visHandler: (() => void) | null = null;
+
+  constructor() {
+    this.latest = this._empty(Date.now());
+    this._start();
+  }
+
+  // ── DataFeedAdapter implementation ─────────────────────────────────────────
+
+  subscribe(cb: (s: WorldSnapshot) => void): Unsubscribe {
+    this.subs.add(cb);
+    cb(this.latest); // immediate delivery of whatever we have
+    return () => this.subs.delete(cb);
+  }
+
+  getSnapshotAt(_t: number): WorldSnapshot {
+    return this.latest;
+  }
+
+  getAircraftDetail(id: string): AircraftDetail {
+    const ac = this.latest.aircraft.find(a => a.id === id);
+    if (!ac) throw new Error(`[AdsbAdapter] Aircraft ${id} not in latest snapshot`);
+    return {
+      ...ac,
+      waypointList: [],
+      taxiRoute:    [],
+      planProgress: 0,
+    };
+  }
+
+  getActiveAlerts(): Alert[] { return []; }
+
+  acknowledgeAlert(_id: string): void { /* no alerts to acknowledge */ }
+
+  getFeedHealth(): { status: 'live' | 'lagging' | 'stalled'; lastUpdate: number } {
+    const age = Date.now() - this.lastPoll;
+    let status: 'live' | 'lagging' | 'stalled';
+
+    if (this.lastPoll === 0 || this.lastError !== null) {
+      status = 'stalled';
+    } else if (age > HEALTH_STALLED_MS) {
+      status = 'stalled';
+    } else if (age > HEALTH_LAGGING_MS) {
+      status = 'lagging';
+    } else {
+      status = 'live';
+    }
+
+    return { status, lastUpdate: this.lastPoll };
+  }
+
+  /**
+   * Tear down the polling timer and the visibility listener.
+   * Must be called when swapping back to the sim adapter so there are no
+   * dangling intervals or listeners.
+   */
+  destroy(): void {
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    if (this.visHandler) {
+      document.removeEventListener('visibilitychange', this.visHandler);
+      this.visHandler = null;
+    }
+    console.log('[ADSB] adapter destroyed');
+  }
+
+  // ── Private ────────────────────────────────────────────────────────────────
+
+  private _start(): void {
+    // Page Visibility: pause when tab is hidden, resume (and immediately poll)
+    // when it becomes visible again.  Protects the RapidAPI request quota.
+    this.visHandler = () => {
+      if (document.visibilityState === 'visible') {
+        this._poll();
+        if (!this.timer) this._startTimer();
+      } else {
+        if (this.timer) { clearInterval(this.timer); this.timer = null; }
+      }
+    };
+    document.addEventListener('visibilitychange', this.visHandler);
+
+    if (document.visibilityState === 'visible') {
+      this._poll();
+      this._startTimer();
+    }
+  }
+
+  private _startTimer(): void {
+    this.timer = setInterval(() => {
+      if (document.visibilityState === 'visible') this._poll();
+    }, POLL_INTERVAL_MS);
+  }
+
+  private async _poll(): Promise<void> {
+    try {
+      const res = await fetch('/api/adsb');
+
+      if (!res.ok) {
+        this.lastError = `HTTP ${res.status}`;
+        console.warn(`[ADSB] poll failed: HTTP ${res.status} (${res.statusText})`);
+        return;
+      }
+
+      const data = await res.json() as { ac?: RawAc[]; now?: number; total?: number };
+      this.lastError = null;
+      this.lastPoll  = Date.now();
+
+      const rawList: RawAc[] = data.ac ?? [];
+      const aircraft: Aircraft[] = [];
+      let gvCount = 0;
+
+      for (const raw of rawList) {
+        const norm = normalise(raw);
+        if (!norm) continue;
+        if (norm.isGroundVehicle) gvCount++;
+        aircraft.push(norm);
+      }
+
+      const airborne = aircraft.filter(a => a.position.alt > 50).length;
+
+      // Logged per-poll count: aircraft count (not the key)
+      console.log(
+        `[ADSB] poll ok — raw=${rawList.length} ingested=${aircraft.length}` +
+        ` airborne=${airborne} ground-vehicle=${gvCount}`,
+      );
+
+      this.latest = {
+        t:       data.now ?? Date.now(),
+        aircraft,
+        alerts:  [],
+        weather: {
+          windDir:               190,
+          windSpeed:             12,
+          activeRunwayDirection: '01',
+          precipitationCells:    [],
+        },
+      };
+
+      for (const cb of this.subs) cb(this.latest);
+    } catch (err) {
+      this.lastError = String(err);
+      console.warn('[ADSB] poll error:', err);
+    }
+  }
+
+  private _empty(t: number): WorldSnapshot {
+    return {
+      t,
+      aircraft: [],
+      alerts:   [],
+      weather:  {
+        windDir:               190,
+        windSpeed:             12,
+        activeRunwayDirection: '01',
+        precipitationCells:    [],
+      },
+    };
+  }
+}
