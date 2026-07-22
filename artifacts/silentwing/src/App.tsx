@@ -702,8 +702,9 @@ export default function App() {
         )}
         </AirportProvider>
 
-        {/* ── Director focus panel — single merged popup, director-follow only ── */}
-        {directorMode && cameraMode === 'follow' && selectedAc && (
+        {/* ── Director focus panel — shown in follow AND inspect modes so
+             manual selection while director is on still surfaces the panel ── */}
+        {directorMode && (cameraMode === 'follow' || cameraMode === 'inspect') && selectedAc && (
           <DirectorFocusPanel
             ac={selectedAc}
             onClose={handleClosePanel}

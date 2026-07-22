@@ -665,17 +665,20 @@ interface ApproachIndicatorEntry {
   phase:   'approach' | 'landing';
 }
 
-function createApproachIndicator(scene: THREE.Scene, phase: 'approach' | 'landing'): ApproachIndicatorEntry {
+function createApproachIndicator(_scene: THREE.Scene, phase: 'approach' | 'landing'): ApproachIndicatorEntry {
+  // Line geometry is kept for disposal symmetry but NOT added to the scene —
+  // the long glide-slope line already shows the approach path, so this shorter
+  // forward-heading line is redundant and visually cluttered.
   const posArr = new Float32Array(6);
   const lineGeo = new THREE.BufferGeometry();
   lineGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
   const lineColor = phase === 'approach' ? 0x38BDF8 : 0x60A5FA;
   const lineMat = new THREE.LineBasicMaterial({
-    color: lineColor, transparent: true, opacity: 0.65, depthWrite: false,
+    color: lineColor, transparent: true, opacity: 0, depthWrite: false,
   });
   const line = new THREE.Line(lineGeo, lineMat);
   line.frustumCulled = false;
-  scene.add(line);
+  // Intentionally NOT added to scene — disposed normally when entry is removed.
 
   return { line, lineMat, phase };
 }
