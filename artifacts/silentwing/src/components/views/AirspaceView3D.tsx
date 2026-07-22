@@ -67,7 +67,7 @@ const FOLLOW_OFFSET  = new THREE.Vector3(0, 700, 1400);
 
 // Director Mode uses a wide, cinematic overview shot — ~10× the normal follow
 // distance so the whole flight path context is visible, not just the aircraft.
-const DIRECTOR_FOLLOW_OFFSET = new THREE.Vector3(0, 7_000, 14_000);
+const DIRECTOR_FOLLOW_OFFSET = new THREE.Vector3(0, 1_050, 2_100);
 
 // Transition speeds (flyProgress increment per frame at 60 fps)
 const FLY_SPEED_NORMAL   = 0.022; // ~45 frames ≈ 0.75 s
