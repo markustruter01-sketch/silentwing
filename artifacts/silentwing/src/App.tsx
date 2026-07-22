@@ -222,6 +222,40 @@ export default function App() {
     return map;
   }, [activeAlerts]);
 
+  // ── Critical alert camera interrupt (Task #16) ────────────────────────────
+  /** CRITICAL alert IDs seen on the previous activeAlerts tick — for diff. */
+  const prevCriticalIdsRef     = useRef<Set<string>>(new Set());
+  /** Alert ID the 3D camera is currently pivoting toward; null = no interrupt. */
+  const [alertFocusId, setAlertFocusId] = useState<string | null>(null);
+  /** Blocks the director dwell-timer tick while the camera interrupt is active. */
+  const alertInterruptActiveRef = useRef(false);
+
+  // Detect newly-fired CRITICAL alerts and kick off the 3D camera interrupt.
+  useEffect(() => {
+    const currentCriticalIds = new Set(
+      activeAlerts.filter(a => a.severity === 'critical').map(a => a.id),
+    );
+    let newId: string | null = null;
+    for (const id of currentCriticalIds) {
+      if (!prevCriticalIdsRef.current.has(id)) { newId = id; break; }
+    }
+    prevCriticalIdsRef.current = currentCriticalIds;
+    if (newId) {
+      console.log(`[APP] new CRITICAL alert ${newId} — camera interrupt`);
+      alertInterruptActiveRef.current = true;
+      setAlertFocusId(newId);
+    }
+  }, [activeAlerts]);
+
+  /** Called by AirspaceView3D when the 9-second pivot-in/hold/pivot-out completes. */
+  const handleAlertFocusDone = useCallback(() => {
+    console.log('[APP] camera interrupt complete — resuming director');
+    alertInterruptActiveRef.current = false;
+    setAlertFocusId(null);
+    // Reset dwell so the director holds for a full 10 s before switching subjects.
+    lastSwitchRef.current = Date.now();
+  }, []);
+
   // ── Director intro hint ─────────────────────────────────────────────────
   // Shown for 5 seconds on load, fades out over the last second.
   const [showDirectorHint,    setShowDirectorHint]    = useState(true);
@@ -270,6 +304,9 @@ export default function App() {
 
     const tick = () => {
       const now = Date.now();
+      // Pause dwell timer during critical-alert camera interrupt so the director
+      // doesn't switch subjects while the camera is mid-pivot.
+      if (alertInterruptActiveRef.current) return;
       if (now - lastSwitchRef.current < DIRECTOR_DWELL_MS) return;
       lastSwitchRef.current = now;
 
@@ -503,6 +540,8 @@ export default function App() {
             weather={snapshot.weather}
             alertedIds={alertedIds}
             activeAlerts={activeAlerts}
+            alertFocusId={alertFocusId ?? undefined}
+            onAlertFocusDone={handleAlertFocusDone}
             onSelectAircraft={(id) => {
               console.log(`[APP] 3D select: ${id ?? 'null'}`);
               setSelectedAcId(id);

@@ -706,6 +706,22 @@ interface SceneState {
   pulseRingMap: Map<string, PulseRingEntry>;
   /** Alert ID → floating 3D canvas-sprite label at the conflict midpoint. */
   labelMap: Map<string, AlertLabelEntry>;
+
+  // ── Alert focus interrupt (Task #16) ───────────────────────────────────
+  /** The active critical alert ID being focused on, or null. Synced from prop. */
+  alertFocusId:   string | null;
+  /** Callback to fire when the interrupt completes. Synced from prop. */
+  alertFocusDone: (() => void) | null;
+  /** Running interrupt state — null when no interrupt is active. */
+  alertInterrupt: {
+    elapsedMs:  number;
+    /** performance.now() value from the previous rAF frame, for delta-time. */
+    prevNowMs:  number;
+    /** Camera look-at point at the moment the interrupt started. */
+    startLook:  THREE.Vector3;
+    /** 3D conflict midpoint — updated each frame so it tracks moving aircraft. */
+    targetLook: THREE.Vector3;
+  } | null;
 }
 
 // ── Helper: begin fly-to animation toward an aircraft ────────────────────────
@@ -746,6 +762,14 @@ export interface AirspaceView3DProps {
   alertedIds?:      Map<string, 'advisory' | 'caution' | 'critical'>;
   /** Full active alert list — drives the 3-D threat beam renderer. */
   activeAlerts?:    SWAlert[];
+  /**
+   * When set to a CRITICAL alert ID, the camera pivots to look at that
+   * conflict's 3D midpoint (2 s in, 5 s hold, 2 s return).
+   * Clear to undefined to cancel early (e.g. alert cleared).
+   */
+  alertFocusId?:     string;
+  /** Fired when the full pivot-in → hold → pivot-out sequence completes. */
+  onAlertFocusDone?: () => void;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -759,6 +783,8 @@ export default function AirspaceView3D({
   weather,
   alertedIds,
   activeAlerts,
+  alertFocusId,
+  onAlertFocusDone,
 }: AirspaceView3DProps) {
   const mountRef       = useRef<HTMLDivElement>(null);
   const sceneRef       = useRef<SceneState | null>(null);
@@ -771,6 +797,16 @@ export default function AirspaceView3D({
   const camModeRef = useRef(onCameraMode);
   useEffect(() => { selectRef.current  = onSelectAircraft; }, [onSelectAircraft]);
   useEffect(() => { camModeRef.current = onCameraMode;     }, [onCameraMode]);
+
+  // Stable refs for alert-focus interrupt props.
+  // The scene-setup effect has [] deps so it can't read React state/props
+  // directly after mount.  These refs are written on EVERY render (no useEffect),
+  // so the scene-setup effect can always read the latest values — needed for
+  // remount recovery when alertFocusId was already set in App's state.
+  const alertFocusIdRef     = useRef<string | null>(alertFocusId ?? null);
+  const onAlertFocusDoneRef = useRef<(() => void) | null>(onAlertFocusDone ?? null);
+  alertFocusIdRef.current     = alertFocusId ?? null;
+  onAlertFocusDoneRef.current = onAlertFocusDone ?? null;
 
   // Sync directorMode prop into SceneState so the rAF loop always reads fresh.
   useEffect(() => {
@@ -789,6 +825,52 @@ export default function AirspaceView3D({
     const st = sceneRef.current;
     if (st) st.activeAlerts = activeAlerts ?? [];
   }, [activeAlerts]);
+
+  // ── Sync alert focus interrupt (Task #16) ──────────────────────────────────
+  // When alertFocusId changes to a new non-null value, kick off the 3-D camera
+  // interrupt.  When it clears to undefined the interrupt is cancelled cleanly.
+  useEffect(() => {
+    const st = sceneRef.current;
+    if (!st) return;
+
+    st.alertFocusDone = onAlertFocusDone ?? null;
+
+    if (!alertFocusId) {
+      // Prop cleared (alert dismissed / callback fired) — cancel any interrupt.
+      st.alertFocusId   = null;
+      st.alertInterrupt = null;
+      return;
+    }
+    if (st.alertFocusId === alertFocusId && st.alertInterrupt) return; // already running
+
+    console.log(`[3D CAM] alert focus interrupt → ${alertFocusId}`);
+
+    // Capture the camera's current look-at direction as the start point.
+    const dir = new THREE.Vector3();
+    st.camera.getWorldDirection(dir);
+    const startLook = st.camera.position.clone().addScaledVector(dir, 2000);
+
+    // Derive the conflict 3D midpoint from acMap (best effort — updates each frame).
+    const focusAlert = st.activeAlerts.find(a => a.id === alertFocusId);
+    let mx = 0, my = 0, mz = 0, cnt = 0;
+    if (focusAlert) {
+      for (const id of focusAlert.aircraftIds.slice(0, 2)) {
+        const b = st.acMap.get(id);
+        if (b) { mx += b.renderPos.x; my += b.renderPos.y; mz += b.renderPos.z; cnt++; }
+      }
+    }
+    const targetLook = cnt > 0
+      ? new THREE.Vector3(mx / cnt, my / cnt, mz / cnt)
+      : startLook.clone(); // fallback: pivot to where we already are
+
+    st.alertFocusId   = alertFocusId;
+    st.alertInterrupt = {
+      elapsedMs:  0,
+      prevNowMs:  performance.now(),
+      startLook,
+      targetLook,
+    };
+  }, [alertFocusId, onAlertFocusDone]);
 
   // ── Sync external cameraMode prop → sceneRef ────────────────────────────────
   // Fired when App changes cameraMode (e.g. "Follow" button in panel).
@@ -957,8 +1039,38 @@ export default function AirspaceView3D({
       beamMap:              new Map(),
       pulseRingMap:         new Map(),
       labelMap:             new Map(),
+      alertFocusId:         null,
+      alertFocusDone:       null,
+      alertInterrupt:       null,
     };
     sceneRef.current = st;
+
+    // ── Remount recovery: alert focus interrupt ──────────────────────────────
+    // The alert-focus sync effect runs BEFORE scene setup on re-mount and finds
+    // sceneRef.current null, so it exits early.  Because alertFocusId doesn't
+    // change between unmount and remount, the effect never re-fires.
+    // We detect this here using the stable refs (written every render) and
+    // start the interrupt directly, so the director-pause flag can be cleared.
+    {
+      const fid  = alertFocusIdRef.current;
+      const done = onAlertFocusDoneRef.current;
+      if (fid) {
+        console.log(`[3D CAM] remount recovery: alert interrupt → ${fid}`);
+        const dir = new THREE.Vector3();
+        camera.getWorldDirection(dir);
+        const sl = camera.position.clone().addScaledVector(dir, 2000);
+        st.alertFocusId   = fid;
+        st.alertFocusDone = done;
+        // targetLook starts equal to startLook; the rAF loop updates it once
+        // st.activeAlerts is populated (next re-render after aircraft sync).
+        st.alertInterrupt = {
+          elapsedMs:  0,
+          prevNowMs:  performance.now(),
+          startLook:  sl,
+          targetLook: sl.clone(),
+        };
+      }
+    }
 
     // ── Raycaster (shared across frames) ────────────────────────────────────
     const raycaster = new THREE.Raycaster();
@@ -966,6 +1078,7 @@ export default function AirspaceView3D({
     // ── Animation loop ───────────────────────────────────────────────────────
     const tick = () => {
       st.animId = requestAnimationFrame(tick);
+      const nowMs = performance.now();
 
       switch (st.cameraMode) {
         case 'orbit': {
@@ -1050,6 +1163,61 @@ export default function AirspaceView3D({
         }
       }
 
+      // ── Alert focus interrupt overlay (Task #16) ─────────────────────────
+      // Runs after the camera-mode switch so it can read the natural look-at
+      // the mode code just set, then override it with the interpolated direction.
+      // Camera POSITION is never modified — only the look direction is lerped.
+      {
+        const intr = st.alertInterrupt;
+        if (intr) {
+          const dt = nowMs - intr.prevNowMs;
+          intr.prevNowMs  = nowMs;
+          intr.elapsedMs += dt;
+
+          const PIVOT_IN_MS  = 2000;
+          const HOLD_MS      = 5000;
+          const PIVOT_OUT_MS = 2000;
+          const TOTAL_MS     = PIVOT_IN_MS + HOLD_MS + PIVOT_OUT_MS;
+
+          // Keep target updated as aircraft move during hold phase.
+          const focusAlert = st.activeAlerts.find(a => a.id === st.alertFocusId);
+          if (focusAlert && focusAlert.aircraftIds.length >= 1) {
+            let mx = 0, my = 0, mz = 0, cnt = 0;
+            for (const id of focusAlert.aircraftIds.slice(0, 2)) {
+              const b = st.acMap.get(id);
+              if (b) { mx += b.renderPos.x; my += b.renderPos.y; mz += b.renderPos.z; cnt++; }
+            }
+            if (cnt > 0) intr.targetLook.set(mx / cnt, my / cnt, mz / cnt);
+          }
+
+          if (intr.elapsedMs >= TOTAL_MS) {
+            // Full sequence complete — fire callback and let camera resume naturally.
+            const done = st.alertFocusDone;
+            st.alertFocusDone = null;
+            st.alertInterrupt = null;
+            st.alertFocusId   = null;
+            done?.();
+          } else {
+            // Where the camera mode code just pointed (used as pivot-out return target).
+            const dirVec = new THREE.Vector3();
+            camera.getWorldDirection(dirVec);
+            const naturalLook = camera.position.clone().addScaledVector(dirVec, 2000);
+
+            let lookOverride: THREE.Vector3;
+            if (intr.elapsedMs < PIVOT_IN_MS) {
+              const t = easeInOut(intr.elapsedMs / PIVOT_IN_MS);
+              lookOverride = new THREE.Vector3().lerpVectors(intr.startLook, intr.targetLook, t);
+            } else if (intr.elapsedMs < PIVOT_IN_MS + HOLD_MS) {
+              lookOverride = intr.targetLook.clone();
+            } else {
+              const t = easeInOut((intr.elapsedMs - PIVOT_IN_MS - HOLD_MS) / PIVOT_OUT_MS);
+              lookOverride = new THREE.Vector3().lerpVectors(intr.targetLook, naturalLook, t);
+            }
+            camera.lookAt(lookOverride);
+          }
+        }
+      }
+
       // ── Velocity extrapolation tick ───────────────────────────────────────
       //
       // Each frame we advance an aircraft's renderPos by dead-reckoning from its
@@ -1062,7 +1230,6 @@ export default function AirspaceView3D({
       //   • Ground-stopped aircraft (gsMps == 0) hold position — no motion.
       //   • Extrapolation is capped at MAX_EXTRAP_S seconds ahead.
       //   • renderPos.y is always clamped ≥ 0 (never underground).
-      const nowMs = performance.now();
 
       for (const [, b] of st.acMap) {
         // HMR guard: stale bundles from a hot-reload may lack the new fields
@@ -1620,6 +1787,17 @@ export default function AirspaceView3D({
     return () => {
       ro.disconnect();
       cancelAnimationFrame(st.animId);
+      // If a critical-alert camera interrupt was in progress when the 3D view
+      // unmounted (e.g. user switched to airfield view), fire the done callback
+      // now so App's director-pause flag is cleared.  Without this the director
+      // would stay paused indefinitely when the view is remounted.
+      if (st.alertInterrupt || st.alertFocusId) {
+        const done = st.alertFocusDone;
+        st.alertFocusDone = null;
+        st.alertInterrupt = null;
+        st.alertFocusId   = null;
+        done?.();
+      }
       if (st.panResumeTimer !== null) clearTimeout(st.panResumeTimer);
       canvas.removeEventListener('wheel',        onWheel);
       canvas.removeEventListener('contextmenu',  onContextMenu);
