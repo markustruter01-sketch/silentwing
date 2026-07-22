@@ -1,11 +1,11 @@
-// ── AlertShell — Phase 6A ─────────────────────────────────────────────────────
+// ── AlertShell — Phase 6A / Task #15 ─────────────────────────────────────────
 //
-// Left-edge vertical tab strip with 5 tabs.  Active-alert tab glows / pulses /
-// auto-expands based on severity.  Respects advisory = no auto-expand / no sound.
+// Left-edge vertical tab strip with 5 tabs.  Active-alert tab glows / pulses.
+// Alerts are now displayed as 3D sprites directly in the airspace scene — the
+// expanding card panel has been removed.
 
 import { useEffect, useRef, useState } from 'react';
 import type { SWAlert, SWAlertSeverity } from '@/alerts/types';
-import { severityRank } from '@/alerts/types';
 
 // ── Audio chime (Web Audio API — zero file dependencies) ──────────────────────
 function playChime(ctxRef: React.MutableRefObject<AudioContext | null>): void {
@@ -40,103 +40,62 @@ const TABS: TabDef[] = [
   { id: 'log',       icon: '≡',  label: 'Alert Log',        shortLabel: 'LOG'       },
 ];
 
-// ── Small helpers ─────────────────────────────────────────────────────────────
-function fmtTime(ms: number): string {
-  const d = new Date(ms);
-  return [d.getHours(), d.getMinutes(), d.getSeconds()]
-    .map(n => String(n).padStart(2, '0')).join(':');
-}
-
-const SEV_COLORS: Record<SWAlertSeverity, { badge: string; text: string; dot: string }> = {
-  critical: {
-    badge: 'bg-red-950/80 text-red-300 border-red-700/60',
-    text:  'text-red-300',
-    dot:   'bg-red-400',
-  },
-  caution: {
-    badge: 'bg-amber-950/80 text-amber-300 border-amber-700/60',
-    text:  'text-amber-300',
-    dot:   'bg-amber-400',
-  },
-  advisory: {
-    badge: 'bg-yellow-950/60 text-yellow-400 border-yellow-700/40',
-    text:  'text-yellow-400',
-    dot:   'bg-yellow-400',
-  },
-};
-
 // ── Props ─────────────────────────────────────────────────────────────────────
 interface AlertShellProps {
   activeAlerts: SWAlert[];
-  allAlerts:    SWAlert[];
-  onDismiss:    (id: string) => void;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
-export default function AlertShell({ activeAlerts, allAlerts, onDismiss }: AlertShellProps) {
-  const [expandedTab,  setExpandedTab]  = useState<TabId | null>(null);
+export default function AlertShell({ activeAlerts }: AlertShellProps) {
+  const [activeTab,    setActiveTab]    = useState<TabId | null>(null);
   const [audioEnabled, setAudioEnabled] = useState(true);
 
   const audioCtxRef    = useRef<AudioContext | null>(null);
   const chimmedRef     = useRef(new Set<string>());   // alert IDs already chimed
   const prevHighestRef = useRef<SWAlertSeverity | null>(null);
 
-  // ── Highest severity of active (non-acked, non-cleared) alerts ──────────────
+  // ── Highest severity of active alerts ───────────────────────────────────────
   const highest: SWAlertSeverity | null =
     activeAlerts.length === 0                              ? null
     : activeAlerts.some(a => a.severity === 'critical')   ? 'critical'
     : activeAlerts.some(a => a.severity === 'caution')    ? 'caution'
     : 'advisory';
 
-  // ── Auto-expand + audio ─────────────────────────────────────────────────────
+  // ── Audio chime — critical alerts only ─────────────────────────────────────
   useEffect(() => {
-    const prev = prevHighestRef.current;
     prevHighestRef.current = highest;
-
     if (!highest) return;
 
-    // Auto-expand Alerts tab for CAUTION or CRITICAL (not advisory — spec rule)
-    if (highest === 'caution' || highest === 'critical') {
-      setExpandedTab(t => (t === 'alerts' ? t : 'alerts'));
-    }
-
-    // Audio: single chime per critical alert ID, only when audioEnabled
-    // ADVISORY: no sound — enforced by the severity check below
     if (audioEnabled && highest === 'critical') {
       for (const alert of activeAlerts) {
         if (alert.severity === 'critical' && !chimmedRef.current.has(alert.id)) {
           chimmedRef.current.add(alert.id);
           playChime(audioCtxRef);
-          break; // one chime per event
+          break;
         }
       }
     }
-    // Suppress: advisory changes never trigger audio — no additional code needed
   }, [highest, activeAlerts, audioEnabled]);
 
-  // ── Tab glow class (applied to Alerts tab only) ─────────────────────────────
+  // ── Tab glow class (Alerts tab only) ────────────────────────────────────────
   const alertsTabClass =
     highest === 'critical' ? 'alert-glow-critical' :
     highest === 'caution'  ? 'alert-glow-caution'  :
     highest === 'advisory' ? 'alert-glow-advisory'  : '';
 
-  const toggleTab = (id: TabId) => setExpandedTab(t => (t === id ? null : id));
+  const toggleTab = (id: TabId) => setActiveTab(t => (t === id ? null : id));
 
   return (
     <div className="absolute left-0 inset-y-0 z-[120] flex pointer-events-none select-none">
 
-      {/* ── Notebook tab spine (always visible) ─────────────────────────────── */}
-      {/* Styled as physical notebook section dividers: each tab has a coloured
-          left accent bar, a vertical section label, and subtle page-edge depth. */}
+      {/* ── Notebook tab spine (always visible, never expands) ───────────────── */}
       <div
         className="w-11 flex flex-col bg-[#06090D]/95 border-r border-slate-800/40 pointer-events-auto"
         style={{ boxShadow: '3px 0 14px rgba(0,0,0,0.65)' }}
       >
         {TABS.map((tab, idx) => {
-          const isActive  = expandedTab === tab.id;
-          const count     = tab.id === 'alerts' ? activeAlerts.length
-                          : tab.id === 'log'    ? allAlerts.length
-                          : 0;
+          const isActive  = activeTab === tab.id;
+          const count     = tab.id === 'alerts' ? activeAlerts.length : 0;
           const glowCls   = tab.id === 'alerts' ? alertsTabClass : '';
 
           // Left accent colour — drives the "section colour" of this notebook tab
@@ -160,13 +119,12 @@ export default function AlertShell({ activeAlerts, allAlerts, onDismiss }: Alert
               className={[
                 'relative flex flex-col items-center justify-center py-[14px] px-0 w-full',
                 'cursor-pointer transition-colors duration-150 group',
-                // Divider between tabs except last-before-spacer
                 idx < TABS.length - 1 ? 'border-b border-slate-800/40' : '',
                 isActive ? 'bg-slate-800/45' : 'hover:bg-slate-800/20',
                 glowCls,
               ].join(' ')}
             >
-              {/* ── Coloured left accent bar — the "spine colour" of this section ── */}
+              {/* ── Coloured left accent bar ─────────────────────────────────── */}
               <div
                 className="absolute left-0 top-3 bottom-3 w-[3px] rounded-r-full transition-all duration-200"
                 style={{
@@ -175,7 +133,7 @@ export default function AlertShell({ activeAlerts, allAlerts, onDismiss }: Alert
                 }}
               />
 
-              {/* ── Count badge (top, only when non-zero) ─────────────────────── */}
+              {/* ── Count badge (Alerts tab only, when non-zero) ─────────────── */}
               {count > 0 && (
                 <span className={[
                   'text-[8px] font-mono font-bold leading-none mb-2 min-w-[16px] text-center',
@@ -189,7 +147,7 @@ export default function AlertShell({ activeAlerts, allAlerts, onDismiss }: Alert
                 </span>
               )}
 
-              {/* ── Section label — rotated, notebook-tab style ─────────────────── */}
+              {/* ── Section label — rotated, notebook-tab style ──────────────── */}
               <span
                 className={`font-mono uppercase font-medium tracking-[0.2em] text-[8px] leading-none transition-colors duration-150 ${labelColor}`}
                 style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
@@ -197,12 +155,12 @@ export default function AlertShell({ activeAlerts, allAlerts, onDismiss }: Alert
                 {tab.shortLabel}
               </span>
 
-              {/* ── Icon below the label ───────────────────────────────────────── */}
+              {/* ── Icon below the label ──────────────────────────────────────── */}
               <span className={`text-[11px] leading-none mt-2 transition-colors duration-150 ${labelColor}`}>
                 {tab.icon}
               </span>
 
-              {/* ── Right edge — "open page" indicator when expanded ───────────── */}
+              {/* ── Right edge — active indicator ─────────────────────────────── */}
               {isActive && (
                 <div
                   className="absolute right-0 top-0 bottom-0 w-[2px]"
@@ -225,218 +183,6 @@ export default function AlertShell({ activeAlerts, allAlerts, onDismiss }: Alert
           {audioEnabled ? '🔔' : '🔕'}
         </button>
       </div>
-
-      {/* ── Expanded panel — shrink-wraps to content, no full-height background ── */}
-      {expandedTab && (
-        <div className="w-[280px] flex flex-col bg-[#060A0F]/96 border border-slate-800/50 border-l-0 rounded-br overflow-hidden pointer-events-auto self-start max-h-[80vh]">
-          {/* Header */}
-          <div className="flex items-center justify-between px-3 py-2 border-b border-slate-800/40 shrink-0">
-            <span className="text-[9px] tracking-[0.22em] uppercase font-mono text-slate-400">
-              {TABS.find(t => t.id === expandedTab)?.label}
-            </span>
-            <button
-              onClick={() => setExpandedTab(null)}
-              className="text-slate-600 hover:text-slate-300 text-base leading-none cursor-pointer transition-colors ml-2"
-            >
-              ×
-            </button>
-          </div>
-
-          {/* Body — scrolls only if content exceeds max-height */}
-          <div className="overflow-y-auto">
-            {expandedTab === 'alerts'    && <AlertsPanel alerts={activeAlerts} onDismiss={onDismiss} />}
-            {expandedTab === 'conflicts' && <ConflictHorizonPanel alerts={activeAlerts} />}
-            {expandedTab === 'traffic'   && <PlaceholderPanel message="No forecast data"       note="Phase 7 — Traffic Forecast" />}
-            {expandedTab === 'weather'   && <PlaceholderPanel message="No weather impact"      note="Phase 7 — Weather Impact"   />}
-            {expandedTab === 'log'       && <LogPanel alerts={allAlerts} />}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Alerts panel ──────────────────────────────────────────────────────────────
-function AlertsPanel({ alerts, onDismiss }: { alerts: SWAlert[]; onDismiss: (id: string) => void }) {
-  if (alerts.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-28 gap-1 text-slate-600 font-mono text-[10px]">
-        <span className="text-2xl opacity-20 mb-1">✓</span>
-        No active alerts
-      </div>
-    );
-  }
-
-  const sorted = [...alerts].sort((a, b) => {
-    const d = severityRank(b.severity) - severityRank(a.severity);
-    return d !== 0 ? d : b.raisedAt - a.raisedAt;
-  });
-
-  return (
-    <div className="flex flex-col">
-      {sorted.map(alert => {
-        const { badge, text, dot } = SEV_COLORS[alert.severity];
-        return (
-          <div
-            key={alert.id}
-            className="px-3 py-2.5 border-b border-slate-800/30 flex flex-col gap-1.5"
-          >
-            {/* Severity + callsigns */}
-            <div className="flex items-center gap-2">
-              <span className={`inline-flex items-center gap-1 text-[7px] font-mono font-bold tracking-widest px-1.5 py-0.5 rounded border uppercase ${badge}`}>
-                <span className={`w-1 h-1 rounded-full ${dot}`} />
-                {alert.severity}
-              </span>
-              <span className="font-mono text-[11px] text-slate-200 tracking-wide">
-                {alert.aircraft.join(' & ')}
-              </span>
-            </div>
-
-            {/* Live numbers */}
-            <p className={`text-[10px] font-mono leading-snug ${text}`}>
-              {alert.message}
-            </p>
-
-            {/* Time + dismiss */}
-            <div className="flex items-center justify-between mt-0.5">
-              <span className="text-[9px] font-mono text-slate-700 tabular-nums">
-                ↑ {fmtTime(alert.raisedAt)}
-              </span>
-              <button
-                onClick={() => onDismiss(alert.id)}
-                className="text-[8px] font-mono uppercase tracking-widest
-                           px-2 py-0.5 rounded border border-slate-700/50
-                           text-slate-500 hover:text-slate-200 hover:border-slate-500
-                           cursor-pointer transition-colors"
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// ── Log panel ────────────────────────────────────────────────────────────────
-function LogPanel({ alerts }: { alerts: SWAlert[] }) {
-  if (alerts.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-28 text-slate-600 font-mono text-[10px]">
-        No alerts logged yet
-      </div>
-    );
-  }
-
-  const sorted = [...alerts].sort((a, b) => b.raisedAt - a.raisedAt);
-
-  return (
-    <div className="flex flex-col">
-      {sorted.map(alert => {
-        const { badge } = SEV_COLORS[alert.severity];
-        const status    = alert.acknowledged ? 'DISMISSED'
-                        : alert.clearedAt    ? 'CLEARED'
-                        :                      'ACTIVE';
-        const statusColor =
-          status === 'ACTIVE'     ? 'text-amber-600' :
-          status === 'CLEARED'    ? 'text-green-700'  : 'text-slate-600';
-        return (
-          <div key={alert.id} className="px-3 py-2 border-b border-slate-800/20 flex flex-col gap-1">
-            <div className="flex items-center gap-1.5">
-              <span className={`text-[6.5px] font-mono font-bold tracking-widest px-1 py-px rounded border uppercase ${badge}`}>
-                {alert.severity}
-              </span>
-              <span className="font-mono text-[9px] text-slate-400 tracking-wide">
-                {alert.aircraft.join(' & ')}
-              </span>
-              <span className={`ml-auto text-[7px] font-mono tracking-wider ${statusColor}`}>
-                {status}
-              </span>
-            </div>
-            <p className="text-[9px] font-mono text-slate-600 leading-snug">{alert.message}</p>
-            <div className="flex flex-wrap gap-x-3 text-[8px] font-mono text-slate-700 tabular-nums">
-              <span>↑ {fmtTime(alert.raisedAt)}</span>
-              {alert.clearedAt     && <span>↓ {fmtTime(alert.clearedAt)}</span>}
-              {alert.acknowledgedAt && <span>✓ {fmtTime(alert.acknowledgedAt)}</span>}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// ── Conflict Horizon panel (Phase 6B) ────────────────────────────────────────
-function ConflictHorizonPanel({ alerts }: { alerts: SWAlert[] }) {
-  const conflicts = alerts
-    .filter(a => a.kind === 'predicted_conflict')
-    .sort((a, b) => (a.extra?.ttcSeconds ?? 999) - (b.extra?.ttcSeconds ?? 999));
-
-  if (conflicts.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-28 gap-1 text-slate-600 font-mono text-[10px]">
-        <span className="text-2xl opacity-20 mb-1">◆</span>
-        No predicted conflicts
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col">
-      {conflicts.map(alert => {
-        const { badge, text, dot } = SEV_COLORS[alert.severity];
-        const ttc     = alert.extra?.ttcSeconds;
-        const predNm  = alert.extra?.predClosestNm;
-        const predFt  = alert.extra?.predClosestFt;
-
-        return (
-          <div
-            key={alert.id}
-            className="px-3 py-2.5 border-b border-slate-800/30 flex flex-col gap-1.5"
-          >
-            {/* Severity badge + pair */}
-            <div className="flex items-center gap-2">
-              <span className={`inline-flex items-center gap-1 text-[7px] font-mono font-bold tracking-widest px-1.5 py-0.5 rounded border uppercase ${badge}`}>
-                <span className={`w-1 h-1 rounded-full ${dot}`} />
-                {alert.severity}
-              </span>
-              <span className="font-mono text-[11px] text-slate-200 tracking-wide">
-                {alert.aircraft.join(' & ')}
-              </span>
-            </div>
-
-            {/* Predicted separation */}
-            {predNm !== undefined && predFt !== undefined && (
-              <p className={`text-[10px] font-mono leading-snug ${text}`}>
-                Predicted {predNm.toFixed(1)} nm / {Math.round(predFt)} ft
-              </p>
-            )}
-
-            {/* Time to conflict */}
-            <div className="flex items-center justify-between">
-              {ttc !== undefined && (
-                <span className={`text-[10px] font-mono font-semibold ${text}`}>
-                  T−{ttc}s
-                </span>
-              )}
-              <span className="text-[8px] font-mono text-slate-700 italic">
-                straight-line only
-              </span>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// ── Placeholder panel ────────────────────────────────────────────────────────
-function PlaceholderPanel({ message, note }: { message: string; note: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center h-28 gap-1">
-      <span className="font-mono text-[10px] text-slate-500">{message}</span>
-      <span className="font-mono text-[8px] text-slate-700">{note}</span>
     </div>
   );
 }

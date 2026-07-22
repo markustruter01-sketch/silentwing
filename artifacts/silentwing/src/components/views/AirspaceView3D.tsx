@@ -190,70 +190,6 @@ function disposeBeamEntry(entry: BeamEntry, scene: THREE.Scene): void {
   entry.sphereMat.dispose();
 }
 
-// ── Danger sphere constants (Phase 6A / Task #5) ──────────────────────────────
-// A large translucent sphere whose radius = half the live 3-D separation
-// distance between the conflicting pair.  Rendered with additive blending so
-// it glows without occluding anything behind it.
-
-/** Unit sphere (r=1) shared across all danger sphere meshes — scale handles size. */
-const DANGER_SPHERE_GEO = new THREE.SphereGeometry(1, 24, 16);
-
-interface DangerSphereParams {
-  color:       THREE.Color;
-  pulseSpeed:  number;
-  opacityBase: number;
-  opacityAmp:  number;
-  /** Max opacity when aircraft are at zero separation (full convergence). */
-  opacityMax:  number;
-}
-
-const DANGER_SPHERE_PARAMS: Record<SWAlertSeverity, DangerSphereParams> = {
-  critical: { color: new THREE.Color(0xef4444), pulseSpeed: 3.5, opacityBase: 0.10, opacityAmp: 0.06, opacityMax: 0.40 },
-  caution:  { color: new THREE.Color(0xf59e0b), pulseSpeed: 2.0, opacityBase: 0.07, opacityAmp: 0.04, opacityMax: 0.28 },
-  advisory: { color: new THREE.Color(0xfbbf24), pulseSpeed: 1.0, opacityBase: 0.05, opacityAmp: 0.02, opacityMax: 0.18 },
-};
-
-/**
- * Scene-space radius at which each severity alert fires (≈ half the separation
- * threshold in metres — horizontal only, since alt is ALT_SCALE-compressed).
- * Used to derive an "intensity factor" so the sphere brightens as aircraft converge.
- */
-const SPHERE_THRESHOLD_RADIUS: Record<SWAlertSeverity, number> = {
-  advisory: 9_260 / 2,  // 5 nm threshold → 4 630 m radius at alert boundary
-  caution:  5_556 / 2,  // 3 nm
-  critical: 2_778 / 2,  // 1.5 nm
-};
-
-interface DangerSphereEntry {
-  mesh:       THREE.Mesh;
-  mat:        THREE.MeshBasicMaterial;
-  /** Per-sphere phase offset so simultaneous alerts pulse slightly out of sync. */
-  phase:      number;
-  severity:   SWAlertSeverity;
-}
-
-function createDangerSphere(severity: SWAlertSeverity, scene: THREE.Scene, phase: number): DangerSphereEntry {
-  const p   = DANGER_SPHERE_PARAMS[severity];
-  const mat = new THREE.MeshBasicMaterial({
-    color:       p.color,
-    transparent: true,
-    opacity:     p.opacityBase,
-    depthWrite:  false,
-    side:        THREE.DoubleSide,
-    blending:    THREE.AdditiveBlending,
-  });
-  const mesh = new THREE.Mesh(DANGER_SPHERE_GEO, mat);
-  mesh.frustumCulled = false;
-  scene.add(mesh);
-  return { mesh, mat, phase, severity };
-}
-
-function disposeDangerSphere(entry: DangerSphereEntry, scene: THREE.Scene): void {
-  scene.remove(entry.mesh);
-  entry.mat.dispose();
-  // DANGER_SPHERE_GEO is shared — do NOT dispose it here
-}
-
 // ── Pulse ring constants (Task #6) ────────────────────────────────────────────
 // Flat concentric rings on the ground plane (y=1) that expand outward like a
 // sonar ping from the ground projection of the conflict midpoint.
@@ -310,6 +246,73 @@ function disposePulseRingEntry(entry: PulseRingEntry, scene: THREE.Scene): void 
     // PULSE_RING_GEO is shared — do NOT dispose it here
   }
   entry.rings.length = 0;
+}
+
+// ── 3D alert label sprites (Task #15) ─────────────────────────────────────────
+// Canvas-texture Sprite at the 3D midpoint of each active caution/critical
+// alert.  Position updates every frame; texture only when message text changes.
+
+function makeAlertLabelTexture(
+  severity:  SWAlertSeverity,
+  callsigns: string,
+  message:   string,
+): THREE.CanvasTexture {
+  const W = 520, H = 156;
+  const cv  = document.createElement('canvas');
+  cv.width  = W; cv.height = H;
+  const ctx = cv.getContext('2d')!;
+
+  const accentHex =
+    severity === 'critical' ? '#ef4444' :
+    severity === 'caution'  ? '#f59e0b' : '#fbbf24';
+  const msgHex =
+    severity === 'critical' ? '#fca5a5' :
+    severity === 'caution'  ? '#fcd34d' : '#fef08a';
+
+  // Background
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(4,7,11,0.88)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Left accent bar
+  ctx.fillStyle = accentHex;
+  ctx.fillRect(0, 0, 4, H);
+
+  // Top accent line
+  ctx.fillRect(0, 0, W, 2);
+
+  // Severity badge
+  ctx.font         = 'bold 14px "Courier New",monospace';
+  ctx.fillStyle    = accentHex;
+  ctx.textAlign    = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText('\u25c6 ' + severity.toUpperCase(), 12, 8);
+
+  // Callsigns — main line
+  ctx.font         = 'bold 38px "Courier New",monospace';
+  ctx.fillStyle    = '#f1f5f9';
+  ctx.textBaseline = 'top';
+  ctx.fillText(callsigns, 12, 34);
+
+  // Separation message
+  ctx.font         = '22px "Courier New",monospace';
+  ctx.fillStyle    = msgHex;
+  ctx.textBaseline = 'top';
+  ctx.fillText(message, 12, 90);
+
+  return new THREE.CanvasTexture(cv);
+}
+
+interface AlertLabelEntry {
+  sprite:      THREE.Sprite;
+  mat:         THREE.SpriteMaterial;
+  lastMessage: string;
+}
+
+function disposeAlertLabel(entry: AlertLabelEntry, scene: THREE.Scene): void {
+  scene.remove(entry.sprite);
+  entry.mat.map?.dispose();
+  entry.mat.dispose();
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -699,10 +702,10 @@ interface SceneState {
   activeAlerts: SWAlert[];
   /** Alert ID → live beam entry (line + midSphere). */
   beamMap: Map<string, BeamEntry>;
-  /** Alert ID → danger sphere entry (large dynamic-radius glow sphere). */
-  sphereMap: Map<string, DangerSphereEntry>;
   /** Alert ID → expanding pulse ring cluster on the ground plane. */
   pulseRingMap: Map<string, PulseRingEntry>;
+  /** Alert ID → floating 3D canvas-sprite label at the conflict midpoint. */
+  labelMap: Map<string, AlertLabelEntry>;
 }
 
 // ── Helper: begin fly-to animation toward an aircraft ────────────────────────
@@ -952,8 +955,8 @@ export default function AirspaceView3D({
       alertedIds:           new Map(),
       activeAlerts:         [],
       beamMap:              new Map(),
-      sphereMap:            new Map(),
       pulseRingMap:         new Map(),
+      labelMap:             new Map(),
     };
     sceneRef.current = st;
 
@@ -1230,67 +1233,63 @@ export default function AirspaceView3D({
         }
       }
 
-      // ── Danger sphere update (Phase 6A / Task #5) ─────────────────────────
-      // Large translucent sphere centred at the conflict midpoint.
-      // Radius = half the live 3-D scene-space distance between the aircraft
-      // so the sphere exactly spans the gap — it shrinks as they converge.
+      // ── 3D alert label sprites (Task #15) ────────────────────────────────
+      // Floating canvas sprites at the 3D midpoint of each active caution/
+      // critical alert.  Position updates every frame; texture only when
+      // the alert message text changes (~every 8 s with a new ADS-B poll).
       {
-        const tSec = nowMs / 1000;
-
-        // Remove spheres whose alerts are no longer active
-        for (const [alertId, entry] of st.sphereMap) {
+        // Remove labels for cleared / dismissed alerts
+        for (const [alertId, entry] of st.labelMap) {
           if (!st.activeAlerts.find(a => a.id === alertId)) {
-            disposeDangerSphere(entry, scene);
-            st.sphereMap.delete(alertId);
+            disposeAlertLabel(entry, scene);
+            st.labelMap.delete(alertId);
           }
         }
 
-        // Derive a stable per-alert phase offset from the alert id string
-        // so multiple simultaneous alerts pulse slightly out of phase.
-        let alertIdx = 0;
         for (const alert of st.activeAlerts) {
-          if (alert.kind !== 'separation' || alert.aircraftIds.length < 2) {
-            alertIdx++;
-            continue;
+          // Advisory alerts have no 3D label (matches old expand behaviour)
+          if (alert.severity === 'advisory') continue;
+          if (alert.aircraftIds.length === 0) continue;
+
+          // Compute 3D midpoint from up to 2 aircraft renderPos
+          let midX = 0, midY = 0, midZ = 0, cnt = 0;
+          for (const id of alert.aircraftIds.slice(0, 2)) {
+            const b = st.acMap.get(id);
+            if (!b) continue;
+            midX += b.renderPos.x;
+            midY += b.renderPos.y;
+            midZ += b.renderPos.z;
+            cnt++;
           }
-          const [idA, idB] = alert.aircraftIds;
-          const bA = st.acMap.get(idA);
-          const bB = st.acMap.get(idB);
-          if (!bA || !bB) { alertIdx++; continue; }
+          if (cnt === 0) continue;
+          midX /= cnt; midY /= cnt; midZ /= cnt;
+          midY += 280; // lift above the aircraft / beam midpoint
 
-          const posA = bA.renderPos;
-          const posB = bB.renderPos;
-
-          // 3-D scene-space separation; radius = half that
-          const sep    = posA.distanceTo(posB);
-          const radius = sep * 0.5;
-
-          let entry = st.sphereMap.get(alert.id);
+          let entry = st.labelMap.get(alert.id);
           if (!entry) {
-            // Phase offset staggers the pulse: π/3 apart per simultaneous alert
-            const phase = alertIdx * (Math.PI / 3);
-            entry = createDangerSphere(alert.severity, scene, phase);
-            st.sphereMap.set(alert.id, entry);
+            const tex    = makeAlertLabelTexture(alert.severity, alert.aircraft.join(' & '), alert.message);
+            const mat    = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+            const sprite = new THREE.Sprite(mat);
+            sprite.scale.set(900, 270, 1);
+            sprite.frustumCulled = false;
+            scene.add(sprite);
+            entry = { sprite, mat, lastMessage: alert.message };
+            st.labelMap.set(alert.id, entry);
           }
 
-          // Update position to midpoint
-          entry.mesh.position.set(
-            (posA.x + posB.x) * 0.5,
-            (posA.y + posB.y) * 0.5,
-            (posA.z + posB.z) * 0.5,
-          );
-          // Scale handles sphere size — geometry stays a unit sphere
-          entry.mesh.scale.setScalar(radius);
+          // Update position every frame (cheap — just sets a Vector3)
+          entry.sprite.position.set(midX, midY, midZ);
 
-          // Pulsed opacity that also brightens as the sphere shrinks (aircraft converge).
-          // intensity = 0 at the alert threshold radius, 1 at zero separation.
-          const sp        = DANGER_SPHERE_PARAMS[entry.severity];
-          const threshold = SPHERE_THRESHOLD_RADIUS[entry.severity];
-          const intensity = Math.max(0, 1 - radius / threshold);
-          const pulse     = sp.opacityBase + sp.opacityAmp * Math.sin(tSec * sp.pulseSpeed + entry.phase);
-          entry.mat.opacity = pulse + intensity * (sp.opacityMax - sp.opacityBase);
-
-          alertIdx++;
+          // Regenerate canvas texture only when message text changes
+          if (alert.message !== entry.lastMessage) {
+            entry.lastMessage = alert.message;
+            const newTex = makeAlertLabelTexture(
+              alert.severity, alert.aircraft.join(' & '), alert.message,
+            );
+            entry.mat.map?.dispose();
+            entry.mat.map = newTex;
+            entry.mat.needsUpdate = true;
+          }
         }
       }
 
@@ -1633,10 +1632,10 @@ export default function AirspaceView3D({
       st.coneToId.clear();
       st.beamMap.forEach(entry => disposeBeamEntry(entry, scene));
       st.beamMap.clear();
-      st.sphereMap.forEach(entry => disposeDangerSphere(entry, scene));
-      st.sphereMap.clear();
       st.pulseRingMap.forEach(entry => disposePulseRingEntry(entry, scene));
       st.pulseRingMap.clear();
+      st.labelMap.forEach(entry => disposeAlertLabel(entry, scene));
+      st.labelMap.clear();
       renderer.dispose();
       if (renderer.domElement.parentNode === el) el.removeChild(renderer.domElement);
       sceneRef.current = null;

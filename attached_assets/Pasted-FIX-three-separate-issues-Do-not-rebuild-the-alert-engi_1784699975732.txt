@@ -1,0 +1,43 @@
+FIX three separate issues. Do not rebuild the alert engine.
+
+FIX 1 — Restrict alerting to the airport's terminal area:
+The alert detectors currently run on ALL aircraft in the 50nm feed, which
+includes other airports (Archerfield ~15km SW, Caboolture ~65km N) full of GA/
+training/glider traffic that are NOT YBBN conflicts. Add a TERMINAL_AREA filter:
+  - Only run separation, predicted-conflict, and runway-occupancy detectors on
+    aircraft within TERMINAL_RADIUS_NM (default 15 nm) of YBBN centre AND below
+    a relevant altitude ceiling (default FL150 / 15000 ft) — i.e. actually in
+    Brisbane's approach/departure environment.
+  - Aircraft outside this area still RENDER on the display (keep the wide view)
+    but do NOT generate conflict alerts. Make TERMINAL_RADIUS_NM a named
+    constant so it's tunable.
+  - State the radius/ceiling used.
+
+FIX 2 — Strengthen the airborne test (prevent ground/parked GA alerts):
+The airborne filter is altitude-only (alt > 50) with an alt_geom fallback that
+lets taxiing aircraft through. Fix:
+  - Require alt_baro to be a genuine NUMERIC airborne value: if alt_baro ===
+    "ground", the aircraft is on the ground — never treat as airborne
+    regardless of alt_geom. Do NOT use alt_geom to promote a "ground" aircraft
+    to airborne.
+  - Add a groundspeed sanity floor: an "airborne" aircraft for conflict
+    purposes should have gs above a minimum (default 40 kt) — parked/idling
+    aircraft are excluded.
+  - Keep runway-occupancy as the ONE detector that intentionally includes
+    ground aircraft (that's its job), but scoped to YBBN's runways only via
+    Fix 1's terminal-area filter.
+
+FIX 3 — Alert count reflects ACTIVE alerts only:
+The panel/count currently includes cleared (resolved) alerts from the append-
+only log. Fix:
+  - The Alerts tab and the top "ALERTS n" badge count only ACTIVE alerts
+    (not cleared, not acknowledged).
+  - Cleared alerts remain in the LOG tab only, not the active count.
+
+Report RAW:
+  a. Re-run all detectors on a fresh live snapshot AFTER the fixes. How many
+     active alerts now, and do any involve Archerfield/Caboolture aircraft or
+     ground/parked GA? (Should be near zero unless real YBBN traffic conflicts.)
+  b. Confirm alt_baro="ground" aircraft can never enter the airborne detectors.
+  c. Confirm the active-alert count excludes cleared alerts.
+  d. Confirm aircraft outside 15nm still render but don't generate alerts.

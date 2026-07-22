@@ -470,8 +470,6 @@ export default function App() {
         {/* ── Phase 6A alert shell — left edge ── */}
         <AlertShell
           activeAlerts={activeAlerts}
-          allAlerts={swAlerts}
-          onDismiss={handleDismissAlert}
         />
         {/* ── Brisbane Airport title — 3D airspace only ── */}
         {view === 'airspace' && (
