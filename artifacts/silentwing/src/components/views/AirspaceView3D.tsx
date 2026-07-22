@@ -589,6 +589,75 @@ function buildWindIndicator(windDir: number, windSpeed: number): THREE.Group {
   return g;
 }
 
+// ── Takeoff indicator (vertical line + "TAKE OFF" sign) ──────────────────────
+// One indicator per aircraft in the 'takeoff' phase.  The line rises from the
+// aircraft's render position; the sprite sign at the top always faces the
+// camera because THREE.Sprite is inherently billboard-rendered.
+
+const TAKEOFF_LINE_HEIGHT = 500; // scene units (~3 300 ft) above the aircraft
+
+function makeTakeoffSign(): THREE.Sprite {
+  const W = 320, H = 80;
+  const cv  = document.createElement('canvas');
+  cv.width  = W; cv.height = H;
+  const ctx = cv.getContext('2d')!;
+  ctx.clearRect(0, 0, W, H);
+  // Dark pill background
+  ctx.fillStyle = 'rgba(10,8,30,0.88)';
+  ctx.beginPath();
+  (ctx as CanvasRenderingContext2D & { roundRect: (...a: unknown[]) => void })
+    .roundRect(4, 4, W - 8, H - 8, 8);
+  ctx.fill();
+  // Accent border in takeoff-phase indigo
+  ctx.strokeStyle = '#818CF8';
+  ctx.lineWidth   = 2.5;
+  ctx.stroke();
+  // Label text
+  ctx.font         = 'bold 26px "JetBrains Mono","Courier New",monospace';
+  ctx.fillStyle    = '#a5b4fc';
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('TAKE OFF', W / 2, H / 2);
+  const tex = new THREE.CanvasTexture(cv);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+  const sp  = new THREE.Sprite(mat);
+  sp.scale.set(480, 120, 1);
+  return sp;
+}
+
+interface TakeoffIndicatorEntry {
+  line:    THREE.Line;
+  sign:    THREE.Sprite;
+  lineMat: THREE.LineBasicMaterial;
+}
+
+function createTakeoffIndicator(scene: THREE.Scene): TakeoffIndicatorEntry {
+  const posArr = new Float32Array(6); // bottom xyz + top xyz (updated each frame)
+  const lineGeo = new THREE.BufferGeometry();
+  lineGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+  const lineMat = new THREE.LineBasicMaterial({
+    color: 0x818CF8, transparent: true, opacity: 0.65, depthWrite: false,
+  });
+  const line = new THREE.Line(lineGeo, lineMat);
+  line.frustumCulled = false;
+  scene.add(line);
+
+  const sign = makeTakeoffSign();
+  sign.frustumCulled = false;
+  scene.add(sign);
+
+  return { line, sign, lineMat };
+}
+
+function disposeTakeoffIndicator(entry: TakeoffIndicatorEntry, scene: THREE.Scene): void {
+  scene.remove(entry.line, entry.sign);
+  entry.line.geometry.dispose();
+  entry.lineMat.dispose();
+  const sm = entry.sign.material as THREE.SpriteMaterial;
+  sm.map?.dispose();
+  sm.dispose();
+}
+
 // ── Per-aircraft Three.js bundle ──────────────────────────────────────────────
 interface AcBundle {
   cone:     THREE.Mesh;
@@ -697,6 +766,8 @@ interface SceneState {
   pulseRingMap: Map<string, PulseRingEntry>;
   /** Alert ID → floating 3D canvas-sprite label at the conflict midpoint. */
   labelMap: Map<string, AlertLabelEntry>;
+  /** Aircraft ID → takeoff vertical-line + sign indicator. */
+  takeoffMap: Map<string, TakeoffIndicatorEntry>;
 
   // ── Alert focus interrupt (Task #16) ───────────────────────────────────
   /** The active critical alert ID being focused on, or null. Synced from prop. */
@@ -1046,6 +1117,7 @@ export default function AirspaceView3D({
       alertFocusId:         null,
       alertFocusDone:       null,
       alertInterrupt:       null,
+      takeoffMap:           new Map(),
     };
     sceneRef.current = st;
 
@@ -1532,6 +1604,25 @@ export default function AirspaceView3D({
         }
       }
 
+      // ── Takeoff indicator update ──────────────────────────────────────────
+      // Runs every frame; simply repositions the line endpoints and the sign
+      // to follow the aircraft's interpolated renderPos.
+      {
+        for (const [acId, entry] of st.takeoffMap) {
+          const b = st.acMap.get(acId);
+          if (!b) continue;
+          const rx = b.renderPos.x, ry = b.renderPos.y, rz = b.renderPos.z;
+          const top = ry + TAKEOFF_LINE_HEIGHT;
+          const posAttr = entry.line.geometry.attributes.position as THREE.BufferAttribute;
+          const arr = posAttr.array as Float32Array;
+          arr[0] = rx; arr[1] = ry; arr[2] = rz;
+          arr[3] = rx; arr[4] = top; arr[5] = rz;
+          posAttr.needsUpdate = true;
+          entry.line.geometry.computeBoundingSphere();
+          entry.sign.position.set(rx, top + 90, rz);
+        }
+      }
+
       renderer.render(scene, camera);
     };
     tick();
@@ -1818,6 +1909,8 @@ export default function AirspaceView3D({
       st.pulseRingMap.clear();
       st.labelMap.forEach(entry => disposeAlertLabel(entry, scene));
       st.labelMap.clear();
+      st.takeoffMap.forEach(entry => disposeTakeoffIndicator(entry, scene));
+      st.takeoffMap.clear();
       renderer.dispose();
       if (renderer.domElement.parentNode === el) el.removeChild(renderer.domElement);
       sceneRef.current = null;
@@ -2089,6 +2182,23 @@ export default function AirspaceView3D({
       }
     }
 
+    // ── Sync takeoff indicators ───────────────────────────────────────────────
+    // Create an indicator the moment an aircraft enters 'takeoff'; dispose it
+    // the moment it leaves that phase (or despawns — handled below).
+    for (const ac of aircraft) {
+      if (ac.phase === 'takeoff') {
+        if (!st.takeoffMap.has(ac.id)) {
+          st.takeoffMap.set(ac.id, createTakeoffIndicator(scene));
+        }
+      } else {
+        const entry = st.takeoffMap.get(ac.id);
+        if (entry) {
+          disposeTakeoffIndicator(entry, scene);
+          st.takeoffMap.delete(ac.id);
+        }
+      }
+    }
+
     // Remove aircraft that left the snapshot
     for (const [id, b] of acMap) {
       if (!seen.has(id)) {
@@ -2096,6 +2206,9 @@ export default function AirspaceView3D({
         coneToId.delete(b.cone);
         disposeBundle(b);
         acMap.delete(id);
+        // Clean up any takeoff indicator for the despawned aircraft
+        const ti = st.takeoffMap.get(id);
+        if (ti) { disposeTakeoffIndicator(ti, scene); st.takeoffMap.delete(id); }
       }
     }
   }, [aircraft]);
