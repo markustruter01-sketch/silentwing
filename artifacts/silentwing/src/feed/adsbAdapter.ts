@@ -285,34 +285,37 @@ export class AdsbAdapter implements DataFeedAdapter {
   // ── Private ────────────────────────────────────────────────────────────────
 
   private _start(): void {
-    console.log(`[ADSB:DIAG] _start() visibilityState="${document.visibilityState}" hidden=${document.hidden}`);
-    // Page Visibility: pause when tab is hidden, resume (and immediately poll)
-    // when it becomes visible again.  Protects the RapidAPI request quota.
+    // Page Visibility: pause timer when tab is genuinely backgrounded, resume
+    // (and immediately catch up) when it becomes visible again.
+    // IMPORTANT: do NOT gate the initial poll/timer on visibilityState.
+    // In embedded iframes (e.g. the Replit preview pane) the document starts as
+    // "hidden" even while the user is actively viewing it, because the iframe
+    // hasn't received a visibility transition yet.  Gating startup on
+    // visibilityState === 'visible' would suppress the first poll forever.
     this.visHandler = () => {
-      console.log(`[ADSB:DIAG] visibilitychange → state="${document.visibilityState}" hidden=${document.hidden}`);
       if (document.visibilityState === 'visible') {
+        // Returning from genuine background — fire an immediate catchup poll
+        // and (re)start the interval if it was cleared.
         this._poll();
         if (!this.timer) this._startTimer();
       } else {
+        // Genuinely backgrounded — pause the interval to save quota.
         if (this.timer) { clearInterval(this.timer); this.timer = null; }
       }
     };
     document.addEventListener('visibilitychange', this.visHandler);
 
-    if (document.visibilityState === 'visible') {
-      console.log('[ADSB:DIAG] tab visible at start — firing immediate poll + timer');
-      this._poll();
-      this._startTimer();
-    } else {
-      console.log(`[ADSB:DIAG] tab NOT visible at start (state="${document.visibilityState}") — poll SUPPRESSED, waiting for visibilitychange`);
-    }
+    // Always start unconditionally so embedded iframes are never stuck.
+    this._poll();
+    this._startTimer();
   }
 
   private _startTimer(): void {
     this.timer = setInterval(() => {
-      console.log(`[ADSB:DIAG] timer tick — visibilityState="${document.visibilityState}" hidden=${document.hidden}`);
-      if (document.visibilityState === 'visible') this._poll();
-      else console.log('[ADSB:DIAG] timer tick SKIPPED (tab hidden)');
+      // Skip individual ticks if the tab is genuinely hidden (belt-and-suspenders:
+      // the visibilitychange handler already clears the timer on hide, but a
+      // race between the event and the next tick is possible).
+      if (!document.hidden) this._poll();
     }, POLL_INTERVAL_MS);
   }
 
