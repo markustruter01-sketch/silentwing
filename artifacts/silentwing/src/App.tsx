@@ -529,6 +529,48 @@ export default function App() {
           </span>
           Director
         </button>
+
+        {/* ── DEV-ONLY scaffold buttons — kept in the filter bar so they don't
+            overlap any canvas overlays (color key, ControlsHUD, key hints).
+            Hidden in production builds via import.meta.env.DEV. ── */}
+        {import.meta.env.DEV && (
+          <>
+            <span className="ml-3 w-px self-stretch bg-slate-800/80" aria-hidden />
+            <button
+              onClick={() => setInjectConflict(v => !v)}
+              title="DEV: Inject two converging aircraft to trigger a CRITICAL separation alert"
+              className={[
+                'flex items-center gap-1 px-2 py-[2px] text-[7px] font-mono tracking-widest uppercase rounded border',
+                'transition-colors select-none cursor-pointer',
+                injectConflict
+                  ? 'border-red-600/80 text-red-300 bg-red-950/50'
+                  : 'border-slate-700/40 text-slate-700 hover:text-slate-500',
+              ].join(' ')}
+            >
+              {injectConflict ? '■' : '▶'} conflict
+            </button>
+            <button
+              onClick={() => {
+                setSimulateFeedLoss(v => {
+                  const next = !v;
+                  simulateFeedLossRef.current = next;
+                  if (next) feedLossStartRef.current = Date.now();
+                  return next;
+                });
+              }}
+              title="DEV: Simulate feed loss to exercise the lagging / stalled failsafe"
+              className={[
+                'flex items-center gap-1 px-2 py-[2px] text-[7px] font-mono tracking-widest uppercase rounded border',
+                'transition-colors select-none cursor-pointer',
+                simulateFeedLoss
+                  ? 'border-amber-500/80 text-amber-300 bg-amber-950/50'
+                  : 'border-slate-700/40 text-slate-700 hover:text-slate-500',
+              ].join(' ')}
+            >
+              {simulateFeedLoss ? '■' : '▶'} feed loss
+            </button>
+          </>
+        )}
       </div>
 
       {/* ── Main view area ── */}
@@ -680,53 +722,6 @@ export default function App() {
 
         {/* ── Controls HUD — bottom-centre on both views ── */}
         <ControlsHUD activeView={view} />
-
-        {/* ── DEV-ONLY: inject test conflict ───────────────────────────────
-            Dev scaffold — NOT a production feature. Clearly labelled.
-            Spawns two sim aircraft on a converging course to demo the alert
-            system on demand. Auto-clears after 30 s. */}
-        {import.meta.env.DEV && (
-          <button
-            onClick={() => setInjectConflict(v => !v)}
-            title="DEV SCAFFOLD: Inject two converging aircraft to trigger a CRITICAL separation alert"
-            className={[
-              'fixed bottom-2 left-10 z-[300] text-[7px] font-mono tracking-widest uppercase',
-              'px-2 py-1 rounded border cursor-pointer transition-colors',
-              injectConflict
-                ? 'border-red-600/80 text-red-300 bg-red-950/60 hover:bg-red-950/80'
-                : 'border-slate-700/50 text-slate-600 bg-slate-950/60 hover:text-slate-400',
-            ].join(' ')}
-          >
-            [DEV] {injectConflict ? '■ Clear conflict' : '▶ Inject conflict'}
-          </button>
-        )}
-
-        {/* ── DEV-ONLY: simulate feed loss ─────────────────────────────────
-            Pauses the effective feed health so lagging → stalled states can
-            be verified on demand without waiting for a real network failure.
-            Toggling OFF immediately restores the true adapter health state.  */}
-        {import.meta.env.DEV && (
-          <button
-            onClick={() => {
-              setSimulateFeedLoss(v => {
-                const next = !v;
-                simulateFeedLossRef.current = next;
-                if (next) feedLossStartRef.current = Date.now();
-                return next;
-              });
-            }}
-            title="DEV SCAFFOLD: Simulate feed loss to demonstrate the lagging / stalled failsafe"
-            className={[
-              'fixed bottom-2 left-52 z-[300] text-[7px] font-mono tracking-widest uppercase',
-              'px-2 py-1 rounded border cursor-pointer transition-colors',
-              simulateFeedLoss
-                ? 'border-amber-500/80 text-amber-300 bg-amber-950/60 hover:bg-amber-950/80'
-                : 'border-slate-700/50 text-slate-600 bg-slate-950/60 hover:text-slate-400',
-            ].join(' ')}
-          >
-            [DEV] {simulateFeedLoss ? '■ Resume feed' : '▶ Simulate feed loss'}
-          </button>
-        )}
 
         {/* ── Director intro hint ──────────────────────────────────────────── */}
         {showDirectorHint && (
