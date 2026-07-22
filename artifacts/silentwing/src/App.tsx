@@ -4,6 +4,7 @@ import StatusStrip from '@/components/layout/StatusStrip';
 import AirfieldView2D from '@/components/views/AirfieldView2D';
 import AirspaceView3D, { type CameraMode } from '@/components/views/AirspaceView3D';
 import AircraftDetailPanel from '@/components/panels/AircraftDetailPanel';
+import ControlsHUD from '@/components/ui/ControlsHUD';
 import { getSimAdapter } from '@/sim/engine';
 import { AdsbAdapter } from '@/feed/adsbAdapter';
 import type { DataFeedAdapter, WorldSnapshot } from '@/types';
@@ -197,6 +198,9 @@ export default function App() {
             onToggleFollow={handleToggleFollow}
           />
         )}
+
+        {/* ── Controls HUD — bottom-centre on both views ── */}
+        <ControlsHUD activeView={view} />
       </main>
     </div>
   );
