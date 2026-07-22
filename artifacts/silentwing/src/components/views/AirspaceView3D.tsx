@@ -106,98 +106,6 @@ const PHASE_HEX: Record<string, number> = {
 const HEX_DEFAULT = 0x94A3B8;
 function phaseHex(phase: string) { return PHASE_HEX[phase] ?? HEX_DEFAULT; }
 
-// ── Deterministic RNG seeded on aircraft ID (for stable fake manifest data) ───
-function seededRng(id: string): () => number {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (Math.imul(31, h) + id.charCodeAt(i)) | 0;
-  return () => {
-    h ^= h << 13; h ^= h >> 17; h ^= h << 5;
-    return (h >>> 0) / 0xFFFFFFFF;
-  };
-}
-
-// ── Director floating info panel sprite ─────────────────────────────────────────
-function makeDirectorInfoPanel(ac: Aircraft): THREE.Sprite {
-  const rng = seededRng(ac.id);
-  const pax       = Math.round(rng() * 150 + 50);      // 50–200
-  const crew      = Math.round(rng() * 5  + 2);        // 2–7
-  const hasDG     = rng() < 0.15;
-  const hasAnimals= rng() < 0.10;
-
-  const W = 420, H = 310;
-  const cv = document.createElement('canvas');
-  cv.width = W; cv.height = H;
-  const ctx = cv.getContext('2d')!;
-
-  // Background
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = 'rgba(7, 10, 22, 0.92)';
-  ctx.fillRect(0, 0, W, H);
-
-  // Purple left accent bar
-  ctx.fillStyle = '#a855f7';
-  ctx.fillRect(0, 0, 3, H);
-
-  // Subtle purple border (rest of edges)
-  ctx.strokeStyle = 'rgba(168, 85, 247, 0.35)';
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(1, 1, W - 2, H - 2);
-
-  // Header — callsign
-  ctx.font = 'bold 26px "Courier New", monospace';
-  ctx.fillStyle = '#c084fc';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillText(ac.callsign, 18, 38);
-
-  // Aircraft type
-  ctx.font = '14px "Courier New", monospace';
-  ctx.fillStyle = '#64748b';
-  ctx.fillText(ac.type || '—', 18, 56);
-
-  // Divider
-  ctx.strokeStyle = 'rgba(168, 85, 247, 0.20)';
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(18, 66); ctx.lineTo(W - 18, 66); ctx.stroke();
-
-  // Route
-  const orig = ac.origin      ?? '—';
-  const dest = ac.destination ?? 'YBBN';
-  ctx.font = '15px "Courier New", monospace';
-  ctx.fillStyle = '#7dd3fc';
-  ctx.fillText(`${orig}  ›  ${dest}`, 18, 88);
-
-  // Data rows
-  const rows: Array<[string, string, string]> = [
-    ['PAX',   `${pax} passengers`,    '#e2e8f0'],
-    ['CREW',  `${crew} crew`,          '#e2e8f0'],
-    ['DG',    hasDG     ? '⚠  Declared dangerous goods' : 'None declared',
-              hasDG ? '#fbbf24' : '#64748b'],
-    ['ANIM',  hasAnimals ? '🐾  Live animals on board'   : 'None declared',
-              hasAnimals ? '#86efac' : '#64748b'],
-    ['PHASE', ac.phase.replace(/-/g, ' ').toUpperCase(), '#94a3b8'],
-  ];
-
-  let y = 116;
-  for (const [key, val, col] of rows) {
-    ctx.font = 'bold 11px "Courier New", monospace';
-    ctx.fillStyle = '#475569';
-    ctx.fillText(key, 18, y);
-    ctx.font = '13px "Courier New", monospace';
-    ctx.fillStyle = col;
-    ctx.fillText(val, 72, y);
-    y += 36;
-  }
-
-  const tex = new THREE.CanvasTexture(cv);
-  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false });
-  const sp  = new THREE.Sprite(mat);
-  // Scale calibrated for director camera distance (~10 000 scene units away)
-  sp.scale.set(3_200, 2_480, 1);
-  sp.renderOrder = 10;
-  return sp;
-}
-
 // ── Callsign label sprite ──────────────────────────────────────────────────────
 function makeLabel(callsign: string, hex: number): THREE.Sprite {
   const W = 320, H = 80;
@@ -489,8 +397,6 @@ interface AcBundle {
   corrStartMs:     number;
   /** Purple selection halo ring shown when director focuses this aircraft. */
   halo:            THREE.Mesh;
-  /** Floating director info panel sprite; null when not director-selected. */
-  infoPanel:       THREE.Sprite | null;
 }
 
 function disposeBundle(b: AcBundle): void {
@@ -501,10 +407,6 @@ function disposeBundle(b: AcBundle): void {
   sm.map?.dispose(); sm.dispose();
   // HMR guard — bundles created before this field existed won't have halo
   if (b.halo) { b.halo.geometry.dispose(); (b.halo.material as THREE.Material).dispose(); }
-  if (b.infoPanel) {
-    const pm = b.infoPanel.material as THREE.SpriteMaterial;
-    pm.map?.dispose(); pm.dispose();
-  }
 }
 
 // Shared stem material — one instance, never disposed here
@@ -949,14 +851,6 @@ export default function AirspaceView3D({
           b.halo.rotation.z += 0.008; // slow spin in the horizontal plane
         }
 
-        // Director info panel: float 2 200 scene units to the left of the aircraft
-        if (b.infoPanel) {
-          b.infoPanel.position.set(
-            b.renderPos.x - 3_500,
-            b.renderPos.y + 400,
-            b.renderPos.z,
-          );
-        }
         b.stem.geometry.setFromPoints([
           new THREE.Vector3(b.renderPos.x, 0,             b.renderPos.z),
           new THREE.Vector3(b.renderPos.x, b.renderPos.y, b.renderPos.z),
@@ -1411,7 +1305,7 @@ export default function AirspaceView3D({
             })()
           : pos.clone();
         acMap.set(ac.id, {
-          cone, stem, trail, label, trailBuf, halo, infoPanel: null,
+          cone, stem, trail, label, trailBuf, halo,
           renderPos:       spawnPos.clone(),
           lastKnownPos:    spawnPos.clone(),
           lastKnownTimeMs: nowMs,
@@ -1498,19 +1392,6 @@ export default function AirspaceView3D({
         // ── Purple halo ring — visible only when director-selected ────────────
         if (b.halo) b.halo.visible = isSelected;
 
-        // ── Director info panel — create when selected, destroy when not ──────
-        if (b.infoPanel !== undefined) { // HMR guard
-          if (isSelected && st.directorMode && !b.infoPanel) {
-            b.infoPanel = makeDirectorInfoPanel(ac);
-            scene.add(b.infoPanel);
-          } else if ((!isSelected || !st.directorMode) && b.infoPanel) {
-            scene.remove(b.infoPanel);
-            const pm = b.infoPanel.material as THREE.SpriteMaterial;
-            pm.map?.dispose(); pm.dispose();
-            b.infoPanel = null;
-          }
-        }
-
         // ── FIX A: trail sanity cap ────────────────────────────────────────
         // Drop a trail point that is physically further from the last point
         // than the aircraft could have travelled in one poll interval.
@@ -1538,7 +1419,6 @@ export default function AirspaceView3D({
     for (const [id, b] of acMap) {
       if (!seen.has(id)) {
         scene.remove(b.cone, b.stem, b.trail, b.label, b.halo);
-        if (b.infoPanel) scene.remove(b.infoPanel);
         coneToId.delete(b.cone);
         disposeBundle(b);
         acMap.delete(id);

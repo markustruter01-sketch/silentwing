@@ -21,7 +21,17 @@ function sectorLoad(count: number) {
 
 // ── Director Mode ─────────────────────────────────────────────────────────────
 
-const DIRECTOR_DWELL_MS = 10_000; // ms to watch each aircraft before switching
+const DIRECTOR_DWELL_MS = 10_000; // ms to watch each subject before switching
+
+/** Deterministic RNG seeded on aircraft ID — gives stable fake manifest data. */
+function seededRng(id: string): () => number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (Math.imul(31, h) + id.charCodeAt(i)) | 0;
+  return () => {
+    h ^= h << 13; h ^= h >> 17; h ^= h << 5;
+    return (h >>> 0) / 0xFFFFFFFF;
+  };
+}
 
 /** Priority score for each flight phase — higher = more cinematically interesting. */
 const DIRECTOR_PHASE_SCORE: Record<FlightPhase, number> = {
@@ -144,6 +154,8 @@ export default function App() {
   const phaseHistRef       = useRef<Map<string, FlightPhase>>(new Map());
   /** Timestamp of the last director camera switch (ms). */
   const lastSwitchRef      = useRef<number>(0);
+  /** Alternates 'aircraft' → 'airport' → 'aircraft' … so every other cut is the airport overview. */
+  const directorPhaseRef   = useRef<'aircraft' | 'airport'>('aircraft');
   /** Stable ref to the current selectedAcId — avoids stale closures in the interval. */
   const selectedAcIdRef    = useRef<string | null>(null);
   /** Stable ref to the latest visible aircraft list — avoids re-starting interval on every poll. */
@@ -198,43 +210,46 @@ export default function App() {
     const tick = () => {
       const now = Date.now();
       if (now - lastSwitchRef.current < DIRECTOR_DWELL_MS) return;
+      lastSwitchRef.current = now;
+
+      // ── Airport overview cut (every other switch) ─────────────────────────
+      if (directorPhaseRef.current === 'airport') {
+        directorPhaseRef.current = 'aircraft';
+        setCameraMode('orbit');
+        console.log('[DIRECTOR] → airport overview');
+        return;
+      }
+
+      // ── Aircraft cut ──────────────────────────────────────────────────────
+      directorPhaseRef.current = 'airport'; // next cut will be the airport
 
       const ph     = phaseHistRef.current;
       const list   = visibleAircraftRef.current;
-      // 10 km radius: short final (~3 nm), runway, taxiways, and immediate
-      // departure corridor.  Anything further out is not "at the airfield".
-      // Squared comparison avoids a sqrt per aircraft per tick.
       const DIRECTOR_RADIUS_M2 = 10_000 ** 2;
 
       const scored = list
         .filter(ac =>
-          ac.phase !== 'at-gate' &&                                   // boring when stationary
-          ac.position.alt < 3_000 &&                                  // ignore deep-flight above FL030
-          ac.position.x ** 2 + ac.position.y ** 2 < DIRECTOR_RADIUS_M2, // within 80 km of airport
+          ac.phase !== 'at-gate' &&
+          ac.position.alt < 3_000 &&
+          ac.position.x ** 2 + ac.position.y ** 2 < DIRECTOR_RADIUS_M2,
         )
         .map(ac => ({ ac, score: directorScore(ac, ph.get(ac.id)) }))
         .sort((a, b) => b.score - a.score);
 
       if (scored.length === 0) return;
 
-      // Prefer switching to a different aircraft; stay if nothing better exists
       const current = selectedAcIdRef.current;
       let pick = scored[0].ac;
       if (pick.id === current && scored.length > 1 && scored[1].score >= 30) {
         pick = scored[1].ac;
       }
 
-      if (pick.id !== current) {
-        setSelectedAcId(pick.id);
-        // Director always stays in follow — inspect mode snaps the camera
-        // close and breaks the continuous wide-shot glide.
-        setCameraMode('follow');
-        lastSwitchRef.current = now;
-        console.log(
-          `[DIRECTOR] → ${pick.callsign} (${pick.phase})` +
-          ` score=${scored.find(s => s.ac.id === pick.id)?.score ?? '?'}`,
-        );
-      }
+      setSelectedAcId(pick.id);
+      setCameraMode('follow');
+      console.log(
+        `[DIRECTOR] → ${pick.callsign} (${pick.phase})` +
+        ` score=${scored.find(s => s.ac.id === pick.id)?.score ?? '?'}`,
+      );
     };
 
     // Fire immediately so the user doesn't stare at an empty screen
@@ -414,6 +429,59 @@ export default function App() {
             }}
           />
         )}
+
+        {/* ── Director flight info panel — bottom-right when following an aircraft ── */}
+        {directorMode && cameraMode === 'follow' && selectedAc && (() => {
+          const rng        = seededRng(selectedAc.id);
+          const pax        = Math.round(rng() * 150 + 50);
+          const crew       = Math.round(rng() * 5  + 2);
+          const hasDG      = rng() < 0.15;
+          const hasAnimals = rng() < 0.10;
+          const orig       = selectedAc.origin      ?? '—';
+          const dest       = selectedAc.destination ?? 'YBBN';
+          return (
+            <div className="fixed bottom-24 right-4 z-[150] w-64 pointer-events-none select-none
+                            rounded-lg overflow-hidden shadow-2xl shadow-black/60"
+                 style={{ background: 'rgba(7,10,22,0.93)', border: '1px solid rgba(168,85,247,0.35)' }}>
+              {/* Purple accent bar */}
+              <div className="h-full w-[3px] absolute left-0 top-0 bottom-0 bg-purple-500" />
+              <div className="pl-4 pr-3 py-3 flex flex-col gap-2">
+                {/* Header */}
+                <div className="flex items-baseline gap-2">
+                  <span className="font-mono font-bold text-purple-300 text-base tracking-wider">
+                    {selectedAc.callsign}
+                  </span>
+                  <span className="font-mono text-slate-500 text-xs">{selectedAc.type || '—'}</span>
+                </div>
+                {/* Route */}
+                <div className="font-mono text-sky-300 text-xs tracking-wide">
+                  {orig} <span className="text-slate-500 mx-1">›</span> {dest}
+                </div>
+                {/* Divider */}
+                <div className="h-px bg-purple-900/50" />
+                {/* Data rows */}
+                <div className="grid grid-cols-[48px_1fr] gap-y-1.5 text-xs font-mono">
+                  <span className="text-slate-600 uppercase text-[10px] tracking-widest pt-px">PAX</span>
+                  <span className="text-slate-200">{pax} passengers</span>
+                  <span className="text-slate-600 uppercase text-[10px] tracking-widest pt-px">CREW</span>
+                  <span className="text-slate-200">{crew} crew</span>
+                  <span className="text-slate-600 uppercase text-[10px] tracking-widest pt-px">DG</span>
+                  <span className={hasDG ? 'text-amber-400' : 'text-slate-500'}>
+                    {hasDG ? '⚠ Declared dangerous goods' : 'None declared'}
+                  </span>
+                  <span className="text-slate-600 uppercase text-[10px] tracking-widest pt-px">ANIM</span>
+                  <span className={hasAnimals ? 'text-green-300' : 'text-slate-500'}>
+                    {hasAnimals ? '🐾 Live animals on board' : 'None declared'}
+                  </span>
+                  <span className="text-slate-600 uppercase text-[10px] tracking-widest pt-px">PHASE</span>
+                  <span className="text-slate-400 uppercase tracking-wide">
+                    {selectedAc.phase.replace(/-/g, ' ')}
+                  </span>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* ── Aircraft detail panel — shared overlay for both views ── */}
         {selectedAc && (
