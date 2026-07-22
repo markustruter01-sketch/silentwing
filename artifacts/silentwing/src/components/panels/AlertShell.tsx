@@ -315,7 +315,7 @@ export default function AlertShell({ activeAlerts, onAlertFocus }: AlertShellPro
                     </div>
 
                     {/* Bottom row: alert message */}
-                    <div className="font-mono text-[8px] text-slate-500 mt-0.5 leading-tight truncate">
+                    <div className="font-mono text-[8px] text-slate-500 mt-0.5 leading-tight break-words whitespace-normal line-clamp-3">
                       {alert.message}
                     </div>
 

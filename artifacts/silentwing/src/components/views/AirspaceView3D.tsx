@@ -324,7 +324,42 @@ function makeAlertLabelTexture(
   callsigns: string,
   message:   string,
 ): THREE.CanvasTexture {
-  const W = 520, H = 156;
+  // --- measure phase (size-agnostic canvas) ---
+  const measureCv  = document.createElement('canvas');
+  measureCv.width  = 1; measureCv.height = 1;
+  const mCtx = measureCv.getContext('2d')!;
+
+  mCtx.font = 'bold 38px "Courier New",monospace';
+  const callsignW = mCtx.measureText(callsigns).width;
+
+  const PADDING = 24;
+  const W = Math.max(520, Math.ceil(callsignW) + PADDING);
+
+  // Word-wrap the message at the same width
+  mCtx.font = '22px "Courier New",monospace';
+  const maxLineW = W - PADDING;
+  const words = message.split(' ');
+  const msgLines: string[] = [];
+  let current = '';
+  for (const word of words) {
+    const test = current ? current + ' ' + word : word;
+    if (mCtx.measureText(test).width > maxLineW && current) {
+      msgLines.push(current);
+      current = word;
+    } else {
+      current = test;
+    }
+  }
+  if (current) msgLines.push(current);
+
+  // Layout constants
+  // Message text starts at y=90; each line occupies LINE_H px; add BOTTOM_PAD below last line.
+  const LINE_H     = 28;
+  const MSG_Y      = 90;
+  const BOTTOM_PAD = 12;
+  const H = MSG_Y + msgLines.length * LINE_H + BOTTOM_PAD;
+
+  // --- render phase ---
   const cv  = document.createElement('canvas');
   cv.width  = W; cv.height = H;
   const ctx = cv.getContext('2d')!;
@@ -361,11 +396,13 @@ function makeAlertLabelTexture(
   ctx.textBaseline = 'top';
   ctx.fillText(callsigns, 12, 34);
 
-  // Separation message
+  // Separation message (wrapped)
   ctx.font         = '22px "Courier New",monospace';
   ctx.fillStyle    = msgHex;
   ctx.textBaseline = 'top';
-  ctx.fillText(message, 12, 90);
+  msgLines.forEach((line, i) => {
+    ctx.fillText(line, 12, 90 + i * LINE_H);
+  });
 
   return new THREE.CanvasTexture(cv);
 }
