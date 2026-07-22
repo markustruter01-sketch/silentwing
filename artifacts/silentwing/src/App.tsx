@@ -7,6 +7,7 @@ import DirectorFocusPanel  from '@/components/panels/DirectorFocusPanel';
 import AlertShell          from '@/components/panels/AlertShell';
 import ControlsHUD    from '@/components/ui/ControlsHUD';
 import WeatherWidget  from '@/components/panels/WeatherWidget';
+import NotamWidget    from '@/components/panels/NotamWidget';
 import { getSimAdapter } from '@/sim/engine';
 import { AdsbAdapter, HEALTH_LAGGING_MS, HEALTH_STALLED_MS } from '@/feed/adsbAdapter';
 import { AlertEngine }  from '@/alerts/engine';
@@ -40,7 +41,6 @@ const TEST_CONFLICT_AIRCRAFT: Aircraft[] = [
 
 const DIRECTOR_DWELL_MS = 10_000; // ms to watch each subject before switching
 
-
 /** Priority score for each flight phase — higher = more cinematically interesting. */
 const DIRECTOR_PHASE_SCORE: Record<FlightPhase, number> = {
   'landing':           100,
@@ -57,11 +57,29 @@ const DIRECTOR_PHASE_SCORE: Record<FlightPhase, number> = {
 /** Large bonus when an aircraft just changed phase — prioritises transitions. */
 const DIRECTOR_TRANSITION_BONUS = 160;
 
+/** Bonus applied to approach/landing aircraft within 5 NM of the airport (final approach). */
+const DIRECTOR_FINAL_BONUS = 220;
+/** Distance² threshold for "final approach" proximity bonus: 5 NM = 9 260 m */
+const DIRECTOR_FINAL_DIST_M2 = 9_260 ** 2;
+
+/** Bonus applied to takeoff aircraft very close to the airport (on the runway roll). */
+const DIRECTOR_TAKEOFF_ROLL_BONUS = 200;
+/** Distance² threshold for "takeoff roll" proximity bonus: 2 km from origin */
+const DIRECTOR_TAKEOFF_ROLL_DIST_M2 = 2_000 ** 2;
+
 function directorScore(ac: Aircraft, prevPhase: FlightPhase | undefined): number {
   const base       = DIRECTOR_PHASE_SCORE[ac.phase] ?? 0;
   const transition = prevPhase !== undefined && prevPhase !== ac.phase
     ? DIRECTOR_TRANSITION_BONUS : 0;
   return base + transition;
+}
+
+/** Returns true if this aircraft is so high-priority that the airport overview cut should be skipped. */
+function isUrgentDirectorSubject(ac: Aircraft): boolean {
+  const dist2 = ac.position.x ** 2 + ac.position.y ** 2;
+  if ((ac.phase === 'approach' || ac.phase === 'landing') && dist2 < DIRECTOR_FINAL_DIST_M2) return true;
+  if (ac.phase === 'takeoff' && dist2 < DIRECTOR_TAKEOFF_ROLL_DIST_M2) return true;
+  return false;
 }
 
 /** Human-readable phase label shown in the NOW WATCHING strip. */
@@ -331,23 +349,12 @@ export default function App() {
       if (now - lastSwitchRef.current < DIRECTOR_DWELL_MS) return;
       lastSwitchRef.current = now;
 
-      // ── Airport overview cut (every other switch) ─────────────────────────
-      if (directorPhaseRef.current === 'airport') {
-        directorPhaseRef.current = 'aircraft';
-        setCameraMode('orbit');
-        console.log('[DIRECTOR] → airport overview');
-        return;
-      }
-
-      // ── Aircraft cut ──────────────────────────────────────────────────────
-      directorPhaseRef.current = 'airport'; // next cut will be the airport
-
       const ph     = phaseHistRef.current;
       const list   = visibleAircraftRef.current;
       const DIRECTOR_RADIUS_M2 = 10_000 ** 2;
 
-      const DIRECTOR_COOLDOWN_MS = 90_000; // 90 s before an aircraft can be picked again
-      const DIRECTOR_COOLDOWN_PENALTY = 200; // large enough to beat most phase bonuses
+      const DIRECTOR_COOLDOWN_MS = 90_000;
+      const DIRECTOR_COOLDOWN_PENALTY = 200;
       const cooldown = directorCooldownRef.current;
 
       // Prune expired cooldown entries
@@ -363,11 +370,37 @@ export default function App() {
         )
         .map(ac => {
           const base    = directorScore(ac, ph.get(ac.id));
-          // Penalise recently-seen aircraft so the director cycles through the fleet
+          const dist2   = ac.position.x ** 2 + ac.position.y ** 2;
+          // Final approach bonus — heavily weights aircraft on a 5 NM or closer final
+          const finalBonus = (ac.phase === 'approach' || ac.phase === 'landing') &&
+                             dist2 < DIRECTOR_FINAL_DIST_M2
+            ? DIRECTOR_FINAL_BONUS : 0;
+          // Takeoff roll bonus — aircraft close to the runway during takeoff phase
+          const takeoffRollBonus = ac.phase === 'takeoff' &&
+                                   dist2 < DIRECTOR_TAKEOFF_ROLL_DIST_M2
+            ? DIRECTOR_TAKEOFF_ROLL_BONUS : 0;
           const penalty = cooldown.has(ac.id) ? DIRECTOR_COOLDOWN_PENALTY : 0;
-          return { ac, score: base - penalty };
+          return { ac, score: base + finalBonus + takeoffRollBonus - penalty };
         })
         .sort((a, b) => b.score - a.score);
+
+      // ── Airport overview cut (every other switch) ─────────────────────────
+      // Skip the overview if there's an urgent subject (final approach / takeoff roll)
+      const hasUrgent = scored.length > 0 && isUrgentDirectorSubject(scored[0].ac);
+      if (directorPhaseRef.current === 'airport' && !hasUrgent) {
+        directorPhaseRef.current = 'aircraft';
+        setCameraMode('orbit');
+        console.log('[DIRECTOR] → airport overview');
+        return;
+      }
+      // If urgent, skip the overview and fall through to pick the aircraft
+      if (directorPhaseRef.current === 'airport' && hasUrgent) {
+        // Keep the alternating phase so next non-urgent switch goes to overview
+        directorPhaseRef.current = 'aircraft';
+      } else {
+        // ── Aircraft cut ──────────────────────────────────────────────────────
+        directorPhaseRef.current = 'airport'; // next cut will be the airport
+      }
 
       if (scored.length === 0) return;
 
@@ -660,8 +693,11 @@ export default function App() {
           />
         )}
 
-        {/* ── Weather widget — always visible, bottom-left ── */}
-        <WeatherWidget />
+        {/* ── Info stack — NOTAMs above weather, bottom-left ── */}
+        <div className="absolute bottom-4 left-4 z-40 pointer-events-none select-none flex flex-col gap-2" style={{ maxWidth: 420 }}>
+          <NotamWidget />
+          <WeatherWidget />
+        </div>
 
         {/* ── Controls HUD — bottom-centre on both views ── */}
         <ControlsHUD activeView={view} />

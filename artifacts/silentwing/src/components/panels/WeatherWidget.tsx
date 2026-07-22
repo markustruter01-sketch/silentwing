@@ -167,13 +167,9 @@ export default function WeatherWidget() {
 
   return (
     <div
-      className="absolute bottom-4 left-4 z-40 pointer-events-none select-none"
-      style={{ maxWidth: 420 }}
+      className="rounded-lg overflow-hidden"
+      style={{ border: '1px solid rgba(100,116,139,0.20)' }}
     >
-      <div
-        className="rounded-lg overflow-hidden"
-        style={{ border: '1px solid rgba(100,116,139,0.20)' }}
-      >
         {/* ── Location label ── */}
         <div className="flex items-center gap-2 px-3 pt-2 pb-0.5">
           <span className="font-mono text-[8px] text-slate-600 tracking-[0.2em] uppercase">YBBN</span>
@@ -231,7 +227,6 @@ export default function WeatherWidget() {
             </div>
           </>
         )}
-      </div>
     </div>
   );
 }

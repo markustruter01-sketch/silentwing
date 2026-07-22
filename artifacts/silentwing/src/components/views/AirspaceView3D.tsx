@@ -794,8 +794,37 @@ function disposeGlideSlopeLine(entry: GlideSlopeEntry, scene: THREE.Scene): void
 const TAKEOFF_LINE_HEIGHT = 500; // scene units (~3 300 ft) above the aircraft
 
 interface TakeoffIndicatorEntry {
-  line:    THREE.Line;
-  lineMat: THREE.LineBasicMaterial;
+  line:     THREE.Line;
+  lineMat:  THREE.LineBasicMaterial;
+  sign:     THREE.Sprite;
+  signMat:  THREE.SpriteMaterial;
+}
+
+function makeTakeoffSign(): { sprite: THREE.Sprite; mat: THREE.SpriteMaterial } {
+  const W = 320, H = 60;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d')!;
+  ctx.clearRect(0, 0, W, H);
+
+  // Border rect
+  ctx.strokeStyle = '#818CF8';
+  ctx.lineWidth   = 2;
+  ctx.strokeRect(2, 2, W - 4, H - 4);
+
+  // Label text
+  ctx.font        = 'bold 28px "Share Tech Mono", monospace';
+  ctx.fillStyle   = '#818CF8';
+  ctx.textAlign   = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('TAKING OFF', W / 2, H / 2);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(W * 1.5, H * 1.5, 1);
+  sprite.frustumCulled = false;
+  return { sprite, mat };
 }
 
 function createTakeoffIndicator(scene: THREE.Scene): TakeoffIndicatorEntry {
@@ -809,13 +838,19 @@ function createTakeoffIndicator(scene: THREE.Scene): TakeoffIndicatorEntry {
   line.frustumCulled = false;
   scene.add(line);
 
-  return { line, lineMat };
+  const { sprite, mat } = makeTakeoffSign();
+  scene.add(sprite);
+
+  return { line, lineMat, sign: sprite, signMat: mat };
 }
 
 function disposeTakeoffIndicator(entry: TakeoffIndicatorEntry, scene: THREE.Scene): void {
   scene.remove(entry.line);
   entry.line.geometry.dispose();
   entry.lineMat.dispose();
+  scene.remove(entry.sign);
+  entry.signMat.map?.dispose();
+  entry.signMat.dispose();
 }
 
 // ── Per-aircraft Three.js bundle ──────────────────────────────────────────────
@@ -1796,6 +1831,8 @@ export default function AirspaceView3D({
           arr[3] = rx; arr[4] = top; arr[5] = rz;
           posAttr.needsUpdate = true;
           entry.line.geometry.computeBoundingSphere();
+          // Position the "TAKING OFF" sign sprite just above the line top
+          entry.sign.position.set(rx, top + 80, rz);
         }
       }
 
