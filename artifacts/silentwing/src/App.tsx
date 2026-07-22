@@ -3,7 +3,7 @@ import TopBar     from '@/components/layout/TopBar';
 import StatusStrip from '@/components/layout/StatusStrip';
 import AirfieldView2D from '@/components/views/AirfieldView2D';
 import AirspaceView3D, { type CameraMode } from '@/components/views/AirspaceView3D';
-import AircraftDetailPanel from '@/components/panels/AircraftDetailPanel';
+import DirectorFocusPanel  from '@/components/panels/DirectorFocusPanel';
 import AlertShell          from '@/components/panels/AlertShell';
 import ControlsHUD from '@/components/ui/ControlsHUD';
 import { getSimAdapter } from '@/sim/engine';
