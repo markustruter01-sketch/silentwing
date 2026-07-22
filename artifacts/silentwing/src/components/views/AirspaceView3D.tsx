@@ -2403,19 +2403,39 @@ export default function AirspaceView3D({
       }
     }
 
-    // ── Sync glide slope projected path lines (Task #26) ─────────────────────
-    // Create a line only for 'approach' phase aircraft.  The line disappears
-    // the moment phase transitions to 'landing' or any later phase.
-    for (const ac of aircraft) {
-      if (ac.phase === 'approach') {
-        if (!st.glideSlopeMap.has(ac.id)) {
-          st.glideSlopeMap.set(ac.id, createGlideSlopeLine(scene));
+    // ── Sync glide slope projected path lines ────────────────────────────────
+    // Only the SINGLE approach-phase aircraft nearest to any runway threshold
+    // gets a line.  This prevents a fan of crossing lines when multiple aircraft
+    // are on long finals simultaneously.  The line switches automatically to the
+    // next closest inbound once the current aircraft transitions to 'landing'.
+    {
+      // Find the closest approach aircraft to any threshold
+      let closestId: string | null = null;
+      let closestDist = Infinity;
+      for (const ac of aircraft) {
+        if (ac.phase !== 'approach') continue;
+        const b = acMap.get(ac.id);
+        if (!b) continue;
+        for (const [, tx, tz] of st.allThresholds) {
+          const dx = tx - b.renderPos.x;
+          const dz = tz - b.renderPos.z;
+          const d  = Math.sqrt(dx * dx + dz * dz);
+          if (d < closestDist) { closestDist = d; closestId = ac.id; }
         }
-      } else {
-        const entry = st.glideSlopeMap.get(ac.id);
-        if (entry) {
-          disposeGlideSlopeLine(entry, scene);
-          st.glideSlopeMap.delete(ac.id);
+      }
+
+      // Create line for winner, dispose lines for everyone else
+      for (const ac of aircraft) {
+        if (ac.id === closestId) {
+          if (!st.glideSlopeMap.has(ac.id)) {
+            st.glideSlopeMap.set(ac.id, createGlideSlopeLine(scene));
+          }
+        } else {
+          const entry = st.glideSlopeMap.get(ac.id);
+          if (entry) {
+            disposeGlideSlopeLine(entry, scene);
+            st.glideSlopeMap.delete(ac.id);
+          }
         }
       }
     }
