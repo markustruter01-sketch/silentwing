@@ -15,6 +15,7 @@ import { useEffect, useRef } from 'react';
 import type { Aircraft, WorldSnapshot } from '@/types';
 import { isAirborne } from '@/types';
 import { REAL_RUNWAYS, REAL_TAXIWAYS, REAL_APRONS } from '@/data/ybbn_real';
+import type { SWAlert, SWAlertSeverity } from '@/alerts/types';
 
 // ── Camera mode — exported so App can type-check ──────────────────────────────
 export type CameraMode = 'orbit' | 'manual' | 'inspect' | 'follow' | 'returning';
@@ -80,6 +81,114 @@ const DIRECTOR_LOOK_LERP      = 0.009;  // look-at settles slightly faster so ai
 // Intro lerp: on first page-load the camera glides slowly from orbit into director
 // position over 15 s.  lerp(t, 0.003) → 95% in ~15 s at 60 fps.
 const DIRECTOR_POS_LERP_INTRO = 0.003;
+
+// ── Threat beam constants & shaders (Phase 6A) ───────────────────────────────
+
+const BEAM_VERTEX_SHADER = /* glsl */`
+  attribute float lineU;
+  varying   float vLineU;
+  void main() {
+    vLineU      = lineU;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const BEAM_FRAGMENT_SHADER = /* glsl */`
+  uniform float time;
+  uniform vec3  beamColor;
+  uniform float dashFreq;
+  uniform float dashSpeed;
+  uniform float pulseSpeed;
+  uniform float maxOpacity;
+  varying float vLineU;
+  void main() {
+    // Sliding dash pattern along the beam
+    float dash  = step(0.42, fract(vLineU * dashFreq - time * dashSpeed));
+    // Overall brightness pulse
+    float pulse = 0.55 + 0.45 * sin(time * pulseSpeed);
+    float alpha = dash * pulse * maxOpacity;
+    if (alpha < 0.01) discard;
+    gl_FragColor = vec4(beamColor, alpha);
+  }
+`;
+
+interface BeamSeverityParams {
+  color:       THREE.Color;
+  dashFreq:    number;
+  dashSpeed:   number;
+  pulseSpeed:  number;
+  maxOpacity:  number;
+}
+
+const BEAM_PARAMS: Record<SWAlertSeverity, BeamSeverityParams> = {
+  critical: { color: new THREE.Color(0xef4444), dashFreq: 18, dashSpeed: 3.5, pulseSpeed: 3.0, maxOpacity: 0.90 },
+  caution:  { color: new THREE.Color(0xf59e0b), dashFreq: 14, dashSpeed: 2.5, pulseSpeed: 2.0, maxOpacity: 0.80 },
+  advisory: { color: new THREE.Color(0xfbbf24), dashFreq: 10, dashSpeed: 1.5, pulseSpeed: 1.0, maxOpacity: 0.65 },
+};
+
+interface BeamEntry {
+  line:      THREE.Line;
+  midSphere: THREE.Mesh;
+  mat:       THREE.ShaderMaterial;
+  sphereMat: THREE.MeshBasicMaterial;
+}
+
+/** Build a threat beam (line + midpoint sphere) for a given severity and add it to the scene. */
+function createBeamEntry(severity: SWAlertSeverity, scene: THREE.Scene): BeamEntry {
+  const p = BEAM_PARAMS[severity];
+
+  // ── Dashed line ──────────────────────────────────────────────────────────────
+  // Two-vertex geometry; positions are updated each rAF frame from renderPos.
+  const geo = new THREE.BufferGeometry();
+  const posArr = new Float32Array(6);            // 2 × xyz
+  const uvArr  = new Float32Array([0, 1]);       // lineU: 0 at A, 1 at B
+  geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+  geo.setAttribute('lineU',    new THREE.BufferAttribute(uvArr,  1));
+
+  const mat = new THREE.ShaderMaterial({
+    vertexShader:   BEAM_VERTEX_SHADER,
+    fragmentShader: BEAM_FRAGMENT_SHADER,
+    uniforms: {
+      time:       { value: 0 },
+      beamColor:  { value: p.color },
+      dashFreq:   { value: p.dashFreq },
+      dashSpeed:  { value: p.dashSpeed },
+      pulseSpeed: { value: p.pulseSpeed },
+      maxOpacity: { value: p.maxOpacity },
+    },
+    transparent: true,
+    depthWrite:  false,
+    blending:    THREE.AdditiveBlending,
+  });
+
+  const line = new THREE.Line(geo, mat);
+  line.frustumCulled = false; // always render — avoids pop-in before BV update
+  scene.add(line);
+
+  // ── Midpoint sphere ──────────────────────────────────────────────────────────
+  const sphereGeo = new THREE.SphereGeometry(55, 8, 6);
+  const sphereMat = new THREE.MeshBasicMaterial({
+    color:       p.color,
+    transparent: true,
+    opacity:     0.70,
+    depthWrite:  false,
+    blending:    THREE.AdditiveBlending,
+  });
+  const midSphere = new THREE.Mesh(sphereGeo, sphereMat);
+  midSphere.frustumCulled = false;
+  scene.add(midSphere);
+
+  return { line, midSphere, mat, sphereMat };
+}
+
+/** Remove a BeamEntry from the scene and free its GPU resources. */
+function disposeBeamEntry(entry: BeamEntry, scene: THREE.Scene): void {
+  scene.remove(entry.line, entry.midSphere);
+  entry.line.geometry.dispose();
+  entry.mat.dispose();
+  entry.midSphere.geometry.dispose();
+  entry.sphereMat.dispose();
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function easeInOut(t: number): number {
@@ -464,6 +573,10 @@ interface SceneState {
   directorIntroEnd:     number;
   /** Aircraft ID → alert severity for the current snapshot (Phase 6A). */
   alertedIds: Map<string, 'advisory' | 'caution' | 'critical'>;
+  /** Full active SWAlert list — used by the threat beam renderer. */
+  activeAlerts: SWAlert[];
+  /** Alert ID → live beam entry (line + midSphere). */
+  beamMap: Map<string, BeamEntry>;
 }
 
 // ── Helper: begin fly-to animation toward an aircraft ────────────────────────
@@ -502,6 +615,8 @@ export interface AirspaceView3DProps {
   weather?:         WorldSnapshot['weather'];
   /** Aircraft IDs → severity for active separation alerts (Phase 6A). */
   alertedIds?:      Map<string, 'advisory' | 'caution' | 'critical'>;
+  /** Full active alert list — drives the 3-D threat beam renderer. */
+  activeAlerts?:    SWAlert[];
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -514,6 +629,7 @@ export default function AirspaceView3D({
   directorMode = false,
   weather,
   alertedIds,
+  activeAlerts,
 }: AirspaceView3DProps) {
   const mountRef       = useRef<HTMLDivElement>(null);
   const sceneRef       = useRef<SceneState | null>(null);
@@ -538,6 +654,12 @@ export default function AirspaceView3D({
     const st = sceneRef.current;
     if (st) st.alertedIds = alertedIds ?? new Map();
   }, [alertedIds]);
+
+  // Sync activeAlerts prop so the rAF loop can build/update threat beams.
+  useEffect(() => {
+    const st = sceneRef.current;
+    if (st) st.activeAlerts = activeAlerts ?? [];
+  }, [activeAlerts]);
 
   // ── Sync external cameraMode prop → sceneRef ────────────────────────────────
   // Fired when App changes cameraMode (e.g. "Follow" button in panel).
@@ -702,6 +824,8 @@ export default function AirspaceView3D({
       directorIntroStarted: false,
       directorIntroEnd:     0,
       alertedIds:           new Map(),
+      activeAlerts:         [],
+      beamMap:              new Map(),
     };
     sceneRef.current = st;
 
@@ -920,6 +1044,62 @@ export default function AirspaceView3D({
 
         // Label opacity is set per-poll (in the data sync effect) based on seenPos —
         // no per-frame override needed here.
+      }
+
+      // ── Threat beam update (Phase 6A) ─────────────────────────────────────
+      // Each frame: sync beamMap to st.activeAlerts, update line endpoints from
+      // live renderPos, and tick the shader time uniform.
+      {
+        const tSec = nowMs / 1000;
+
+        // Remove beams whose alerts are no longer active
+        for (const [alertId, entry] of st.beamMap) {
+          if (!st.activeAlerts.find(a => a.id === alertId)) {
+            disposeBeamEntry(entry, scene);
+            st.beamMap.delete(alertId);
+          }
+        }
+
+        // Create / update beams for each active separation alert
+        for (const alert of st.activeAlerts) {
+          if (alert.kind !== 'separation' || alert.aircraftIds.length < 2) continue;
+          const [idA, idB] = alert.aircraftIds;
+          const bA = st.acMap.get(idA);
+          const bB = st.acMap.get(idB);
+          if (!bA || !bB) continue;
+
+          const posA = bA.renderPos;
+          const posB = bB.renderPos;
+
+          // Create entry on first sight of this alert
+          let entry = st.beamMap.get(alert.id);
+          if (!entry) {
+            entry = createBeamEntry(alert.severity, scene);
+            st.beamMap.set(alert.id, entry);
+          }
+
+          // Update line geometry endpoints
+          const posAttr = entry.line.geometry.attributes.position as THREE.BufferAttribute;
+          const arr     = posAttr.array as Float32Array;
+          arr[0] = posA.x; arr[1] = posA.y; arr[2] = posA.z;
+          arr[3] = posB.x; arr[4] = posB.y; arr[5] = posB.z;
+          posAttr.needsUpdate = true;
+          entry.line.geometry.computeBoundingSphere();
+
+          // Update midpoint sphere position
+          entry.midSphere.position.set(
+            (posA.x + posB.x) * 0.5,
+            (posA.y + posB.y) * 0.5,
+            (posA.z + posB.z) * 0.5,
+          );
+
+          // Tick shader time uniform
+          entry.mat.uniforms.time.value = tSec;
+
+          // Pulse sphere opacity in sync with beam
+          const p = BEAM_PARAMS[alert.severity];
+          entry.sphereMat.opacity = (0.35 + 0.35 * (0.5 + 0.5 * Math.sin(tSec * p.pulseSpeed)));
+        }
       }
 
       renderer.render(scene, camera);
@@ -1191,6 +1371,8 @@ export default function AirspaceView3D({
       st.acMap.forEach(b => { scene.remove(b.cone, b.stem, b.trail, b.label); disposeBundle(b); });
       st.acMap.clear();
       st.coneToId.clear();
+      st.beamMap.forEach(entry => disposeBeamEntry(entry, scene));
+      st.beamMap.clear();
       renderer.dispose();
       if (renderer.domElement.parentNode === el) el.removeChild(renderer.domElement);
       sceneRef.current = null;

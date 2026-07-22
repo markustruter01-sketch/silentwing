@@ -504,6 +504,7 @@ export default function App() {
             directorMode={directorMode}
             weather={snapshot.weather}
             alertedIds={alertedIds}
+            activeAlerts={activeAlerts}
             onSelectAircraft={(id) => {
               console.log(`[APP] 3D select: ${id ?? 'null'}`);
               setSelectedAcId(id);
