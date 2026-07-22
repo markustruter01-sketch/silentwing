@@ -46,6 +46,8 @@ export interface SequenceLadderProps {
   arrivalsQueue:   Aircraft[];
   departuresQueue: Aircraft[];
   onSelectAc: (id: string) => void;
+  pinnedAcIds: Set<string>;
+  onTogglePin: (id: string) => void;
   /** Top offset in px — allows caller to push panel below DirectorFocusPanel */
   topOffset?: number;
 }
@@ -68,8 +70,48 @@ function PhaseBadge({ phase }: { phase: Aircraft['phase'] }) {
   );
 }
 
+// ── PinButton ─────────────────────────────────────────────────────────────────
+function PinButton({ pinned, onPin }: { pinned: boolean; onPin: (e: React.MouseEvent) => void }) {
+  return (
+    <button
+      onClick={onPin}
+      title={pinned ? 'Unpin aircraft' : 'Pin aircraft — holds director on this flight'}
+      className={[
+        'flex-shrink-0 flex items-center justify-center',
+        'w-5 h-5 rounded transition-colors',
+        pinned
+          ? 'text-cyan-300 bg-cyan-900/40 hover:bg-cyan-800/50'
+          : 'text-slate-600 hover:text-slate-400 hover:bg-slate-700/30',
+      ].join(' ')}
+    >
+      {/* Pin icon — filled when active */}
+      <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor">
+        {pinned ? (
+          /* filled pin */
+          <path d="M8.5 1A.5.5 0 0 0 8 1.5v.293L5.854 3.939A2.5 2.5 0 0 0 2.146 7.647L.647 9.146a.5.5 0 0 0 .707.707L2.854 8.354l.293.293A2.5 2.5 0 0 0 6.854 5.646l2.293-2.293H9.5a.5.5 0 0 0 0-1H8.5z" />
+        ) : (
+          /* outline pin */
+          <>
+            <path d="M8 1.5a.5.5 0 0 1 .5-.5H9.5a.5.5 0 0 1 0 1h-.793l-2.293 2.293A2.5 2.5 0 0 1 2.707 7.5l-1.5 1.5a.5.5 0 0 1-.707-.707L2 6.793A2.5 2.5 0 0 1 5.707 3.086L8 .793V1.5zm-.647 2.5L5.646 5.707A1.5 1.5 0 1 0 7.354 7.414L9.06 5.707 7.354 4z" opacity="0.6"/>
+          </>
+        )}
+      </svg>
+    </button>
+  );
+}
+
 // ── ArrivalRow ────────────────────────────────────────────────────────────────
-function ArrivalRow({ ac, onClick }: { ac: Aircraft; onClick: () => void }) {
+function ArrivalRow({
+  ac,
+  pinned,
+  onClick,
+  onPin,
+}: {
+  ac: Aircraft;
+  pinned: boolean;
+  onClick: () => void;
+  onPin: (e: React.MouseEvent) => void;
+}) {
   // ETA proxy: format altitude as a rough "distance to threshold" indicator.
   // Lower altitude → closer to runway.  Displayed as "FLxxx" or "≤1000 ft".
   const altFt = Math.round(ac.position.alt);
@@ -79,39 +121,69 @@ function ArrivalRow({ ac, onClick }: { ac: Aircraft; onClick: () => void }) {
     `FL${Math.round(altFt / 100).toString().padStart(3, '0')}`;
 
   return (
-    <button
-      onClick={onClick}
-      className="w-full flex items-center gap-1.5 px-2 py-1 rounded
-                 hover:bg-slate-700/40 transition-colors text-left cursor-pointer group"
+    <div
+      className={[
+        'flex items-center gap-0.5 px-1.5 py-0.5 rounded transition-colors',
+        pinned ? 'bg-cyan-950/40 border-l border-cyan-600/50' : 'hover:bg-slate-700/20',
+      ].join(' ')}
     >
-      <PhaseBadge phase={ac.phase} />
-      <span className="font-mono text-[10px] text-slate-200 tracking-wide flex-1 truncate group-hover:text-white">
-        {ac.callsign}
-      </span>
-      <span className="font-mono text-[9px] text-slate-500 shrink-0">{ac.type}</span>
-      <span className="font-mono text-[9px] text-sky-400/70 tabular-nums shrink-0">{etaLabel}</span>
-    </button>
+      <PinButton pinned={pinned} onPin={onPin} />
+      <button
+        onClick={onClick}
+        className="flex items-center gap-1.5 flex-1 min-w-0 text-left cursor-pointer group py-0.5"
+      >
+        <PhaseBadge phase={ac.phase} />
+        <span className={[
+          'font-mono text-[10px] tracking-wide flex-1 truncate',
+          pinned ? 'text-cyan-200' : 'text-slate-200 group-hover:text-white',
+        ].join(' ')}>
+          {ac.callsign}
+        </span>
+        <span className="font-mono text-[9px] text-slate-500 shrink-0">{ac.type}</span>
+        <span className="font-mono text-[9px] text-sky-400/70 tabular-nums shrink-0">{etaLabel}</span>
+      </button>
+    </div>
   );
 }
 
 // ── DepartureRow ──────────────────────────────────────────────────────────────
-function DepartureRow({ ac, onClick }: { ac: Aircraft; onClick: () => void }) {
+function DepartureRow({
+  ac,
+  pinned,
+  onClick,
+  onPin,
+}: {
+  ac: Aircraft;
+  pinned: boolean;
+  onClick: () => void;
+  onPin: (e: React.MouseEvent) => void;
+}) {
   // For departures show ground speed as activity indicator
   const gsLabel = ac.groundSpeed > 0 ? `${ac.groundSpeed}kt` : 'GND';
 
   return (
-    <button
-      onClick={onClick}
-      className="w-full flex items-center gap-1.5 px-2 py-1 rounded
-                 hover:bg-slate-700/40 transition-colors text-left cursor-pointer group"
+    <div
+      className={[
+        'flex items-center gap-0.5 px-1.5 py-0.5 rounded transition-colors',
+        pinned ? 'bg-cyan-950/40 border-l border-cyan-600/50' : 'hover:bg-slate-700/20',
+      ].join(' ')}
     >
-      <PhaseBadge phase={ac.phase} />
-      <span className="font-mono text-[10px] text-slate-200 tracking-wide flex-1 truncate group-hover:text-white">
-        {ac.callsign}
-      </span>
-      <span className="font-mono text-[9px] text-slate-500 shrink-0">{ac.type}</span>
-      <span className="font-mono text-[9px] text-orange-400/70 tabular-nums shrink-0">{gsLabel}</span>
-    </button>
+      <PinButton pinned={pinned} onPin={onPin} />
+      <button
+        onClick={onClick}
+        className="flex items-center gap-1.5 flex-1 min-w-0 text-left cursor-pointer group py-0.5"
+      >
+        <PhaseBadge phase={ac.phase} />
+        <span className={[
+          'font-mono text-[10px] tracking-wide flex-1 truncate',
+          pinned ? 'text-cyan-200' : 'text-slate-200 group-hover:text-white',
+        ].join(' ')}>
+          {ac.callsign}
+        </span>
+        <span className="font-mono text-[9px] text-slate-500 shrink-0">{ac.type}</span>
+        <span className="font-mono text-[9px] text-orange-400/70 tabular-nums shrink-0">{gsLabel}</span>
+      </button>
+    </div>
   );
 }
 
@@ -133,9 +205,14 @@ export default function SequenceLadder({
   arrivalsQueue,
   departuresQueue,
   onSelectAc,
+  pinnedAcIds,
+  onTogglePin,
   topOffset = 440,
 }: SequenceLadderProps) {
   const isEmpty = arrivalsQueue.length === 0 && departuresQueue.length === 0;
+
+  const pinnedCount = arrivalsQueue.filter(ac => pinnedAcIds.has(ac.id)).length
+    + departuresQueue.filter(ac => pinnedAcIds.has(ac.id)).length;
 
   return (
     <div
@@ -155,9 +232,16 @@ export default function SequenceLadder({
         <span className="font-mono text-[9px] tracking-[0.25em] text-slate-500 uppercase">
           Sequence
         </span>
-        <span className="font-mono text-[8px] text-slate-700 tabular-nums">
-          {arrivalsQueue.length} arr · {departuresQueue.length} dep
-        </span>
+        <div className="flex items-center gap-2">
+          {pinnedCount > 0 && (
+            <span className="font-mono text-[8px] text-cyan-500/80 tabular-nums">
+              {pinnedCount} pinned
+            </span>
+          )}
+          <span className="font-mono text-[8px] text-slate-700 tabular-nums">
+            {arrivalsQueue.length} arr · {departuresQueue.length} dep
+          </span>
+        </div>
       </div>
 
       {isEmpty ? (
@@ -174,7 +258,13 @@ export default function SequenceLadder({
               <div className="px-2 py-1 font-mono text-[9px] text-slate-700">—</div>
             ) : (
               arrivalsQueue.map(ac => (
-                <ArrivalRow key={ac.id} ac={ac} onClick={() => onSelectAc(ac.id)} />
+                <ArrivalRow
+                  key={ac.id}
+                  ac={ac}
+                  pinned={pinnedAcIds.has(ac.id)}
+                  onClick={() => onSelectAc(ac.id)}
+                  onPin={(e) => { e.stopPropagation(); onTogglePin(ac.id); }}
+                />
               ))
             )}
           </div>
@@ -186,7 +276,13 @@ export default function SequenceLadder({
               <div className="px-2 py-1 font-mono text-[9px] text-slate-700">—</div>
             ) : (
               departuresQueue.map(ac => (
-                <DepartureRow key={ac.id} ac={ac} onClick={() => onSelectAc(ac.id)} />
+                <DepartureRow
+                  key={ac.id}
+                  ac={ac}
+                  pinned={pinnedAcIds.has(ac.id)}
+                  onClick={() => onSelectAc(ac.id)}
+                  onPin={(e) => { e.stopPropagation(); onTogglePin(ac.id); }}
+                />
               ))
             )}
           </div>

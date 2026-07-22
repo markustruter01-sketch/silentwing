@@ -1129,6 +1129,8 @@ interface AcBundle {
   corrStartMs:     number;
   /** Purple selection halo ring shown when director focuses this aircraft. */
   halo:            THREE.Mesh;
+  /** Cyan pin ring — visible when this aircraft is pinned from the sequence ladder. */
+  pinRing:         THREE.Mesh;
   /** Callsign string — stored so refreshAcLabel can repaint without extra props. */
   callsign:        string;
   /** Phase that was painted into the label last; used to detect change. */
@@ -1175,8 +1177,9 @@ function disposeBundle(b: AcBundle): void {
   b.trail.geometry.dispose(); (b.trail.material as THREE.Material).dispose();
   const sm = b.label.material as THREE.SpriteMaterial;
   sm.map?.dispose(); sm.dispose();
-  // HMR guard — bundles created before this field existed won't have halo/leaderLine
-  if (b.halo) { b.halo.geometry.dispose(); (b.halo.material as THREE.Material).dispose(); }
+  // HMR guard — bundles created before this field existed won't have halo/leaderLine/pinRing
+  if (b.halo)    { b.halo.geometry.dispose();    (b.halo.material    as THREE.Material).dispose(); }
+  if (b.pinRing) { b.pinRing.geometry.dispose(); (b.pinRing.material as THREE.Material).dispose(); }
   if (b.leaderLine) { b.leaderLine.geometry.dispose(); b.leaderLineMat?.dispose(); }
   // Task 33 additions
   if (b.velVec)    { b.velVec.geometry.dispose(); b.velVecMat?.dispose(); }
@@ -1240,6 +1243,8 @@ interface SceneState {
   directorIntroEnd:     number;
   /** Aircraft ID → alert severity for the current snapshot (Phase 6A). */
   alertedIds: Map<string, 'advisory' | 'caution' | 'critical'>;
+  /** Set of aircraft IDs currently pinned by the controller. */
+  pinnedAcIds: Set<string>;
   /** Full active SWAlert list — used by the threat beam renderer. */
   activeAlerts: SWAlert[];
   /** Alert ID → live beam entry (line + midSphere). */
@@ -1333,6 +1338,8 @@ export interface AirspaceView3DProps {
   alertedIds?:      Map<string, 'advisory' | 'caution' | 'critical'>;
   /** Full active alert list — drives the 3-D threat beam renderer. */
   activeAlerts?:    SWAlert[];
+  /** Set of aircraft IDs pinned by the controller — shown with a cyan orbit ring. */
+  pinnedAcIds?:     Set<string>;
   /**
    * When set to a CRITICAL alert ID, the camera pivots to look at that
    * conflict's 3D midpoint (2 s in, 5 s hold, 2 s return).
@@ -1360,6 +1367,7 @@ export default function AirspaceView3D({
   alertFocusId,
   onAlertFocusDone,
   showPaths = false,
+  pinnedAcIds,
 }: AirspaceView3DProps) {
   const mountRef       = useRef<HTMLDivElement>(null);
   const sceneRef       = useRef<SceneState | null>(null);
@@ -1418,6 +1426,12 @@ export default function AirspaceView3D({
     const st = sceneRef.current;
     if (st) st.activeAlerts = activeAlerts ?? [];
   }, [activeAlerts]);
+
+  // Sync pinnedAcIds prop so the rAF loop can show/hide the pin ring.
+  useEffect(() => {
+    const st = sceneRef.current;
+    if (st) st.pinnedAcIds = pinnedAcIds ?? new Set();
+  }, [pinnedAcIds]);
 
   // ── Sync alert focus interrupt (Task #16) ──────────────────────────────────
   // When alertFocusId changes to a new non-null value, kick off the 3-D camera
@@ -1669,6 +1683,7 @@ export default function AirspaceView3D({
       allThresholds:        computeRunwayThresholds(prof.runways, prof.geometry.runways),
       showPaths:            false,
       taxiRingMap:          new Map(),
+      pinnedAcIds:          new Set(),
     };
     sceneRef.current = st;
 
@@ -1970,6 +1985,17 @@ export default function AirspaceView3D({
         if (b.halo && b.halo.visible) {
           b.halo.position.set(b.renderPos.x, b.renderPos.y - 40, b.renderPos.z);
           b.halo.rotation.z += 0.008; // slow spin in the horizontal plane
+        }
+
+        // Pin ring: cyan orbit ring — counter-rotates at a slightly faster rate
+        if (b.pinRing) {
+          const acId     = st.coneToId.get(b.cone) ?? '';
+          const isPinned = acId !== '' && st.pinnedAcIds.has(acId);
+          b.pinRing.visible = isPinned;
+          if (isPinned) {
+            b.pinRing.position.set(b.renderPos.x, b.renderPos.y - 20, b.renderPos.z);
+            b.pinRing.rotation.z -= 0.012; // counter-clockwise spin
+          }
         }
 
         b.stem.geometry.setFromPoints([
@@ -2896,6 +2922,8 @@ export default function AirspaceView3D({
       window.removeEventListener('keydown', onKey);
       st.acMap.forEach(b => {
         scene.remove(b.cone, b.stem, b.trail, b.label);
+        if (b.halo)      scene.remove(b.halo);
+        if (b.pinRing)   scene.remove(b.pinRing);
         if (b.velVec)    scene.remove(b.velVec);
         if (b.sepBubble) scene.remove(b.sepBubble);
         if (b.wakeL)     scene.remove(b.wakeL);
@@ -3015,6 +3043,17 @@ export default function AirspaceView3D({
         halo.renderOrder = 3;
         halo.visible = false;
         scene.add(halo);
+
+        // Cyan pin ring — larger torus, counter-rotating, shown when aircraft is pinned
+        const pinRingGeo = new THREE.TorusGeometry(110, 5, 8, 64);
+        const pinRingMat = new THREE.MeshBasicMaterial({
+          color: 0x06b6d4, transparent: true, opacity: 0.70, depthWrite: false,
+        });
+        const pinRing = new THREE.Mesh(pinRingGeo, pinRingMat);
+        pinRing.rotation.x = Math.PI / 2; // lay flat
+        pinRing.renderOrder = 4;
+        pinRing.visible = false;
+        scene.add(pinRing);
 
         const stemGeo = new THREE.BufferGeometry().setFromPoints([
           new THREE.Vector3(pos.x, 0, pos.z),
@@ -3144,7 +3183,7 @@ export default function AirspaceView3D({
         }
 
         acMap.set(ac.id, {
-          cone, stem, trail, label, trailBuf, halo,
+          cone, stem, trail, label, trailBuf, halo, pinRing,
           leaderLine, leaderLineMat,
           velVec, velVecMat,
           sepBubble, sepBubbleMat,
@@ -3457,6 +3496,7 @@ export default function AirspaceView3D({
     for (const [id, b] of acMap) {
       if (!seen.has(id)) {
         scene.remove(b.cone, b.stem, b.trail, b.label, b.halo);
+        if (b.pinRing)   scene.remove(b.pinRing);
         if (b.velVec)    scene.remove(b.velVec);
         if (b.sepBubble) scene.remove(b.sepBubble);
         if (b.wakeL)     scene.remove(b.wakeL);

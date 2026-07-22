@@ -144,6 +144,18 @@ export default function App() {
       setSelectedAcId(null);
       setCameraMode(prev => (prev === 'orbit' ? 'orbit' : 'manual'));
     }
+    // Also prune pinned IDs that are no longer in the snapshot
+    const liveIds = new Set(snapshot.aircraft.map(a => a.id));
+    setPinnedAcIds(prev => {
+      let changed = false;
+      for (const id of prev) {
+        if (!liveIds.has(id)) { changed = true; break; }
+      }
+      if (!changed) return prev;
+      const next = new Set<string>();
+      for (const id of prev) { if (liveIds.has(id)) next.add(id); }
+      return next;
+    });
   }, [snapshot.aircraft, selectedAcId]);
 
   // Also clear selection when the data source changes (IDs are not shared
@@ -165,6 +177,31 @@ export default function App() {
 
   // ── Predicted paths toggle ───────────────────────────────────────────────
   const [showPredictedPaths, setShowPredictedPaths] = useState(false);
+
+  // ── Pinned aircraft ──────────────────────────────────────────────────────
+  const [pinnedAcIds, setPinnedAcIds] = useState<Set<string>>(new Set());
+  /** Stable ref so the director tick can read pinned IDs without a closure. */
+  const pinnedAcIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => { pinnedAcIdsRef.current = pinnedAcIds; }, [pinnedAcIds]);
+
+  const handleTogglePin = useCallback((id: string) => {
+    setPinnedAcIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+        console.log(`[APP] unpin ${id}`);
+      } else {
+        next.add(id);
+        console.log(`[APP] pin ${id}`);
+        // Immediately direct the camera to the newly-pinned aircraft
+        setSelectedAcId(id);
+        setCameraMode('follow');
+        manualInspectRef.current = false;
+        lastSwitchRef.current = Date.now();
+      }
+      return next;
+    });
+  }, []);
 
   // ── Director Mode state ──────────────────────────────────────────────────
   const [directorMode, setDirectorMode] = useState(true); // starts ON
@@ -339,30 +376,38 @@ export default function App() {
   useEffect(() => { visibleAircraftRef.current = visibleAircraft; }, [visibleAircraft]);
 
   // ── Sequence ladder queues ────────────────────────────────────────────────
-  /** Next 3 arrivals sorted by ascending altitude (lower = closer to threshold). */
-  const arrivalsQueue = useMemo(() =>
-    visibleAircraft
+  /** Next 3 arrivals sorted by ascending altitude (lower = closer to threshold).
+   *  Pinned aircraft always float to the top of the column. */
+  const arrivalsQueue = useMemo(() => {
+    const all = visibleAircraft
       .filter(ac => ARRIVAL_PHASES.has(ac.phase) && !ac.isGroundVehicle)
-      .sort((a, b) => a.position.alt - b.position.alt)
-      .slice(0, 3),
-    [visibleAircraft],
-  );
+      .sort((a, b) => {
+        const ap = pinnedAcIds.has(a.id) ? 0 : 1;
+        const bp = pinnedAcIds.has(b.id) ? 0 : 1;
+        if (ap !== bp) return ap - bp;
+        return a.position.alt - b.position.alt;
+      });
+    return all.slice(0, 3);
+  }, [visibleAircraft, pinnedAcIds]);
 
-  /** Next 3 departures sorted by ascending ground speed (higher GS = further along departure). */
-  const departuresQueue = useMemo(() =>
-    visibleAircraft
+  /** Next 3 departures sorted by phase then ground speed.
+   *  Pinned aircraft always float to the top of the column. */
+  const departuresQueue = useMemo(() => {
+    const all = visibleAircraft
       .filter(ac => DEPARTURE_PHASES.has(ac.phase) && !ac.isGroundVehicle)
       .sort((a, b) => {
+        const ap = pinnedAcIds.has(a.id) ? 0 : 1;
+        const bp = pinnedAcIds.has(b.id) ? 0 : 1;
+        if (ap !== bp) return ap - bp;
         // taxi-out first (no altitude), then takeoff/departure by descending GS
         const phaseOrder: Record<string, number> = { 'taxi-out': 0, 'takeoff': 1, 'departure': 2 };
         const ao = phaseOrder[a.phase] ?? 3;
         const bo = phaseOrder[b.phase] ?? 3;
         if (ao !== bo) return ao - bo;
         return b.groundSpeed - a.groundSpeed;
-      })
-      .slice(0, 3),
-    [visibleAircraft],
-  );
+      });
+    return all.slice(0, 3);
+  }, [visibleAircraft, pinnedAcIds]);
 
   // ── Director tick ────────────────────────────────────────────────────────
   // Runs a 1 s interval only while directorMode is ON.
@@ -379,6 +424,13 @@ export default function App() {
       // Don't override a manual user inspection — the user has explicitly focused
       // on an aircraft; the director cedes control until they deselect or re-enable director.
       if (manualInspectRef.current) return;
+      // If a pinned aircraft is currently selected, hold it indefinitely —
+      // reset dwell every tick so the director never switches away.
+      const currentId = selectedAcIdRef.current;
+      if (currentId && pinnedAcIdsRef.current.has(currentId)) {
+        lastSwitchRef.current = now;
+        return;
+      }
       if (now - lastSwitchRef.current < DIRECTOR_DWELL_MS) return;
       lastSwitchRef.current = now;
 
@@ -708,9 +760,10 @@ export default function App() {
             weather={snapshot.weather}
             alertedIds={alertedIds}
             activeAlerts={activeAlerts}
-            alertFocusId={directorMode ? (alertFocusId ?? undefined) : undefined}
+            alertFocusId={alertFocusId ?? undefined}
             onAlertFocusDone={handleAlertFocusDone}
             showPaths={showPredictedPaths}
+            pinnedAcIds={pinnedAcIds}
             onSelectAircraft={(id) => {
               console.log(`[APP] 3D select: ${id ?? 'null'}`);
               setSelectedAcId(id);
@@ -743,6 +796,8 @@ export default function App() {
         <SequenceLadder
           arrivalsQueue={arrivalsQueue}
           departuresQueue={departuresQueue}
+          pinnedAcIds={pinnedAcIds}
+          onTogglePin={handleTogglePin}
           onSelectAc={(id) => {
             console.log(`[APP] sequence ladder select: ${id}`);
             setSelectedAcId(id);
