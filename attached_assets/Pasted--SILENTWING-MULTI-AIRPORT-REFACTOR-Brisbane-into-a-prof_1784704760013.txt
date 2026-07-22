@@ -1,0 +1,174 @@
+# SILENTWING — MULTI-AIRPORT REFACTOR (Brisbane into a profile)
+
+**ENVIRONMENT:** Existing SilentWing Replit dev project. This is a PURE REFACTOR.
+The app must behave IDENTICALLY to now (Brisbane only) after this change — same
+views, same alerts, same live feed, same everything. We are introducing an
+airport-profile abstraction so a second airport (Sydney) can be added next
+WITHOUT scattering `if (airport === ...)` branches. Do NOT add Sydney in this
+task. Do NOT change any runtime behaviour. Stop and report.
+
+You produced a hardcoded-values audit already — use it. This builds the
+abstraction that audit proposed, with two refinements (computed thresholds, and
+wind-derived active runway).
+
+---
+
+## GOAL
+
+1. Define an `AirportProfile` type.
+2. Move ALL Brisbane/YBBN hardcoded values into a single `YBBN` profile object.
+3. Make every consumer read from the ACTIVE profile instead of hardcoded YBBN
+   constants.
+4. Make the API server take coordinates as query params (client-driven), not
+   hardcoded Brisbane.
+5. Add an airport-registry + active-airport context, with only YBBN registered
+   for now.
+6. Verify Brisbane still works byte-for-byte identically.
+
+---
+
+## THE PROFILE TYPE
+
+Create `src/airports/types.ts`:
+
+```ts
+export interface AirportProfile {
+  icao: string;              // "YBBN"
+  name: string;              // "Brisbane Airport"
+  nameShort: string;         // "BRISBANE INTL"
+  origin: { lat: number; lon: number };   // projection origin — THE master key
+
+  fetchRadiusNm: number;     // 50 — upstream ADS-B request radius
+
+  geometry: {
+    runways: Polyline[];
+    taxiways: Polyline[];
+    aprons: [number, number][][];
+    gates: GatePos[];
+    geoPolygons: GeoPolygon[];   // water/land context (moreton-bay etc.)
+  };
+
+  viewbox: { minX: number; minY: number; width: number; height: number };
+
+  // Runway config — headings/identities only. Active runway is DERIVED from
+  // wind at runtime, not stored here.
+  runways: Array<{
+    ref: string;             // "01L/19R"
+    lowDesignator: string;   // "01L"
+    highDesignator: string;  // "19R"
+    headingDeg: number;      // heading of the LOW designator (e.g. 10)
+  }>;
+  calmWindDefaultDir: string;  // which designator is active in calm wind, e.g. "19R"
+
+  terminalRadiusNm: number;    // 7.5 — alert filter radius (centre = origin)
+  terminalAltCeilFt: number;   // 15000
+  airspaceRadiusM: number;     // 55560 — outer ring render radius
+  sectorCapacity: number;      // 20 — aircraft count = 100% load
+
+  sim?: SimAirportConfig;      // optional; YBBN keeps its sim config, others may omit
+}
+```
+
+Put shared geometry types (Polyline, GatePos, GeoPolygon) in this file or import
+from where they already live.
+
+**REFINEMENT 1 — compute thresholds/corridors, do NOT store them:**
+The audit found runway threshold label positions and ILS approach-corridor
+midpoints are currently hardcoded literals. Do NOT put these in the profile.
+Instead write helper functions that DERIVE them from `geometry.runways` at load
+time:
+- `computeRunwayThresholds(runways)` → the [label, x, z] positions for 3D
+  designator sprites, taken from each runway polyline's endpoints.
+- `computeApproachCorridors(runways, activeDir)` → threshold midpoints for the
+  ILS cone.
+These functions work for ANY airport's geometry with no per-airport literals.
+Verify they reproduce Brisbane's current sprite/corridor positions (within
+rounding) so nothing moves visually.
+
+**REFINEMENT 2 — wind-derived active runway:**
+Remove the hardcoded `activeRunwayDirection: '01'` in engine.ts and
+adsbAdapter.ts. Add a helper `deriveActiveRunway(profile, windDirDeg)` that
+picks the active designator by "land into the wind": choose the runway end whose
+heading is closest to pointing INTO the wind. In calm wind (< ~3 kt) use
+`profile.calmWindDefaultDir`. Everything that needs the active runway calls this
+with the current wind. (Current wind is still the existing default until the
+Open-Meteo weather work lands; that's fine — this just removes the hardcode.)
+
+---
+
+## THE REGISTRY + ACTIVE AIRPORT
+
+Create `src/airports/index.ts`:
+- Build the `YBBN` profile using the real values from the audit (origin,
+  geometry from ybbn_real.ts, viewbox, runway config, radii, capacity, sim
+  config).
+- Export an `AIRPORTS` registry: `{ YBBN: <profile> }` (only YBBN for now).
+- Provide an active-airport mechanism (React context or a small store) holding
+  the current profile, defaulting to YBBN. Expose a way to switch (used later
+  by the UI; for now it only ever holds YBBN).
+
+---
+
+## WIRE CONSUMERS TO THE ACTIVE PROFILE
+
+Replace hardcoded YBBN references (per your audit) with reads from the active
+profile:
+
+- **Projection (adsbAdapter):** LAT0/LON0 come from `profile.origin`. The
+  `project()` function uses them. If the active airport changes, the projection
+  origin changes with it.
+- **API server (adsb.ts):** change the route to accept `?lat=&lon=&dist=` query
+  params. The client passes the active profile's origin + fetchRadiusNm. The
+  server no longer hardcodes Brisbane. Keep the API key server-side as before.
+- **Geometry (both views + runwayOccupancy + gate snap):** read runways/
+  taxiways/aprons/gates/geoPolygons from `profile.geometry` instead of importing
+  ybbn_real.ts directly. (ybbn_real.ts becomes the DATA SOURCE for the YBBN
+  profile, imported once in the registry, not by each consumer.)
+- **Viewbox (2D):** from `profile.viewbox`.
+- **Alert detectors (all three):** terminal radius/ceiling from the profile;
+  centre is the origin (scene 0,0).
+- **Sector load:** capacity from `profile.sectorCapacity`.
+- **UI strings:** ICAO ident, name, nameShort from the profile — replace the
+  literal "YBBN" / "Brisbane Airport" / "BRISBANE INTL" strings.
+- **Destination fallback:** `profile.icao` instead of literal 'YBBN'.
+- **Airspace ring, terminal label pos, runway designator labels:** from profile
+  / computed helpers.
+- **Sim:** reads its geometry constants from `profile.sim`. YBBN's sim config
+  moves into the profile unchanged.
+
+---
+
+## HARD RULES
+
+1. PURE REFACTOR. Brisbane must look and behave EXACTLY as before. No visual
+   moves, no alert changes, no feed changes.
+2. No `if (icao === 'YBBN')` branches. Everything reads from the active profile
+   generically.
+3. Thresholds/corridors are COMPUTED from geometry, not stored literals.
+4. Active runway is DERIVED from wind, not hardcoded.
+5. The API server takes coords as query params; the client supplies them from
+   the active profile. API key stays server-side.
+6. ybbn_real.ts stays as-is (the data); it's imported ONCE by the registry, not
+   by every consumer.
+7. Do NOT add Sydney. Do NOT change thresholds' actual values. Do NOT break
+   feed-health, alerts, live ingest, or sim.
+
+---
+
+## REPORT AFTER BUILDING (raw, no summaries)
+
+1. Raw file list created/modified.
+2. The AirportProfile type and the YBBN profile object (abbreviate the geometry
+   arrays — just show they're wired from ybbn_real.ts).
+3. Confirm computeRunwayThresholds / computeApproachCorridors reproduce the
+   previous hardcoded positions (show old literal vs computed value for each
+   runway — they must match within rounding).
+4. Confirm deriveActiveRunway returns '19'/'01' correctly for a couple of wind
+   directions, and the calm-wind default.
+5. Confirm the API server now uses query params and the client passes YBBN's
+   origin + radius. Show the request URL built.
+6. Confirm NO hardcoded 'YBBN'/'Brisbane' literals remain in consumers (grep;
+   list any survivors and why).
+7. Confirm the app runs and Brisbane is visually + behaviourally identical:
+   live aircraft still align to runways, alerts still fire in the terminal area,
+   feed-health still works.

@@ -2050,12 +2050,29 @@ export default function AirspaceView3D({
         // than the aircraft could have travelled in one poll interval.
         // This kills starburst from seen_pos oscillation (fresh/stale position
         // alternation) without hiding genuine motion of fast-moving aircraft.
+        //
+        // Extension — stopped-aircraft trail wipe:
+        // If the aircraft is stopped (b.gsMps === 0, set above from nowCanExtrap)
+        // and the new position exceeds the cap, the jump is due to GPS scatter or
+        // a moving→stopped phase transition (e.g. landing → taxi → at-gate).
+        // In that case clear the entire buffer instead of just skipping the point.
+        // Without this, old taxi/runway trail points live for up to TRAIL_FADE_S
+        // seconds after the aircraft parks and render as a long diagonal green line
+        // from the runway exit area to the gate — the screenshot bug.
         const gsMps        = ac.groundSpeed * KT_TO_MPS;
         const maxTrailJump = gsMps * (st.pollDurationMs / 1000) * TRAIL_SLACK + TRAIL_GPS_M;
         const lastTp       = b.trailBuf[b.trailBuf.length - 1].pos;
         if (pos.distanceTo(lastTp) <= maxTrailJump) {
           b.trailBuf.push({ pos: pos.clone(), t: nowMs });
           if (b.trailBuf.length > TRAIL_MAX) b.trailBuf.shift();
+        } else if (b.gsMps === 0) {
+          // Stopped aircraft: position jumped beyond cap (GPS scatter, or
+          // transition from a moving phase).  Wipe old trail, restart fresh.
+          b.trailBuf.length = 0;
+          b.trailBuf.push(
+            { pos: pos.clone(), t: nowMs },
+            { pos: pos.clone(), t: nowMs },
+          );
         }
 
         // GPU trail writes (positions + alphas) happen every frame in the rAF
