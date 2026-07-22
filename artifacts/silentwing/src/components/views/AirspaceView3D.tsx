@@ -702,41 +702,61 @@ interface GlideSlopeEntry {
   labelKey: string; // callsign + angle string — redraw only when changed
 }
 
-// ── Glide slope midpoint label canvas painter ────────────────────────────────
+// ── Glide slope threshold label canvas painter ───────────────────────────────
+function _fmtEta(sec: number): string {
+  if (sec <= 0) return '--:--';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
 function _paintGlideSlopeLabel(
   ctx: CanvasRenderingContext2D,
   callsign: string,
   angleDeg: number,
+  etaSec: number,
 ): void {
-  const W = 512, H = 96;
+  const W = 512, H = 160;
   ctx.clearRect(0, 0, W, H);
 
-  // Row 1: "GLIDE SLOPE" header
-  ctx.font        = 'bold 28px "Share Tech Mono", monospace';
-  ctx.fillStyle   = '#7dd3fc'; // sky-blue matching the line colour
-  ctx.textAlign   = 'center';
+  // Row 1 — "GLIDE SLOPE · callsign · angle"
+  ctx.font         = 'bold 24px "Share Tech Mono", monospace';
+  ctx.fillStyle    = '#7dd3fc';
+  ctx.textAlign    = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('GLIDE SLOPE', W / 2, 22);
+  ctx.fillText(`GLIDE SLOPE  ${callsign}  ${angleDeg.toFixed(1)}°`, W / 2, 24);
 
-  // Row 2: callsign + angle
-  ctx.font      = 'bold 34px "Share Tech Mono", monospace';
+  // Divider
+  ctx.strokeStyle = 'rgba(125,211,252,0.20)';
+  ctx.lineWidth   = 1;
+  ctx.beginPath();
+  ctx.moveTo(24, 44); ctx.lineTo(W - 24, 44);
+  ctx.stroke();
+
+  // Row 2 — large ETA countdown
+  ctx.font      = 'bold 80px "Share Tech Mono", monospace';
   ctx.fillStyle = '#ffffff';
-  ctx.fillText(`${callsign}  ${angleDeg.toFixed(1)}°`, W / 2, 62);
+  ctx.fillText(_fmtEta(etaSec), W / 2, 110);
+
+  // Row 3 — "ETA" sub-label
+  ctx.font      = 'bold 16px "Share Tech Mono", monospace';
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.fillText('ETA TO THRESHOLD', W / 2, 148);
 }
 
-function makeGlideSlopeLabel(callsign: string, angleDeg: number): {
+function makeGlideSlopeLabel(callsign: string, angleDeg: number, etaSec: number): {
   sprite: THREE.Sprite;
   mat: THREE.SpriteMaterial;
 } {
-  const W = 512, H = 96;
+  const W = 512, H = 160;
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d')!;
-  _paintGlideSlopeLabel(ctx, callsign, angleDeg);
+  _paintGlideSlopeLabel(ctx, callsign, angleDeg, etaSec);
   const tex = new THREE.CanvasTexture(canvas);
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
   const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(W * 1.6, H * 1.6, 1); // scene-unit scale
+  sprite.scale.set(W * 1.8, H * 1.8, 1);
   sprite.frustumCulled = false;
   return { sprite, mat };
 }
@@ -745,12 +765,13 @@ function refreshGlideSlopeLabel(
   entry: GlideSlopeEntry,
   callsign: string,
   angleDeg: number,
+  etaSec: number,
 ): void {
-  const W = 512, H = 96;
+  const W = 512, H = 160;
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d')!;
-  _paintGlideSlopeLabel(ctx, callsign, angleDeg);
+  _paintGlideSlopeLabel(ctx, callsign, angleDeg, etaSec);
   const oldTex = entry.labelMat.map;
   entry.labelMat.map = new THREE.CanvasTexture(canvas);
   entry.labelMat.needsUpdate = true;
@@ -771,7 +792,7 @@ function createGlideSlopeLine(scene: THREE.Scene): GlideSlopeEntry {
   line.frustumCulled = false;
   scene.add(line);
 
-  const { sprite, mat } = makeGlideSlopeLabel('------', 3.0);
+  const { sprite, mat } = makeGlideSlopeLabel('------', 3.0, 0);
   scene.add(sprite);
 
   return { line, lineMat, label: sprite, labelMat: mat, labelKey: '' };
@@ -1888,23 +1909,31 @@ export default function AirspaceView3D({
           posAttr.needsUpdate = true;
           entry.line.geometry.computeBoundingSphere();
 
-          // Midpoint label — position at halfway between aircraft and threshold
-          const midX = (b.renderPos.x + nearestX) / 2;
-          const midY = b.renderPos.y / 2; // halfway up (threshold is y=0)
-          const midZ = (b.renderPos.z + nearestZ) / 2;
-          entry.label.position.set(midX, midY, midZ);
+          // Label — anchored close to the threshold (12% of the way from
+          // threshold toward the aircraft) so it appears in the airport context.
+          // A small upward offset lifts it just above the glide slope line.
+          const T = 0.12; // 0 = threshold, 1 = aircraft
+          const labelX = nearestX + (b.renderPos.x - nearestX) * T;
+          const labelY = b.renderPos.y * T + 220; // slight lift above line
+          const labelZ = nearestZ + (b.renderPos.z - nearestZ) * T;
+          entry.label.position.set(labelX, labelY, labelZ);
           entry.label.material.opacity = distFrac * GLIDE_PEAK_OPACITY;
 
           // Glide angle: atan(alt_metres / horiz_metres)
-          // scene y = altFt * ALT_SCALE  →  altFt = y / ALT_SCALE
-          const altMetres  = (b.renderPos.y / ALT_SCALE) * 0.3048;
-          const angleDeg   = nearestDist > 10
+          const altMetres = (b.renderPos.y / ALT_SCALE) * 0.3048;
+          const angleDeg  = nearestDist > 10
             ? Math.atan2(altMetres, nearestDist) * (180 / Math.PI)
             : 0;
-          const labelKey = `${b.callsign}|${angleDeg.toFixed(1)}`;
+
+          // ETA to threshold — gsMps is horizontal ground speed in m/s
+          const etaSec = b.gsMps > 1 ? nearestDist / b.gsMps : 0;
+          // Key on callsign + angle (1 dp) + ETA rounded to nearest 5 s to
+          // avoid constant canvas redraws while still ticking visibly
+          const etaBucket = Math.round(etaSec / 5) * 5;
+          const labelKey  = `${b.callsign}|${angleDeg.toFixed(1)}|${etaBucket}`;
           if (entry.labelKey !== labelKey) {
             entry.labelKey = labelKey;
-            refreshGlideSlopeLabel(entry, b.callsign, angleDeg);
+            refreshGlideSlopeLabel(entry, b.callsign, angleDeg, etaSec);
           }
         }
       }
