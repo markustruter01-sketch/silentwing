@@ -19,6 +19,7 @@ import type {
   FlightPhase,
   Unsubscribe,
 } from '../types';
+import { REAL_GATES } from '../data/ybbn_real';
 
 // ── Coordinate origin — YBBN centre ──────────────────────────────────────────
 // All sim coordinates are in metres, origin = YBBN centre, +x east, +y south
@@ -37,14 +38,36 @@ function project(lat: number, lon: number): { x: number; y: number } {
   return { x, y };
 }
 
-// ── Phase heuristic — altitude only ──────────────────────────────────────────
-// Real ADS-B carries no flight-phase field.  Altitude gives a usable proxy.
-// The view uses phase for colour/symbol only; inaccuracies are cosmetic.
-function derivePhase(altFt: number): FlightPhase {
-  if (altFt <    50) return 'taxi-in';          // on the ground
-  if (altFt <   500) return 'landing';           // low-level / final
-  if (altFt < 3_000) return 'approach';          // descending into terminal area
-  return 'enroute-arrival';                      // cruise / high-level
+// ── Phase heuristic ───────────────────────────────────────────────────────────
+// Real ADS-B carries no flight-phase field.  We derive a best-effort phase
+// from altitude, groundspeed, and proximity to known gate positions.
+//
+// Gate proximity:  gs < AT_GATE_GS_KT  AND  within AT_GATE_DIST_M of any gate
+//                  → 'at-gate'.  Otherwise ground aircraft are 'taxi-in'.
+//
+// Coordinate note: REAL_GATES use ybbn_real.ts native frame (+y = north).
+// The adapter uses +y = south (SVG convention), so the gate y must be negated
+// when computing the distance: dy = acY − (−gateY) = acY + gateY.
+
+const AT_GATE_GS_KT  = 2;   // knots  — aircraft considered stationary at gate
+const AT_GATE_DIST_M = 60;  // metres — gate proximity threshold
+
+function derivePhase(altFt: number, gs: number, acX: number, acY: number): FlightPhase {
+  if (altFt < 50) {
+    // On the ground — distinguish at-gate from taxiing
+    if (gs < AT_GATE_GS_KT) {
+      const d2 = AT_GATE_DIST_M * AT_GATE_DIST_M;
+      for (const gate of REAL_GATES) {
+        const dx = acX - gate.pos[0];
+        const dy = acY + gate.pos[1]; // y-axis flip: ybbn_real +y=north ↔ adapter +y=south
+        if (dx * dx + dy * dy <= d2) return 'at-gate';
+      }
+    }
+    return 'taxi-in';
+  }
+  if (altFt <   500) return 'landing';
+  if (altFt < 3_000) return 'approach';
+  return 'enroute-arrival';
 }
 
 // ── Callsign sanitisation ─────────────────────────────────────────────────────
@@ -114,7 +137,7 @@ function normalise(raw: RawAc): (Aircraft & { isGroundVehicle: boolean }) | null
     id:             raw.hex,
     callsign,
     type:           raw.t ?? 'UNKN',
-    phase:          isGroundVehicle ? 'taxi-in' : derivePhase(altFt),
+    phase:          isGroundVehicle ? 'taxi-in' : derivePhase(altFt, Math.round(raw.gs ?? 0), x, y),
     position:       { x, y, alt: altFt },
     heading,
     groundSpeed:    Math.round(raw.gs ?? 0),
@@ -273,12 +296,14 @@ export class AdsbAdapter implements DataFeedAdapter {
       const rawList: RawAc[] = data.ac ?? [];
 
       const aircraft: Aircraft[] = [];
-      let gvCount = 0;
+      let gvCount = 0, anonCount = 0, atGateCount = 0;
 
       for (const raw of rawList) {
         const norm = normalise(raw);
         if (!norm) continue;
-        if (norm.isGroundVehicle) gvCount++;
+        if (norm.isGroundVehicle)    gvCount++;
+        if (norm.callsign === norm.id) anonCount++;  // callsign fell back to hex
+        if (norm.phase === 'at-gate') atGateCount++;
         aircraft.push(norm);
       }
 
@@ -286,7 +311,8 @@ export class AdsbAdapter implements DataFeedAdapter {
 
       console.log(
         `[ADSB] poll ok — raw=${rawList.length} ingested=${aircraft.length}` +
-        ` airborne=${airborne} ground-vehicle=${gvCount}`,
+        ` airborne=${airborne} ground-vehicle=${gvCount}` +
+        ` anonymous=${anonCount} at-gate=${atGateCount}`,
       );
 
       this.latest = {

@@ -23,7 +23,7 @@ export default function App() {
   const [view, setView] = useState<View>('airspace');
 
   // ── Data source toggle ───────────────────────────────────────────────────
-  const [dataSource, setDataSource] = useState<DataSource>('sim');
+  const [dataSource, setDataSource] = useState<DataSource>('live');
 
   // Adapter is (re-)created whenever dataSource changes.
   // useMemo keeps the same instance as long as dataSource is stable.
@@ -95,6 +95,22 @@ export default function App() {
   // ── Predicted paths toggle ───────────────────────────────────────────────
   const [showPredictedPaths, setShowPredictedPaths] = useState(false);
 
+  // ── Display filters (hide from rendering; data is always fully ingested) ──
+  /** Hide category-C2 ground vehicles and TWR stations (default ON). */
+  const [hideGroundVehicles, setHideGroundVehicles] = useState(true);
+  /** Hide contacts whose callsign is just their hex code — no real flight ID. */
+  const [hideAnonymous, setHideAnonymous] = useState(false);
+
+  /** Aircraft that pass the current display filters — passed to both views. */
+  const visibleAircraft = useMemo(() =>
+    snapshot.aircraft.filter(ac => {
+      if (hideGroundVehicles && ac.isGroundVehicle) return false;
+      if (hideAnonymous && ac.callsign === ac.id)   return false;
+      return true;
+    }),
+    [snapshot.aircraft, hideGroundVehicles, hideAnonymous],
+  );
+
   // ── Global keyboard handler ──────────────────────────────────────────────
   // The 3D view handles its own Esc chain internally; we handle 2D Esc here.
   const viewRef = useRef(view);
@@ -156,17 +172,46 @@ export default function App() {
         onDataSourceChange={setDataSource}
       />
       <StatusStrip
-        aircraftCount={snapshot.aircraft.length}
+        aircraftCount={visibleAircraft.length}
         alertCount={activeAlerts.length}
-        groundCount={snapshot.aircraft.filter(ac => !isAirborne(ac)).length}
-        sectorLoad={sectorLoad(snapshot.aircraft.length)}
+        groundCount={visibleAircraft.filter(ac => !isAirborne(ac)).length}
+        sectorLoad={sectorLoad(visibleAircraft.length)}
       />
+
+      {/* ── Display filters ─────────────────────────────────────────────── */}
+      <div className="flex items-center gap-3 px-4 py-[3px] bg-[#060A0F] border-b border-slate-800/30 shrink-0">
+        <span className="text-[8px] tracking-[0.2em] text-slate-600 uppercase select-none">Filters</span>
+        {([
+          ['Hide vehicles',  hideGroundVehicles, setHideGroundVehicles],
+          ['Hide anonymous', hideAnonymous,       setHideAnonymous],
+        ] as [string, boolean, React.Dispatch<React.SetStateAction<boolean>>][]).map(([label, on, set]) => (
+          <button
+            key={label}
+            onClick={() => set(v => !v)}
+            className={[
+              'flex items-center gap-1 px-2 py-[2px] text-[8px] tracking-widest uppercase rounded',
+              'border transition-colors select-none cursor-pointer',
+              on
+                ? 'border-cyan-700/60 text-cyan-400 bg-cyan-900/15'
+                : 'border-slate-700/50 text-slate-500 hover:text-slate-400',
+            ].join(' ')}
+          >
+            <span className={on ? 'text-cyan-500' : 'text-slate-600'}>{on ? '●' : '○'}</span>
+            {label}
+          </button>
+        ))}
+        <span className="ml-auto text-[8px] text-slate-700 tabular-nums select-none">
+          {snapshot.aircraft.length - visibleAircraft.length > 0
+            ? `${snapshot.aircraft.length - visibleAircraft.length} hidden`
+            : ''}
+        </span>
+      </div>
 
       {/* ── Main view area ── */}
       <main className="flex-1 relative overflow-hidden">
         {view === 'airfield' ? (
           <AirfieldView2D
-            aircraft={snapshot.aircraft}
+            aircraft={visibleAircraft}
             selectedAircraftId={selectedAcId}
             onAircraftClick={(id) => {
               console.log(`[APP] 2D aircraft click: ${id}`);
@@ -175,7 +220,7 @@ export default function App() {
           />
         ) : (
           <AirspaceView3D
-            aircraft={snapshot.aircraft}
+            aircraft={visibleAircraft}
             selectedAcId={selectedAcId}
             cameraMode={cameraMode}
             onSelectAircraft={(id) => {

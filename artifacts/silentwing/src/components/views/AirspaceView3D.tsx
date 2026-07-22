@@ -977,6 +977,10 @@ export default function AirspaceView3D({
         const cone = new THREE.Mesh(coneGeo, coneMat);
         cone.position.copy(pos);
         cone.rotation.y = headY;
+        // renderOrder=1 ensures the opaque cone renders AFTER the transparent
+        // trail (renderOrder=0 default), so the aircraft icon is never obscured
+        // by its own trail even when the trail head overlaps the cone position.
+        cone.renderOrder = 1;
         scene.add(cone);
         coneToId.set(cone, ac.id); // register for raycasting
 
