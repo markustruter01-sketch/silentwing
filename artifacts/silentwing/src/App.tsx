@@ -7,7 +7,7 @@ import AircraftDetailPanel from '@/components/panels/AircraftDetailPanel';
 import AlertShell          from '@/components/panels/AlertShell';
 import ControlsHUD from '@/components/ui/ControlsHUD';
 import { getSimAdapter } from '@/sim/engine';
-import { AdsbAdapter } from '@/feed/adsbAdapter';
+import { AdsbAdapter, HEALTH_LAGGING_MS, HEALTH_STALLED_MS } from '@/feed/adsbAdapter';
 import { AlertEngine }  from '@/alerts/engine';
 import type { SWAlert, SWAlertSeverity } from '@/alerts/types';
 import { severityRank } from '@/alerts/types';
@@ -183,6 +183,35 @@ export default function App() {
   const alertEngineRef  = useRef(new AlertEngine());
   const [swAlerts,       setSWAlerts]       = useState<SWAlert[]>([]);
   const [injectConflict, setInjectConflict] = useState(false);
+
+  // ── Feed-health state (polled every 1 s for live countdown) ──────────────
+  const [feedHealth, setFeedHealth] = useState<{
+    status: 'live' | 'lagging' | 'stalled';
+    lastUpdate: number;
+  }>(() => adapter.getFeedHealth());
+
+  // Dev-only: simulate a feed loss so the failsafe can be demonstrated
+  const [simulateFeedLoss,  setSimulateFeedLoss] = useState(false);
+  const simulateFeedLossRef = useRef(false);      // stable ref read inside interval
+  const feedLossStartRef    = useRef<number>(0);  // when the simulated loss began
+
+  useEffect(() => {
+    const tick = () => {
+      if (simulateFeedLossRef.current) {
+        // Compute age from simulated loss start, then derive status from thresholds.
+        const age = Date.now() - feedLossStartRef.current;
+        const status: 'live' | 'lagging' | 'stalled' =
+          age > HEALTH_STALLED_MS ? 'stalled' :
+          age > HEALTH_LAGGING_MS ? 'lagging' : 'live';
+        setFeedHealth({ status, lastUpdate: feedLossStartRef.current });
+      } else {
+        setFeedHealth(adapter.getFeedHealth());
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1_000);
+    return () => clearInterval(id);
+  }, [adapter]);
 
   // Process alerts on every snapshot (and whenever the inject flag changes)
   useEffect(() => {
@@ -421,7 +450,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKey);
   }, [handleKey]);
 
-  const feedHealth    = adapter.getFeedHealth();
   // Legacy adapter alerts (not used in 6A UI — kept for StatusStrip count fallback)
   const _legacyAlerts = adapter.getActiveAlerts();
 
@@ -431,6 +459,7 @@ export default function App() {
         activeView={view}
         onViewChange={setView}
         feedStatus={feedHealth.status}
+        feedLastUpdate={feedHealth.lastUpdate}
         dataSource={dataSource}
         onDataSourceChange={setDataSource}
       />
@@ -504,6 +533,39 @@ export default function App() {
 
       {/* ── Main view area ── */}
       <main className="flex-1 relative overflow-hidden">
+
+        {/* ── FEED-STALLED SAFETY OVERLAY ─────────────────────────────────────
+            Visible ONLY when the data feed has stalled (> STALL_S since last
+            good update).  Must be impossible to miss: red viewport border +
+            prominent banner + aircraft-dimming layer.                        */}
+        {feedHealth.status === 'stalled' && (
+          <>
+            {/* Inset red border around the entire viewport */}
+            <div
+              aria-hidden
+              className="absolute inset-0 pointer-events-none z-[500]"
+              style={{ boxShadow: 'inset 0 0 0 4px rgba(220,38,38,0.9)' }}
+            />
+            {/* Subtle red tint over everything — marks all tracks as unreliable */}
+            <div
+              aria-hidden
+              className="absolute inset-0 pointer-events-none z-[15] bg-red-950/20"
+            />
+            {/* Prominent stale-data banner — impossible to miss */}
+            <div
+              role="alert"
+              className="absolute inset-x-0 top-0 z-[510] flex items-center justify-center
+                         gap-3 py-2.5 px-4 select-none pointer-events-none
+                         bg-red-900/95 backdrop-blur-sm border-b-2 border-red-500/80"
+            >
+              <span className="text-red-200 text-lg leading-none" aria-hidden>⚠</span>
+              <span className="font-mono text-sm font-bold tracking-widest text-red-100 uppercase">
+                DATA STALE — DO NOT USE FOR SEPARATION
+              </span>
+              <span className="text-red-200 text-lg leading-none" aria-hidden>⚠</span>
+            </div>
+          </>
+        )}
         {/* ── Phase 6A alert shell — left edge ── */}
         <AlertShell
           activeAlerts={activeAlerts}
@@ -636,6 +698,33 @@ export default function App() {
             ].join(' ')}
           >
             [DEV] {injectConflict ? '■ Clear conflict' : '▶ Inject conflict'}
+          </button>
+        )}
+
+        {/* ── DEV-ONLY: simulate feed loss ─────────────────────────────────
+            Pauses the effective feed health so lagging → stalled states can
+            be verified on demand without waiting for a real network failure.
+            Toggling OFF immediately restores the true adapter health state.  */}
+        {import.meta.env.DEV && (
+          <button
+            onClick={() => {
+              setSimulateFeedLoss(v => {
+                const next = !v;
+                simulateFeedLossRef.current = next;
+                if (next) feedLossStartRef.current = Date.now();
+                return next;
+              });
+            }}
+            title="DEV SCAFFOLD: Simulate feed loss to demonstrate the lagging / stalled failsafe"
+            className={[
+              'fixed bottom-2 left-52 z-[300] text-[7px] font-mono tracking-widest uppercase',
+              'px-2 py-1 rounded border cursor-pointer transition-colors',
+              simulateFeedLoss
+                ? 'border-amber-500/80 text-amber-300 bg-amber-950/60 hover:bg-amber-950/80'
+                : 'border-slate-700/50 text-slate-600 bg-slate-950/60 hover:text-slate-400',
+            ].join(' ')}
+          >
+            [DEV] {simulateFeedLoss ? '■ Resume feed' : '▶ Simulate feed loss'}
           </button>
         )}
 

@@ -173,8 +173,8 @@ function normalise(raw: RawAc): (Aircraft & { isGroundVehicle: boolean }) | null
 // ── Feed health thresholds ────────────────────────────────────────────────────
 // Same intent as the sim's getFeedHealth() — drives the existing LIVE / LAGGING
 // / STALLED indicator in TopBar without any changes to that component.
-const HEALTH_LAGGING_MS = 10_000;   // > 10 s since last good poll → lagging
-const HEALTH_STALLED_MS = 30_000;   // > 30 s                      → stalled
+export const HEALTH_LAGGING_MS = 12_000;   // > 12 s since last good poll → lagging
+export const HEALTH_STALLED_MS = 25_000;   // > 25 s                      → stalled
 
 // ── ADS-B adapter ─────────────────────────────────────────────────────────────
 

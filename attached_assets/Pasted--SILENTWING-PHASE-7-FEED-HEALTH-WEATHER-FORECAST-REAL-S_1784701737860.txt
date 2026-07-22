@@ -1,0 +1,135 @@
+# SILENTWING — PHASE 7: FEED HEALTH, WEATHER, FORECAST, REAL SECTOR LOAD
+
+**ENVIRONMENT:** Existing SilentWing Replit dev project. This is the final core
+phase. Build in the FOUR PARTS below, IN ORDER, and STOP after each part to
+report before continuing. Part 1 is safety-critical and must be verified before
+moving on. Do NOT bundle parts together.
+
+Works in BOTH Simulation and Live ADS-B modes unless stated.
+
+---
+
+## PART 1 — FEED-HEALTH FAILSAFE (safety-critical — build and verify FIRST)
+
+**Why this matters:** a frozen display that still LOOKS live is the single most
+dangerous failure state in this product. If the data feed stalls, the controller
+must be told loudly and unmistakably — never left staring at stale positions
+believing they're current.
+
+**Build:**
+- The adapter already tracks feed health (live / lagging / stalled) via time
+  since last successful update. Surface it prominently:
+  - **live** (fresh data): small green "LIVE" indicator in the top bar (already
+    exists) — confirm it reflects real feed state, not a hardcoded value.
+  - **lagging** (no update for > LAG_S, default 12 s in live mode / adjust for
+    sim tick): the top-bar indicator turns amber and reads "LAGGING — Ns since
+    update", counting up.
+  - **stalled** (no update for > STALL_S, default 25 s): the ENTIRE viewport
+    gets a red border and a prominent banner across the top of the view reading
+    "⚠ DATA STALE — DO NOT USE FOR SEPARATION". This must be impossible to miss.
+- When stalled, also visually mark ALL aircraft as unreliable (e.g. dim them or
+  overlay a subtle stale pattern) so no single track looks trustworthy.
+- Recovery: when fresh data resumes, clear the banner/border and return to LIVE.
+- Thresholds are named constants.
+
+**Dev test hook:** add a dev-only "simulate feed loss" button (clearly labelled,
+dev-gated like the inject-conflict button) that pauses the feed so the failsafe
+can be demonstrated on demand.
+
+**STOP after Part 1. Report:**
+1. The feed-health state machine code (live/lagging/stalled transitions).
+2. Confirm via the dev feed-loss button: does lagging appear at LAG_S, stalled
+   + red banner at STALL_S, and does it recover on data resume? Raw state trace.
+3. Confirm the green LIVE indicator reflects REAL feed state, not a constant.
+
+---
+
+## PART 2 — REAL SECTOR LOAD (replace the fake placeholder)
+
+**Current state:** sector load is `Math.min(99, count * 11)` — a meaningless
+placeholder that shows red 99% constantly. Replace it with a real metric.
+
+**Build:**
+- Define sector load as a meaningful measure of controller workload in the
+  terminal area, e.g.: count of aircraft WITHIN the terminal area (the same
+  ~15nm/FL150 filter used by the alert detectors) as a percentage of a
+  configurable comfortable-capacity constant (SECTOR_CAPACITY, default e.g. 20
+  aircraft = 100%). Cap display at 100%.
+- Only count terminal-area traffic, NOT the full 50nm feed (parked GA at other
+  fields shouldn't inflate Brisbane's load).
+- Colour: green < 60%, amber 60-85%, red > 85%.
+- State the capacity constant and formula used.
+
+**STOP after Part 2. Report:**
+1. The new sector-load formula.
+2. Confirm on a live snapshot: what does it now read, and how many terminal-area
+   aircraft drove that number?
+
+---
+
+## PART 3 — WEATHER LAYER
+
+**Note on data:** Sim mode already generates simulated weather (wind +
+precipitation cells). Live mode has no weather feed yet. For Part 3, drive the
+weather layer from the SIM's weather in sim mode; in live mode, either show
+"No weather data" OR (if easy) a static placeholder. Do NOT wire a new external
+weather API in this phase — that's future work. State what you did per mode.
+
+**Build:**
+- Render precipitation cells as translucent coloured volumes/polygons in both
+  2D and 3D views, positioned in the scene.
+- Show current wind (direction + speed) somewhere glanceable (e.g. near the
+  top bar or a small wind indicator), and which runway direction is active
+  (sim already computes this).
+- Weather cells must render BENEATH aircraft (aircraft always on top).
+- A toggle to show/hide the weather layer (default on).
+
+**STOP after Part 3. Report:**
+1. What drives weather in sim vs live mode.
+2. Confirm cells render in both 2D and 3D beneath aircraft, and the toggle works.
+
+---
+
+## PART 4 — TRAFFIC FORECAST PANEL
+
+**Populate the "Traffic Forecast" tab placeholder** (currently empty from 6A).
+
+**Build:**
+- Show a simple forecast of terminal-area demand over the near future.
+- In SIM mode: the sim knows its scheduled arrivals/departures — bin them into
+  15-minute buckets over the next ~2 hours and show a small bar chart
+  (arrivals/departures per bin), highlighting any predicted busy period (e.g.
+  the morning-rush pattern the sim generates).
+- In LIVE mode: there is no schedule/flight-plan data, so a true forecast isn't
+  possible. Instead show a short rolling history — terminal-area aircraft count
+  over the last ~30 minutes as a trend line — and label it clearly as
+  "recent trend" NOT "forecast", so it's honest about what it is.
+- Keep it lightweight — a compact chart in the tab panel, not a heavy dashboard.
+
+**STOP after Part 4. Report:**
+1. What the forecast panel shows in sim vs live mode.
+2. Confirm it's clearly labelled (forecast in sim, recent-trend in live) so the
+   live version doesn't imply predictive knowledge it doesn't have.
+
+---
+
+## HARD RULES
+
+1. Build parts IN ORDER, STOP and report after each. Part 1 verified before
+   Part 2.
+2. Part 1 (feed-health failsafe) is safety-critical — the stalled banner must be
+   impossible to miss and must mark all aircraft unreliable.
+3. Do NOT wire a new external weather API in this phase (sim-driven only).
+4. The live traffic-forecast must be labelled "recent trend", never "forecast" —
+   no implying predictive knowledge without flight plans.
+5. Sector load counts terminal-area traffic only, not the full 50nm feed.
+6. Do NOT break existing views, alerts, live ingest, sim/live toggle, or 6A/6B.
+7. Dev-only test buttons (feed-loss) clearly labelled and dev-gated.
+
+---
+
+## FINAL REPORT (after all four parts)
+
+State plainly: with Phase 7 complete, what works end-to-end in v1, and confirm
+the four parked items remain parked (future-scrub, route-deviation, learning
+engine, sick-controller tool) — these are NOT part of this phase.

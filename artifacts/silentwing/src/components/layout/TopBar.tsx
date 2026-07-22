@@ -1,5 +1,4 @@
-import React, { useEffect, useState } from 'react';
-import type { DataSource } from '@/App';
+import React, { useEffect, useState } from 'react';import type { DataSource } from '@/App';
 
 type View = 'airspace' | 'airfield';
 
@@ -7,6 +6,7 @@ interface TopBarProps {
   activeView: View;
   onViewChange: (v: View) => void;
   feedStatus?: 'live' | 'lagging' | 'stalled';
+  feedLastUpdate?: number;
   dataSource: DataSource;
   onDataSourceChange: (s: DataSource) => void;
 }
@@ -32,10 +32,29 @@ function SimClock() {
   );
 }
 
-function FeedHealthIndicator({ status }: { status: 'live' | 'lagging' | 'stalled' }) {
+function FeedHealthIndicator({
+  status,
+  lastUpdate,
+}: {
+  status: 'live' | 'lagging' | 'stalled';
+  lastUpdate: number;
+}) {
+  // Live countdown — shown when lagging so the controller can see how stale the data is
+  const [ageSec, setAgeSec] = useState(() =>
+    lastUpdate > 0 ? Math.round((Date.now() - lastUpdate) / 1000) : 0,
+  );
+  useEffect(() => {
+    if (status !== 'lagging') return;
+    const id = setInterval(
+      () => setAgeSec(Math.round((Date.now() - lastUpdate) / 1000)),
+      1000,
+    );
+    return () => clearInterval(id);
+  }, [status, lastUpdate]);
+
   const config = {
     live:    { dot: 'bg-emerald-400', text: 'text-emerald-400', label: 'LIVE' },
-    lagging: { dot: 'bg-amber-400',   text: 'text-amber-400',   label: 'LAGGING' },
+    lagging: { dot: 'bg-amber-400',   text: 'text-amber-400',   label: `LAGGING — ${ageSec}s since update` },
     stalled: { dot: 'bg-red-500',     text: 'text-red-500',     label: 'STALLED' },
   }[status];
 
@@ -95,6 +114,7 @@ const TopBar: React.FC<TopBarProps> = ({
   activeView,
   onViewChange,
   feedStatus = 'live',
+  feedLastUpdate = 0,
   dataSource,
   onDataSourceChange,
 }) => {
@@ -145,7 +165,7 @@ const TopBar: React.FC<TopBarProps> = ({
         {/* Data source — the architectural proof toggle */}
         <DataSourceToggle value={dataSource} onChange={onDataSourceChange} />
         <div className="w-px h-4 bg-slate-800" />
-        <FeedHealthIndicator status={feedStatus} />
+        <FeedHealthIndicator status={feedStatus} lastUpdate={feedLastUpdate} />
         <div className="w-px h-4 bg-slate-800" />
         <SimClock />
         {/* Settings gear (placeholder for Phase 7) */}
