@@ -589,6 +589,81 @@ function buildWindIndicator(windDir: number, windSpeed: number): THREE.Group {
   return g;
 }
 
+// ── Approach / landing indicator (diagonal line + sign) ──────────────────────
+// One indicator per aircraft in the 'approach' or 'landing' phase.
+// The line descends forward along the aircraft's heading, evoking a glide
+// slope; the sprite sign at the lower end always faces the camera.
+
+const APPROACH_LINE_DROP    = 300; // scene units below the aircraft
+const APPROACH_LINE_FORWARD = 450; // scene units ahead along heading
+
+function makeApproachSign(phase: 'approach' | 'landing'): THREE.Sprite {
+  const W = 320, H = 80;
+  const cv  = document.createElement('canvas');
+  cv.width  = W; cv.height = H;
+  const ctx = cv.getContext('2d')!;
+  ctx.clearRect(0, 0, W, H);
+  // Dark pill background
+  ctx.fillStyle = 'rgba(4,8,20,0.88)';
+  ctx.beginPath();
+  (ctx as CanvasRenderingContext2D & { roundRect: (...a: unknown[]) => void })
+    .roundRect(4, 4, W - 8, H - 8, 8);
+  ctx.fill();
+  // Accent border — sky blue for approach, softer blue for landing
+  const borderHex = phase === 'approach' ? '#38BDF8' : '#60A5FA';
+  const textHex   = phase === 'approach' ? '#7dd3fc' : '#93c5fd';
+  ctx.strokeStyle = borderHex;
+  ctx.lineWidth   = 2.5;
+  ctx.stroke();
+  // Label text
+  ctx.font         = 'bold 26px "JetBrains Mono","Courier New",monospace';
+  ctx.fillStyle    = textHex;
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(phase === 'approach' ? 'APPROACH' : 'LANDING', W / 2, H / 2);
+  const tex = new THREE.CanvasTexture(cv);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+  const sp  = new THREE.Sprite(mat);
+  sp.scale.set(480, 120, 1);
+  return sp;
+}
+
+interface ApproachIndicatorEntry {
+  line:    THREE.Line;
+  sign:    THREE.Sprite;
+  lineMat: THREE.LineBasicMaterial;
+  /** Phase this entry was created for — used to detect approach↔landing transitions. */
+  phase:   'approach' | 'landing';
+}
+
+function createApproachIndicator(scene: THREE.Scene, phase: 'approach' | 'landing'): ApproachIndicatorEntry {
+  const posArr = new Float32Array(6); // top xyz + bottom-forward xyz (updated each frame)
+  const lineGeo = new THREE.BufferGeometry();
+  lineGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+  const lineColor = phase === 'approach' ? 0x38BDF8 : 0x60A5FA;
+  const lineMat = new THREE.LineBasicMaterial({
+    color: lineColor, transparent: true, opacity: 0.65, depthWrite: false,
+  });
+  const line = new THREE.Line(lineGeo, lineMat);
+  line.frustumCulled = false;
+  scene.add(line);
+
+  const sign = makeApproachSign(phase);
+  sign.frustumCulled = false;
+  scene.add(sign);
+
+  return { line, sign, lineMat, phase };
+}
+
+function disposeApproachIndicator(entry: ApproachIndicatorEntry, scene: THREE.Scene): void {
+  scene.remove(entry.line, entry.sign);
+  entry.line.geometry.dispose();
+  entry.lineMat.dispose();
+  const sm = entry.sign.material as THREE.SpriteMaterial;
+  sm.map?.dispose();
+  sm.dispose();
+}
+
 // ── Takeoff indicator (vertical line + "TAKE OFF" sign) ──────────────────────
 // One indicator per aircraft in the 'takeoff' phase.  The line rises from the
 // aircraft's render position; the sprite sign at the top always faces the
@@ -768,6 +843,8 @@ interface SceneState {
   labelMap: Map<string, AlertLabelEntry>;
   /** Aircraft ID → takeoff vertical-line + sign indicator. */
   takeoffMap: Map<string, TakeoffIndicatorEntry>;
+  /** Aircraft ID → approach/landing diagonal-line + sign indicator. */
+  approachMap: Map<string, ApproachIndicatorEntry>;
 
   // ── Alert focus interrupt (Task #16) ───────────────────────────────────
   /** The active critical alert ID being focused on, or null. Synced from prop. */
@@ -1118,6 +1195,7 @@ export default function AirspaceView3D({
       alertFocusDone:       null,
       alertInterrupt:       null,
       takeoffMap:           new Map(),
+      approachMap:          new Map(),
     };
     sceneRef.current = st;
 
@@ -1624,6 +1702,29 @@ export default function AirspaceView3D({
         }
       }
 
+      // ── Approach / landing indicator update ───────────────────────────────
+      // Diagonal line forward-and-down along the aircraft's heading, evoking
+      // a glide slope descent.  Sign sits at the lower end of the line.
+      {
+        for (const [acId, entry] of st.approachMap) {
+          const b = st.acMap.get(acId);
+          if (!b) continue;
+          const rx = b.renderPos.x, ry = b.renderPos.y, rz = b.renderPos.z;
+          // Forward direction in scene space (heading 0=north=-Z, 90=east=+X)
+          const hRad = b.headingDeg * Math.PI / 180;
+          const endX = rx + Math.sin(hRad) * APPROACH_LINE_FORWARD;
+          const endY = Math.max(0, ry - APPROACH_LINE_DROP);
+          const endZ = rz - Math.cos(hRad) * APPROACH_LINE_FORWARD;
+          const posAttr = entry.line.geometry.attributes.position as THREE.BufferAttribute;
+          const arr = posAttr.array as Float32Array;
+          arr[0] = rx;  arr[1] = ry;  arr[2] = rz;
+          arr[3] = endX; arr[4] = endY; arr[5] = endZ;
+          posAttr.needsUpdate = true;
+          entry.line.geometry.computeBoundingSphere();
+          entry.sign.position.set(endX, endY - 90, endZ);
+        }
+      }
+
       renderer.render(scene, camera);
     };
     tick();
@@ -1912,6 +2013,8 @@ export default function AirspaceView3D({
       st.labelMap.clear();
       st.takeoffMap.forEach(entry => disposeTakeoffIndicator(entry, scene));
       st.takeoffMap.clear();
+      st.approachMap.forEach(entry => disposeApproachIndicator(entry, scene));
+      st.approachMap.clear();
       renderer.dispose();
       if (renderer.domElement.parentNode === el) el.removeChild(renderer.domElement);
       sceneRef.current = null;
@@ -2200,6 +2303,30 @@ export default function AirspaceView3D({
       }
     }
 
+    // ── Sync approach / landing indicators ────────────────────────────────────
+    // Create an indicator when phase enters 'approach' or 'landing'; dispose
+    // and recreate when phase transitions between the two (sign text/colour
+    // differs); dispose the moment the phase leaves both inbound phases.
+    for (const ac of aircraft) {
+      if (ac.phase === 'approach' || ac.phase === 'landing') {
+        const existing = st.approachMap.get(ac.id);
+        if (existing && existing.phase !== ac.phase) {
+          // Phase flipped between approach ↔ landing — recreate for correct sign.
+          disposeApproachIndicator(existing, scene);
+          st.approachMap.delete(ac.id);
+        }
+        if (!st.approachMap.has(ac.id)) {
+          st.approachMap.set(ac.id, createApproachIndicator(scene, ac.phase));
+        }
+      } else {
+        const entry = st.approachMap.get(ac.id);
+        if (entry) {
+          disposeApproachIndicator(entry, scene);
+          st.approachMap.delete(ac.id);
+        }
+      }
+    }
+
     // Remove aircraft that left the snapshot
     for (const [id, b] of acMap) {
       if (!seen.has(id)) {
@@ -2210,6 +2337,9 @@ export default function AirspaceView3D({
         // Clean up any takeoff indicator for the despawned aircraft
         const ti = st.takeoffMap.get(id);
         if (ti) { disposeTakeoffIndicator(ti, scene); st.takeoffMap.delete(id); }
+        // Clean up any approach/landing indicator for the despawned aircraft
+        const ai = st.approachMap.get(id);
+        if (ai) { disposeApproachIndicator(ai, scene); st.approachMap.delete(id); }
       }
     }
   }, [aircraft]);
