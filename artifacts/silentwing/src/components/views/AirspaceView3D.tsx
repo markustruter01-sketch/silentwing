@@ -1169,24 +1169,55 @@ interface AcBundle {
 }
 
 function disposeBundle(b: AcBundle): void {
-  b.cone.geometry.dispose(); (b.cone.material as THREE.Material).dispose();
-  b.stem.geometry.dispose();
-  b.trail.geometry.dispose(); (b.trail.material as THREE.Material).dispose();
+  // cone: CONE_GEO is shared — only dispose per-aircraft material
+  (b.cone.material as THREE.Material).dispose();
+  b.stem.geometry.dispose(); // per-aircraft (two endpoint positions vary)
+  b.trail.geometry.dispose(); (b.trail.material as THREE.Material).dispose(); // per-aircraft clone
   const sm = b.label.material as THREE.SpriteMaterial;
   sm.map?.dispose(); sm.dispose();
-  // HMR guard — bundles created before this field existed won't have halo/leaderLine/pinRing
-  if (b.halo)    { b.halo.geometry.dispose();    (b.halo.material    as THREE.Material).dispose(); }
-  if (b.pinRing) { b.pinRing.geometry.dispose(); (b.pinRing.material as THREE.Material).dispose(); }
+  // halo / pinRing: HALO_GEO, PIN_RING_GEO, HALO_MAT, PIN_RING_MAT are all shared —
+  // do NOT dispose geometry or material (the Mesh itself is removed from scene via scene.remove)
   if (b.leaderLine) { b.leaderLine.geometry.dispose(); b.leaderLineMat?.dispose(); }
-  // Task 33 additions
-  if (b.velVec)    { b.velVec.geometry.dispose(); b.velVecMat?.dispose(); }
-  if (b.sepBubble) { b.sepBubble.geometry.dispose(); b.sepBubbleMat?.dispose(); }
-  if (b.wakeL)     { b.wakeL.geometry.dispose(); b.wakeLMat?.dispose(); }
-  if (b.wakeR)     { b.wakeR.geometry.dispose(); b.wakeRMat?.dispose(); }
+  if (b.velVec)     { b.velVec.geometry.dispose(); b.velVecMat?.dispose(); }
+  // sepBubble: SEP_BUBBLE_GEO is shared — only dispose per-aircraft material
+  if (b.sepBubble)  { b.sepBubbleMat?.dispose(); }
+  // wake ribbons: per-aircraft geometry + cloned material
+  if (b.wakeL)      { b.wakeL.geometry.dispose(); b.wakeLMat?.dispose(); }
+  if (b.wakeR)      { b.wakeR.geometry.dispose(); b.wakeRMat?.dispose(); }
 }
 
 // Shared stem material — one instance, never disposed here
 const STEM_MAT = new THREE.LineBasicMaterial({ color: 0x334155, transparent: true, opacity: 0.50 });
+
+// ── Shared geometries — one instance referenced by many Mesh/Line objects ─────
+// Never call .dispose() on these in per-aircraft teardown.
+const CONE_GEO       = (() => { const g = new THREE.ConeGeometry(27.5, 85, 4, 1); g.rotateX(-Math.PI / 2); return g; })();
+const HALO_GEO       = new THREE.TorusGeometry(70, 7, 8, 64);
+const PIN_RING_GEO   = new THREE.TorusGeometry(110, 5, 8, 64);
+const SEP_BUBBLE_GEO = new THREE.SphereGeometry(SEP_BUBBLE_R, 16, 12);
+
+// ── Shared materials — per-aircraft objects reference (not own) these ─────────
+// Never dispose these in per-aircraft teardown.
+const HALO_MAT     = new THREE.MeshBasicMaterial({ color: 0xa855f7, transparent: true, opacity: 0.50, depthWrite: false });
+const PIN_RING_MAT = new THREE.MeshBasicMaterial({ color: 0x06b6d4, transparent: true, opacity: 0.70, depthWrite: false });
+
+// ── Trail / wake ShaderMaterial templates ─────────────────────────────────────
+// Each aircraft calls .clone() so it gets its own uniforms.color value without
+// recompiling the GL shader program (Three.js clone() reuses the compiled program).
+const TRAIL_MAT_TEMPLATE = new THREE.ShaderMaterial({
+  uniforms:       { color: { value: new THREE.Color(0xffffff) } },
+  vertexShader:   TRAIL_VERTEX_SHADER,
+  fragmentShader: TRAIL_FRAGMENT_SHADER,
+  transparent:    true,
+  depthWrite:     false,
+});
+const WAKE_MAT_TEMPLATE = new THREE.ShaderMaterial({
+  uniforms:       { color: { value: new THREE.Color(0xFF8C00) } }, // amber
+  vertexShader:   TRAIL_VERTEX_SHADER,
+  fragmentShader: TRAIL_FRAGMENT_SHADER,
+  transparent:    true,
+  depthWrite:     false,
+});
 
 // ── Mutable scene state (lives in sceneRef, never in React state) ─────────────
 interface SceneState {
@@ -1267,6 +1298,10 @@ interface SceneState {
   alertFocusDone: (() => void) | null;
   /** Self-contained director camera state machine. */
   dir: DirState;
+  /** Aircraft IDs queued for deferred spawn; drained ≤ SPAWN_PER_FRAME per rAF tick. */
+  spawnQueue:    string[];
+  /** Fast membership check — prevents re-queuing across back-to-back polls. */
+  spawnQueueIds: Set<string>;
 }
 
 // ── Director camera state machine ─────────────────────────────────────────────
@@ -1550,6 +1585,182 @@ export interface AirspaceView3DProps {
   showPaths?: boolean;
 }
 
+// ── Deferred aircraft spawn ───────────────────────────────────────────────────
+// Maximum aircraft spawned per rAF frame when draining the queue.
+const SPAWN_PER_FRAME = 4;
+
+/**
+ * Create all Three.js objects for one aircraft and register them in st.acMap.
+ * Called from the rAF drain loop rather than inline in the data-sync effect,
+ * so large batches are spread across frames and never block the main thread.
+ */
+function spawnAircraft(st: SceneState, ac: Aircraft, nowMs: number): void {
+  const { scene, acMap, coneToId } = st;
+  const pos   = toV3(ac.position.x, ac.position.y, ac.position.alt);
+  const hex   = phaseHex(ac.phase);
+  const headY = -(ac.heading * Math.PI) / 180;
+
+  // Cone — shared geometry reused by every aircraft; per-aircraft MeshLambertMaterial
+  const coneMat = new THREE.MeshLambertMaterial({
+    color: hex, emissive: hex, emissiveIntensity: 0.30,
+  });
+  const cone = new THREE.Mesh(CONE_GEO, coneMat);
+  cone.position.copy(pos);
+  cone.rotation.y = headY;
+  // renderOrder=1 ensures the opaque cone renders AFTER the transparent trail.
+  cone.renderOrder = 1;
+  scene.add(cone);
+  coneToId.set(cone, ac.id);
+
+  // Halo / pin ring — shared geometry AND shared material; only the Mesh is per-aircraft
+  const halo = new THREE.Mesh(HALO_GEO, HALO_MAT);
+  halo.rotation.x = Math.PI / 2;
+  halo.renderOrder = 3;
+  halo.visible = false;
+  scene.add(halo);
+
+  const pinRing = new THREE.Mesh(PIN_RING_GEO, PIN_RING_MAT);
+  pinRing.rotation.x = Math.PI / 2;
+  pinRing.renderOrder = 4;
+  pinRing.visible = false;
+  scene.add(pinRing);
+
+  // Stem — two endpoint positions vary per aircraft → per-aircraft geometry
+  const stemGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(pos.x, 0, pos.z),
+    new THREE.Vector3(pos.x, pos.y, pos.z),
+  ]);
+  const stem = new THREE.Line(stemGeo, STEM_MAT);
+  scene.add(stem);
+
+  // Trail — per-aircraft geometry + cloned ShaderMaterial.
+  // .clone() reuses the compiled GL program — no per-aircraft GLSL recompile.
+  const trailPosArr   = new Float32Array(TRAIL_MAX * 3);
+  trailPosArr[0] = pos.x; trailPosArr[1] = pos.y; trailPosArr[2] = pos.z;
+  trailPosArr[3] = pos.x; trailPosArr[4] = pos.y; trailPosArr[5] = pos.z;
+  const trailAlphaArr = new Float32Array(TRAIL_MAX);
+  trailAlphaArr[0] = trailAlphaArr[1] = TRAIL_OPACITY;
+  const trailGeo = new THREE.BufferGeometry();
+  trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPosArr, 3));
+  trailGeo.setAttribute('alpha',    new THREE.BufferAttribute(trailAlphaArr, 1));
+  trailGeo.setDrawRange(0, 2);
+  const trailMat = TRAIL_MAT_TEMPLATE.clone();
+  trailMat.uniforms.color.value = new THREE.Color(hex);
+  const trail = new THREE.Line(trailGeo, trailMat);
+  scene.add(trail);
+
+  const label = makeAcLabel(ac.callsign, ac.heading, ac.phase);
+  label.position.set(pos.x, pos.y + LABEL_LIFT, pos.z);
+  // Freshly spawned aircraft always have fresh data — full opacity
+  (label.material as THREE.SpriteMaterial).opacity = 1.0;
+  scene.add(label);
+
+  // Leader line — thin connector from displaced label to cone
+  const leaderGeo = new THREE.BufferGeometry();
+  leaderGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+  const leaderLineMat = new THREE.LineBasicMaterial({
+    color: 0x64748b, transparent: true, opacity: 0.50, depthWrite: false,
+  });
+  const leaderLine = new THREE.Line(leaderGeo, leaderLineMat);
+  leaderLine.frustumCulled = false;
+  leaderLine.visible = false;
+  scene.add(leaderLine);
+
+  const trailBuf: { pos: THREE.Vector3; t: number }[] = [
+    { pos: pos.clone(), t: nowMs },
+    { pos: pos.clone(), t: nowMs },
+  ];
+  // Age-compensate the initial fix so extrapolation starts from the present
+  // position, not a seen_pos-seconds-old raw fix.
+  const spawnCanExtrap = (ac.seenPos ?? 0) < STALE_EXTRAP_S && ac.groundSpeed >= GS_EXTRAP_MIN_KT;
+  const spawnGsMps  = spawnCanExtrap ? ac.groundSpeed * KT_TO_MPS : 0;
+  const spawnVyPerS = ((ac.verticalRate ?? 0) / 60) * ALT_SCALE;
+  const spawnPos    = spawnCanExtrap
+    ? (() => {
+        const ageS = ac.seenPos ?? 0;
+        const hRad = ac.heading * Math.PI / 180;
+        return new THREE.Vector3(
+          pos.x + spawnGsMps * Math.sin(hRad) * ageS,
+          Math.max(0, pos.y + spawnVyPerS * ageS),
+          pos.z - spawnGsMps * Math.cos(hRad) * ageS,
+        );
+      })()
+    : pos.clone();
+
+  // Velocity vector
+  const velVecGeo = new THREE.BufferGeometry();
+  velVecGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+  const velVecMat = new THREE.LineBasicMaterial({
+    color: hex, transparent: true, opacity: 0.50, depthWrite: false,
+  });
+  const velVec = new THREE.Line(velVecGeo, velVecMat);
+  velVec.frustumCulled = false;
+  velVec.visible = false;
+  scene.add(velVec);
+
+  // Separation bubble — shared geometry, per-aircraft material (color mutated per-frame)
+  const sepBubbleMat = new THREE.MeshBasicMaterial({
+    color:       0x8899bb,
+    transparent: true,
+    opacity:     0.03,
+    depthWrite:  false,
+    side:        THREE.BackSide,
+  });
+  const sepBubble = new THREE.Mesh(SEP_BUBBLE_GEO, sepBubbleMat);
+  sepBubble.frustumCulled = false;
+  sepBubble.visible = false;
+  scene.add(sepBubble);
+
+  // Wake turbulence ribbon — Heavy aircraft only; cloned ShaderMaterials
+  const spawnIsHeavy    = wakeCategory(ac.type) === 'H';
+  const spawnIsAirborne = isAirborne(ac);
+  let wakeL: THREE.Line | null = null;
+  let wakeR: THREE.Line | null = null;
+  let wakeLMat: THREE.ShaderMaterial | null = null;
+  let wakeRMat: THREE.ShaderMaterial | null = null;
+  if (spawnIsHeavy) {
+    const makeWake = () => {
+      const wGeo = new THREE.BufferGeometry();
+      wGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL_MAX * 3), 3));
+      wGeo.setAttribute('alpha',    new THREE.BufferAttribute(new Float32Array(TRAIL_MAX),     1));
+      wGeo.setDrawRange(0, 0);
+      const wMat = WAKE_MAT_TEMPLATE.clone(); // reuses compiled GL program
+      const wLine = new THREE.Line(wGeo, wMat);
+      wLine.frustumCulled = false;
+      wLine.visible = false;
+      scene.add(wLine);
+      return { line: wLine, mat: wMat };
+    };
+    const wL = makeWake(); const wR = makeWake();
+    wakeL = wL.line; wakeLMat = wL.mat;
+    wakeR = wR.line; wakeRMat = wR.mat;
+  }
+
+  acMap.set(ac.id, {
+    cone, stem, trail, label, trailBuf, halo, pinRing,
+    leaderLine, leaderLineMat,
+    velVec, velVecMat,
+    sepBubble, sepBubbleMat,
+    wakeL, wakeR, wakeLMat, wakeRMat,
+    renderPos:       spawnPos.clone(),
+    lastKnownPos:    spawnPos.clone(),
+    lastKnownTimeMs: nowMs,
+    headingDeg:      ac.heading,
+    gsMps:           spawnGsMps,
+    vyPerS:          spawnVyPerS,
+    seenPos:         ac.seenPos ?? 0,
+    corrFromPos:     spawnPos.clone(),
+    corrStartMs:     -1,
+    callsign:        ac.callsign,
+    labelPhase:      ac.phase,
+    labelHeadingDeg: ac.heading,
+    phase:           ac.phase,
+    isGroundVehicle: ac.isGroundVehicle ?? false,
+    isHeavy:         spawnIsHeavy,
+    isAirborne:      spawnIsAirborne,
+  });
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function AirspaceView3D({
   aircraft,
@@ -1828,6 +2039,8 @@ export default function AirspaceView3D({
       showPaths:            false,
       taxiRingMap:          new Map(),
       pinnedAcIds:          new Set(),
+      spawnQueue:           [],
+      spawnQueueIds:        new Set(),
     };
     sceneRef.current = st;
 
@@ -1851,6 +2064,19 @@ export default function AirspaceView3D({
     const tick = () => {
       st.animId = requestAnimationFrame(tick);
       const nowMs = performance.now();
+
+      // ── Deferred spawn queue — drain ≤ SPAWN_PER_FRAME aircraft per tick ──
+      {
+        let n = 0;
+        while (st.spawnQueue.length > 0 && n < SPAWN_PER_FRAME) {
+          const id = st.spawnQueue.shift()!;
+          st.spawnQueueIds.delete(id);
+          const ac = st.latestAircraftMap.get(id);
+          if (!ac || st.acMap.has(id)) continue; // left before spawn, or already present
+          spawnAircraft(st, ac, nowMs);
+          n++;
+        }
+      }
 
       // ── Director state machine — takes over when active and in orbit ────────
       if (st.directorMode && st.cameraMode === 'orbit') {
@@ -3042,198 +3268,13 @@ export default function AirspaceView3D({
       const headY      = -(ac.heading * Math.PI) / 180;
       const isSelected = ac.id === st.selectedAcId;
 
-      if (!acMap.has(ac.id)) {
-        // ── Spawn ──────────────────────────────────────────────────────────
-
-        const coneGeo = new THREE.ConeGeometry(27.5, 85, 4, 1);
-        coneGeo.rotateX(-Math.PI / 2); // apex faces −Z (north)
-        const coneMat = new THREE.MeshLambertMaterial({
-          color: hex, emissive: hex, emissiveIntensity: 0.30,
-        });
-        const cone = new THREE.Mesh(coneGeo, coneMat);
-        cone.position.copy(pos);
-        cone.rotation.y = headY;
-        // renderOrder=1 ensures the opaque cone renders AFTER the transparent
-        // trail (renderOrder=0 default), so the aircraft icon is never obscured
-        // by its own trail even when the trail head overlaps the cone position.
-        cone.renderOrder = 1;
-        scene.add(cone);
-        coneToId.set(cone, ac.id); // register for raycasting
-
-        // Purple selection halo — flat torus ring, hidden until director selects
-        const haloGeo = new THREE.TorusGeometry(70, 7, 8, 64);
-        const haloMat = new THREE.MeshBasicMaterial({
-          color: 0xa855f7, transparent: true, opacity: 0.50, depthWrite: false,
-        });
-        const halo = new THREE.Mesh(haloGeo, haloMat);
-        halo.rotation.x = Math.PI / 2; // lay flat (horizontal ring)
-        halo.renderOrder = 3;
-        halo.visible = false;
-        scene.add(halo);
-
-        // Cyan pin ring — larger torus, counter-rotating, shown when aircraft is pinned
-        const pinRingGeo = new THREE.TorusGeometry(110, 5, 8, 64);
-        const pinRingMat = new THREE.MeshBasicMaterial({
-          color: 0x06b6d4, transparent: true, opacity: 0.70, depthWrite: false,
-        });
-        const pinRing = new THREE.Mesh(pinRingGeo, pinRingMat);
-        pinRing.rotation.x = Math.PI / 2; // lay flat
-        pinRing.renderOrder = 4;
-        pinRing.visible = false;
-        scene.add(pinRing);
-
-        const stemGeo = new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(pos.x, 0, pos.z),
-          new THREE.Vector3(pos.x, pos.y, pos.z),
-        ]);
-        const stem = new THREE.Line(stemGeo, STEM_MAT);
-        scene.add(stem);
-
-        // Pre-allocated trail buffer (no per-tick realloc).
-        // Each vertex has a position (xyz) and a per-vertex alpha float so the
-        // rAF loop can fade the trail from opaque (nearest plane) to transparent
-        // (TRAIL_FADE_S seconds behind) without a custom geometry rebuild.
-        const trailPosArr   = new Float32Array(TRAIL_MAX * 3);
-        trailPosArr[0] = pos.x; trailPosArr[1] = pos.y; trailPosArr[2] = pos.z;
-        trailPosArr[3] = pos.x; trailPosArr[4] = pos.y; trailPosArr[5] = pos.z;
-        const trailAlphaArr = new Float32Array(TRAIL_MAX);
-        trailAlphaArr[0] = trailAlphaArr[1] = TRAIL_OPACITY;
-        const trailGeo = new THREE.BufferGeometry();
-        trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPosArr, 3));
-        trailGeo.setAttribute('alpha',    new THREE.BufferAttribute(trailAlphaArr, 1));
-        trailGeo.setDrawRange(0, 2);
-        // ShaderMaterial: per-vertex alpha encodes fade along the trail length.
-        const trailMat = new THREE.ShaderMaterial({
-          uniforms:       { color: { value: new THREE.Color(hex) } },
-          vertexShader:   TRAIL_VERTEX_SHADER,
-          fragmentShader: TRAIL_FRAGMENT_SHADER,
-          transparent:    true,
-          depthWrite:     false,
-        });
-        const trail = new THREE.Line(trailGeo, trailMat);
-        scene.add(trail);
-
-        const label = makeAcLabel(ac.callsign, ac.heading, ac.phase);
-        label.position.set(pos.x, pos.y + LABEL_LIFT, pos.z);
-        // Freshly spawned aircraft always have fresh data — full opacity
-        (label.material as THREE.SpriteMaterial).opacity = 1.0;
-        scene.add(label);
-
-        // Leader line — thin connector from displaced label to aircraft cone.
-        // Hidden by default; the deconfliction pass makes it visible only when
-        // the label has been pushed away to resolve an overlap.
-        const leaderGeo = new THREE.BufferGeometry();
-        leaderGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-        const leaderLineMat = new THREE.LineBasicMaterial({
-          color: 0x64748b, transparent: true, opacity: 0.50, depthWrite: false,
-        });
-        const leaderLine = new THREE.Line(leaderGeo, leaderLineMat);
-        leaderLine.frustumCulled = false;
-        leaderLine.visible = false;
-        scene.add(leaderLine);
-
-        const trailBuf: { pos: THREE.Vector3; t: number }[] = [
-          { pos: pos.clone(), t: nowMs },
-          { pos: pos.clone(), t: nowMs },
-        ];
-        // Spawn: age-compensate the initial fix so extrapolation starts from
-        // the present position, not a seen_pos-seconds-old raw fix.
-        const spawnCanExtrap = (ac.seenPos ?? 0) < STALE_EXTRAP_S && ac.groundSpeed >= GS_EXTRAP_MIN_KT;
-        const spawnGsMps  = spawnCanExtrap ? ac.groundSpeed * KT_TO_MPS : 0;
-        const spawnVyPerS = ((ac.verticalRate ?? 0) / 60) * ALT_SCALE;
-        const spawnPos    = spawnCanExtrap
-          ? (() => {
-              const ageS = ac.seenPos ?? 0;
-              const hRad = ac.heading * Math.PI / 180;
-              return new THREE.Vector3(
-                pos.x + spawnGsMps * Math.sin(hRad) * ageS,
-                Math.max(0, pos.y + spawnVyPerS * ageS),
-                pos.z - spawnGsMps * Math.cos(hRad) * ageS,
-              );
-            })()
-          : pos.clone();
-
-        // ── Task 33: Velocity vector ────────────────────────────────────────
-        const velVecGeo = new THREE.BufferGeometry();
-        velVecGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-        const velVecMat = new THREE.LineBasicMaterial({
-          color: hex, transparent: true, opacity: 0.50, depthWrite: false,
-        });
-        const velVec = new THREE.Line(velVecGeo, velVecMat);
-        velVec.frustumCulled = false;
-        velVec.visible = false;
-        scene.add(velVec);
-
-        // ── Task 33: Separation bubble ──────────────────────────────────────
-        const sepBubbleGeo = new THREE.SphereGeometry(SEP_BUBBLE_R, 16, 12);
-        const sepBubbleMat = new THREE.MeshBasicMaterial({
-          color:       0x8899bb,
-          transparent: true,
-          opacity:     0.03,
-          depthWrite:  false,
-          side:        THREE.BackSide, // visible from both inside and outside
-        });
-        const sepBubble = new THREE.Mesh(sepBubbleGeo, sepBubbleMat);
-        sepBubble.frustumCulled = false;
-        sepBubble.visible = false;
-        scene.add(sepBubble);
-
-        // ── Task 33: Wake turbulence ribbon (Heavy aircraft only) ───────────
-        const spawnIsHeavy  = wakeCategory(ac.type) === 'H';
-        const spawnIsAirborne = isAirborne(ac);
-        let wakeL: THREE.Line | null = null;
-        let wakeR: THREE.Line | null = null;
-        let wakeLMat: THREE.ShaderMaterial | null = null;
-        let wakeRMat: THREE.ShaderMaterial | null = null;
-        if (spawnIsHeavy) {
-          const makeWake = () => {
-            const wGeo = new THREE.BufferGeometry();
-            wGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL_MAX * 3), 3));
-            wGeo.setAttribute('alpha',    new THREE.BufferAttribute(new Float32Array(TRAIL_MAX),     1));
-            wGeo.setDrawRange(0, 0);
-            const wMat = new THREE.ShaderMaterial({
-              uniforms:       { color: { value: new THREE.Color(0xFF8C00) } }, // amber
-              vertexShader:   TRAIL_VERTEX_SHADER,
-              fragmentShader: TRAIL_FRAGMENT_SHADER,
-              transparent:    true,
-              depthWrite:     false,
-            });
-            const wLine = new THREE.Line(wGeo, wMat);
-            wLine.frustumCulled = false;
-            wLine.visible = false;
-            scene.add(wLine);
-            return { line: wLine, mat: wMat };
-          };
-          const wL = makeWake(); const wR = makeWake();
-          wakeL = wL.line; wakeLMat = wL.mat;
-          wakeR = wR.line; wakeRMat = wR.mat;
-        }
-
-        acMap.set(ac.id, {
-          cone, stem, trail, label, trailBuf, halo, pinRing,
-          leaderLine, leaderLineMat,
-          velVec, velVecMat,
-          sepBubble, sepBubbleMat,
-          wakeL, wakeR, wakeLMat, wakeRMat,
-          renderPos:       spawnPos.clone(),
-          lastKnownPos:    spawnPos.clone(),
-          lastKnownTimeMs: nowMs,
-          headingDeg:      ac.heading,
-          gsMps:           spawnGsMps,
-          vyPerS:          spawnVyPerS,
-          seenPos:         ac.seenPos ?? 0,
-          corrFromPos:     spawnPos.clone(),
-          corrStartMs:     -1,   // no correction on first appearance
-          callsign:        ac.callsign,
-          labelPhase:      ac.phase,
-          labelHeadingDeg: ac.heading,
-          phase:           ac.phase,
-          isGroundVehicle: ac.isGroundVehicle ?? false,
-          isHeavy:         spawnIsHeavy,
-          isAirborne:      spawnIsAirborne,
-        });
-
-      } else {
+      if (!acMap.has(ac.id) && !st.spawnQueueIds.has(ac.id)) {
+        // ── Queue deferred spawn ────────────────────────────────────────────
+        // Three.js object creation runs in the rAF drain (≤ SPAWN_PER_FRAME/frame)
+        // so a large first-load batch never synchronously blocks the main thread.
+        st.spawnQueue.push(ac.id);
+        st.spawnQueueIds.add(ac.id);
+      } else if (acMap.has(ac.id)) {
         // ── Update ────────────────────────────────────────────────────────
 
         const b  = acMap.get(ac.id)!;
