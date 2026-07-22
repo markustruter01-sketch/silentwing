@@ -191,10 +191,10 @@ export default function App() {
 
       const ph     = phaseHistRef.current;
       const list   = visibleAircraftRef.current;
-      // 25 km radius: covers final approach (last ~13 nm), runway, and taxiways
-      // but excludes aircraft still far out on arrival or departure.
+      // 10 km radius: short final (~3 nm), runway, taxiways, and immediate
+      // departure corridor.  Anything further out is not "at the airfield".
       // Squared comparison avoids a sqrt per aircraft per tick.
-      const DIRECTOR_RADIUS_M2 = 25_000 ** 2;
+      const DIRECTOR_RADIUS_M2 = 10_000 ** 2;
 
       const scored = list
         .filter(ac =>
