@@ -350,6 +350,10 @@ export default function App() {
   // detect when an aircraft just changed phase.
   useEffect(() => {
     const ph = phaseHistRef.current;
+    const liveIds = new Set(snapshot.aircraft.map(ac => ac.id));
+    // Prune departed aircraft so the map cannot grow unbounded over long
+    // live sessions (many unique hex IDs pass through per hour).
+    for (const id of ph.keys()) { if (!liveIds.has(id)) ph.delete(id); }
     for (const ac of snapshot.aircraft) ph.set(ac.id, ac.phase);
   }, [snapshot.aircraft]);
 

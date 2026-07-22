@@ -668,17 +668,19 @@ interface GlideSlopeEntry {
   /** ETA canvas-sprite at the midpoint of the glide slope line. */
   etaSprite:  THREE.Sprite;
   etaMat:     THREE.SpriteMaterial;
-  /** Last rendered label key — skip texture rebuild when unchanged. */
+  /** Reused canvas + texture — redrawn in place, never reallocated. */
+  etaCanvas:  HTMLCanvasElement;
+  etaCtx:     CanvasRenderingContext2D;
+  etaTex:     THREE.CanvasTexture;
+  /** Last rendered label key — skip texture redraw when unchanged. */
   lastEtaKey: string;
 }
 
 /** Build a canvas texture for the glide slope ETA label.
  *  Shows "X.X NM  Xm Xs" (or "—" when speed is unavailable). */
-function makeGlideSlopeEtaTexture(distNm: number, etaSec: number | null): THREE.CanvasTexture {
+/** Redraw the ETA label into an EXISTING canvas — no allocation, no new GPU texture. */
+function drawGlideSlopeEta(ctx: CanvasRenderingContext2D, distNm: number, etaSec: number | null): void {
   const W = 380, H = 88;
-  const cv  = document.createElement('canvas');
-  cv.width  = W; cv.height = H;
-  const ctx = cv.getContext('2d')!;
 
   // Background pill
   ctx.clearRect(0, 0, W, H);
@@ -712,8 +714,6 @@ function makeGlideSlopeEtaTexture(distNm: number, etaSec: number | null): THREE.
     const etaStr = m > 0 ? `${m}m ${s.toString().padStart(2,'0')}s to threshold` : `${s}s to threshold`;
     ctx.fillText(etaStr, 12, 50);
   }
-
-  return new THREE.CanvasTexture(cv);
 }
 
 function createGlideSlopeLine(scene: THREE.Scene): GlideSlopeEntry {
@@ -730,15 +730,21 @@ function createGlideSlopeLine(scene: THREE.Scene): GlideSlopeEntry {
   line.frustumCulled = false;
   scene.add(line);
 
-  // Initial ETA sprite (texture will be set on first frame)
-  const etaMat    = new THREE.SpriteMaterial({ transparent: true, depthTest: false });
-  const etaSprite = new THREE.Sprite(etaMat);
+  // ETA sprite with a single reused canvas + texture (redrawn in place each
+  // time the displayed value changes — no per-update allocations or uploads
+  // of brand-new textures).
+  const etaCanvas  = document.createElement('canvas');
+  etaCanvas.width  = 380; etaCanvas.height = 88;
+  const etaCtx     = etaCanvas.getContext('2d')!;
+  const etaTex     = new THREE.CanvasTexture(etaCanvas);
+  const etaMat     = new THREE.SpriteMaterial({ map: etaTex, transparent: true, depthTest: false });
+  const etaSprite  = new THREE.Sprite(etaMat);
   etaSprite.scale.set(570, 132, 1); // scene units — wide enough for the label
   etaSprite.frustumCulled = false;
   etaSprite.renderOrder   = 500;
   scene.add(etaSprite);
 
-  return { line, lineMat, etaSprite, etaMat, lastEtaKey: '' };
+  return { line, lineMat, etaSprite, etaMat, etaCanvas, etaCtx, etaTex, lastEtaKey: '' };
 }
 
 function disposeGlideSlopeLine(entry: GlideSlopeEntry, scene: THREE.Scene): void {
@@ -1618,7 +1624,7 @@ export default function AirspaceView3D({
             posAttr.needsUpdate = true;
             alpAttr.needsUpdate = true;
             b.trail.geometry.setDrawRange(0, n);
-            b.trail.geometry.computeBoundingSphere();
+            // No computeBoundingSphere: trail.frustumCulled = false at spawn.
           }
         }
 
@@ -1632,9 +1638,11 @@ export default function AirspaceView3D({
       {
         const tSec = nowMs / 1000;
 
-        // Remove beams whose alerts are no longer active
+        // Remove beams whose alerts are no longer active.
+        // Set lookup — O(alerts) instead of O(alerts²) .find() per frame.
+        const _activeIds = new Set(st.activeAlerts.map(a => a.id));
         for (const [alertId, entry] of st.beamMap) {
-          if (!st.activeAlerts.find(a => a.id === alertId)) {
+          if (!_activeIds.has(alertId)) {
             disposeBeamEntry(entry, scene);
             st.beamMap.delete(alertId);
           }
@@ -1664,7 +1672,7 @@ export default function AirspaceView3D({
           arr[0] = posA.x; arr[1] = posA.y; arr[2] = posA.z;
           arr[3] = posB.x; arr[4] = posB.y; arr[5] = posB.z;
           posAttr.needsUpdate = true;
-          entry.line.geometry.computeBoundingSphere();
+          // No computeBoundingSphere: beam line is frustumCulled = false.
 
           // Update midpoint sphere position
           entry.midSphere.position.set(
@@ -1687,9 +1695,10 @@ export default function AirspaceView3D({
       // critical alert.  Position updates every frame; texture only when
       // the alert message text changes (~every 8 s with a new ADS-B poll).
       {
-        // Remove labels for cleared / dismissed alerts
+        // Remove labels for cleared / dismissed alerts (Set lookup, not .find())
+        const _activeIds = new Set(st.activeAlerts.map(a => a.id));
         for (const [alertId, entry] of st.labelMap) {
-          if (!st.activeAlerts.find(a => a.id === alertId)) {
+          if (!_activeIds.has(alertId)) {
             disposeAlertLabel(entry, scene);
             st.labelMap.delete(alertId);
           }
@@ -1747,9 +1756,10 @@ export default function AirspaceView3D({
       // Expanding concentric rings on the ground plane (y=1) pulsing outward
       // from the ground projection of each active conflict midpoint.
       {
-        // Remove ring clusters for cleared alerts
+        // Remove ring clusters for cleared alerts (Set lookup, not .find())
+        const _activeIds = new Set(st.activeAlerts.map(a => a.id));
         for (const [alertId, entry] of st.pulseRingMap) {
-          if (!st.activeAlerts.find(a => a.id === alertId)) {
+          if (!_activeIds.has(alertId)) {
             disposePulseRingEntry(entry, scene);
             st.pulseRingMap.delete(alertId);
           }
@@ -1825,7 +1835,7 @@ export default function AirspaceView3D({
           arr[0] = rx; arr[1] = ry; arr[2] = rz;
           arr[3] = rx; arr[4] = top; arr[5] = rz;
           posAttr.needsUpdate = true;
-          entry.line.geometry.computeBoundingSphere();
+          // No computeBoundingSphere: takeoff line is frustumCulled = false.
         }
       }
 
@@ -1862,7 +1872,7 @@ export default function AirspaceView3D({
           arr[0] = b.renderPos.x; arr[1] = b.renderPos.y; arr[2] = b.renderPos.z;
           arr[3] = nearestX;      arr[4] = 0;              arr[5] = nearestZ;
           posAttr.needsUpdate = true;
-          entry.line.geometry.computeBoundingSphere();
+          // No computeBoundingSphere: glide slope line is frustumCulled = false.
 
           // ── ETA label at the line midpoint ──────────────────────────────────
           const midX = (b.renderPos.x + nearestX) * 0.5;
@@ -1882,10 +1892,8 @@ export default function AirspaceView3D({
           const etaKey = `${distNm.toFixed(1)}_${etaRounded}`;
           if (etaKey !== entry.lastEtaKey) {
             entry.lastEtaKey = etaKey;
-            const newTex = makeGlideSlopeEtaTexture(distNm, etaSec !== null ? etaRounded : null);
-            entry.etaMat.map?.dispose();
-            entry.etaMat.map = newTex;
-            entry.etaMat.needsUpdate = true;
+            drawGlideSlopeEta(entry.etaCtx, distNm, etaSec !== null ? etaRounded : null);
+            entry.etaTex.needsUpdate = true; // re-upload the SAME texture in place
           }
         }
       }
@@ -2262,7 +2270,7 @@ export default function AirspaceView3D({
       canvas.removeEventListener('pointermove',  onPointerMove);
       canvas.removeEventListener('pointerup',    onPointerUp);
       window.removeEventListener('keydown', onKey);
-      st.acMap.forEach(b => { scene.remove(b.cone, b.stem, b.trail, b.label); disposeBundle(b); });
+      st.acMap.forEach(b => { scene.remove(b.cone, b.stem, b.trail, b.label, b.halo); disposeBundle(b); });
       st.acMap.clear();
       st.coneToId.clear();
       st.beamMap.forEach(entry => disposeBeamEntry(entry, scene));
@@ -2369,6 +2377,10 @@ export default function AirspaceView3D({
         const trailMat = TRAIL_MAT_TEMPLATE.clone();
         trailMat.uniforms.color.value = new THREE.Color(hex);
         const trail = new THREE.Line(trailGeo, trailMat);
+        // Never frustum-culled → no per-frame computeBoundingSphere needed.
+        // Recomputing the bounding sphere of a 600-vertex trail for every
+        // aircraft every frame was a measurable rAF cost at high traffic.
+        trail.frustumCulled = false;
         scene.add(trail);
 
         const label = makeAcLabel(ac.callsign, ac.heading, ac.phase);

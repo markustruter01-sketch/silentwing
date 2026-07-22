@@ -39,8 +39,17 @@ interface DetectorFinding {
 export class AlertEngine {
   /** One active alert per unique key.  Key encodes kind + involved IDs. */
   private activeMap = new Map<string, SWAlert>();
-  /** Complete append-only log — alerts are never deleted. */
+  /**
+   * Alert log. Bounded: resolved (cleared or acknowledged) alerts beyond
+   * LOG_CAP are pruned oldest-first. Unbounded growth froze long sessions —
+   * every poll copied and re-rendered an ever-growing array (worst at busy
+   * airports where O(n²) pairwise advisories churn constantly).
+   * Live (active, un-acknowledged) alerts are NEVER pruned.
+   */
   private log: SWAlert[] = [];
+  private static readonly LOG_CAP = 300;
+  /** Cleared conditions may reopen the SAME alert within this window (ms). */
+  private static readonly REOPEN_GRACE_MS = 60_000;
   /** Active airport profile — passed to all detectors. */
   private profile: AirportProfile;
 
@@ -170,6 +179,36 @@ export class AlertEngine {
       if (!seen.has(key) && !alert.clearedAt) {
         alert.clearedAt = now;
       }
+    }
+
+    // ── 7. Bounded state — long sessions must not grow memory unbounded ──────
+    //
+    // activeMap: cleared entries stay for REOPEN_GRACE_MS so a briefly-cleared
+    // condition reopens the SAME alert (rule above). After the grace window the
+    // condition is genuinely over; a recurrence is a NEW event and may raise a
+    // new alert (even if the old one was dismissed — dismissal applies to the
+    // persisting condition, not to future occurrences).
+    //
+    // Entries whose condition is still active (clearedAt unset) are NEVER
+    // evicted, acknowledged or not — this preserves both the
+    // "dismissed stays dismissed unless severity escalates" rule and ID
+    // stability for live alerts.
+    for (const [key, alert] of this.activeMap) {
+      if (alert.clearedAt !== undefined && now - alert.clearedAt > AlertEngine.REOPEN_GRACE_MS) {
+        this.activeMap.delete(key);
+      }
+    }
+
+    // log: prune oldest-first, but ONLY alerts that are cleared AND no longer
+    // resident in activeMap (i.e. fully finished — cannot reopen in place).
+    if (this.log.length > AlertEngine.LOG_CAP) {
+      const resident = new Set([...this.activeMap.values()]);
+      let excess = this.log.length - AlertEngine.LOG_CAP;
+      this.log = this.log.filter(a => {
+        if (excess <= 0) return true;
+        if (a.clearedAt !== undefined && !resident.has(a)) { excess--; return false; }
+        return true;
+      });
     }
 
     return [...this.log];
