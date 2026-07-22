@@ -8,6 +8,7 @@ import AlertShell          from '@/components/panels/AlertShell';
 import ControlsHUD    from '@/components/ui/ControlsHUD';
 import WeatherWidget  from '@/components/panels/WeatherWidget';
 import { getSimAdapter } from '@/sim/engine';
+import { mark, span } from '@/lib/perfProbe';
 import { AdsbAdapter, HEALTH_LAGGING_MS, HEALTH_STALLED_MS } from '@/feed/adsbAdapter';
 import { AlertEngine }  from '@/alerts/engine';
 import { YBBN }         from '@/airports/ybbn';
@@ -111,6 +112,7 @@ export default function App() {
   const handleAirportSwitch = useCallback((profile: AirportProfile) => {
     if (profile.icao === activeProfile.icao) return;
     console.log(`[APP] airport switch → ${profile.icao}`);
+    mark(`switch-start→${profile.icao}`);
     setActiveProfile(profile);
     if (!profile.sim) setDataSource('live');
     setSelectedAcId(null);
@@ -130,11 +132,13 @@ export default function App() {
   const [adapter, setAdapter] = useState<DataFeedAdapter | null>(null);
 
   useEffect(() => {
+    mark(`adapter-effect-start icao=${activeProfile.icao} src=${dataSource}`);
     const a: DataFeedAdapter =
       dataSource === 'sim' && activeProfile.sim
         ? getSimAdapter(activeProfile)   // singleton — managed by the sim engine
         : new AdsbAdapter(activeProfile);
     if (a instanceof AdsbAdapter) a.start();
+    mark(`adapter-created icao=${activeProfile.icao}`);
     setAdapter(a);
     return () => {
       // Sim adapter is a singleton and must NOT be destroyed here.

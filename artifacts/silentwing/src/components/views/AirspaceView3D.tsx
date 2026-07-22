@@ -2287,6 +2287,7 @@ export default function AirspaceView3D({
     const st = sceneRef.current;
     if (!st) return;
     const _syncStart = performance.now();
+    mark(`sync-start ac=${aircraft.length} existing=${st.acMap.size}`);
     const { scene, acMap, coneToId } = st;
 
     // Measure the actual wall-clock interval between this poll and the previous one.
@@ -2302,6 +2303,7 @@ export default function AirspaceView3D({
     for (const ac of aircraft) st.latestAircraftMap.set(ac.id, ac);
 
     const seen = new Set<string>();
+    let _spawnCount = 0;
 
     for (const ac of aircraft) {
       seen.add(ac.id);
@@ -2315,6 +2317,7 @@ export default function AirspaceView3D({
         // Shared geometries (CONE_GEO, HALO_GEO) are never disposed per-aircraft.
         // Trail material is cloned from TRAIL_MAT_TEMPLATE — shares the compiled
         // GL program, only uniforms (color) differ per aircraft.
+        _spawnCount++;
 
         const coneMat = new THREE.MeshLambertMaterial({
           color: hex, emissive: hex, emissiveIntensity: 0.30,
@@ -2616,9 +2619,9 @@ export default function AirspaceView3D({
       }
     }
 
-    // Diagnostic: report slow sync passes (aircraft spawn/update per snapshot)
+    // Diagnostic: always report sync pass — captures switch-path timing.
     const _syncMs = performance.now() - _syncStart;
-    if (_syncMs > 50) span(`aircraft-sync ac=${aircraft.length}`, _syncMs);
+    span(`sync-done ac=${aircraft.length} spawned=${_spawnCount} ms=${Math.round(_syncMs)}`, _syncMs);
   }, [aircraft]);
 
   // ── Render ────────────────────────────────────────────────────────────────
