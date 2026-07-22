@@ -285,9 +285,11 @@ export class AdsbAdapter implements DataFeedAdapter {
   // ── Private ────────────────────────────────────────────────────────────────
 
   private _start(): void {
+    console.log(`[ADSB:DIAG] _start() visibilityState="${document.visibilityState}" hidden=${document.hidden}`);
     // Page Visibility: pause when tab is hidden, resume (and immediately poll)
     // when it becomes visible again.  Protects the RapidAPI request quota.
     this.visHandler = () => {
+      console.log(`[ADSB:DIAG] visibilitychange → state="${document.visibilityState}" hidden=${document.hidden}`);
       if (document.visibilityState === 'visible') {
         this._poll();
         if (!this.timer) this._startTimer();
@@ -298,14 +300,19 @@ export class AdsbAdapter implements DataFeedAdapter {
     document.addEventListener('visibilitychange', this.visHandler);
 
     if (document.visibilityState === 'visible') {
+      console.log('[ADSB:DIAG] tab visible at start — firing immediate poll + timer');
       this._poll();
       this._startTimer();
+    } else {
+      console.log(`[ADSB:DIAG] tab NOT visible at start (state="${document.visibilityState}") — poll SUPPRESSED, waiting for visibilitychange`);
     }
   }
 
   private _startTimer(): void {
     this.timer = setInterval(() => {
+      console.log(`[ADSB:DIAG] timer tick — visibilityState="${document.visibilityState}" hidden=${document.hidden}`);
       if (document.visibilityState === 'visible') this._poll();
+      else console.log('[ADSB:DIAG] timer tick SKIPPED (tab hidden)');
     }, POLL_INTERVAL_MS);
   }
 
