@@ -18,6 +18,7 @@ import type { Polyline } from '@/data/ybbn_real';
 import type { SWAlert, SWAlertSeverity } from '@/alerts/types';
 import { useAirport } from '@/airports/context';
 import { computeRunwayThresholds, computeApproachCorridors } from '@/airports/helpers';
+import { mark, span } from '@/lib/perfProbe';
 
 // ── Camera mode — exported so App can type-check ──────────────────────────────
 export type CameraMode = 'orbit' | 'manual' | 'inspect' | 'follow' | 'returning';
@@ -1161,6 +1162,7 @@ export default function AirspaceView3D({
   useEffect(() => {
     const el = mountRef.current;
     if (!el) return;
+    mark('3d-setup-start');
 
     const W = el.clientWidth  || window.innerWidth;
     const H = el.clientHeight || window.innerHeight;
@@ -1181,6 +1183,7 @@ export default function AirspaceView3D({
       el.appendChild(msg);
       return () => { el.removeChild(msg); };
     }
+    mark('3d-renderer-created');
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(W, H);
     renderer.setClearColor(0x07090F, 1);
@@ -1220,6 +1223,7 @@ export default function AirspaceView3D({
     scene.add(buildGroundGeometry(prof.geometry.runways, prof.geometry.taxiways, prof.geometry.aprons));
     scene.add(buildAltRings());
     scene.add(buildAirportAnnotations(thresholds, prof.terminalLabelPos));
+    mark('3d-geometry-built');
 
     // Initialise mutable state
     const st: SceneState = {
@@ -1305,6 +1309,8 @@ export default function AirspaceView3D({
     const tick = () => {
       st.animId = requestAnimationFrame(tick);
       const nowMs = performance.now();
+      const _frameStart = nowMs;
+      _frameNo++;
 
       switch (st.cameraMode) {
         case 'orbit': {
@@ -1920,8 +1926,17 @@ export default function AirspaceView3D({
         }
       }
 
+      const _preRender = performance.now();
       renderer.render(scene, camera);
+      const _frameEnd = performance.now();
+      // Diagnostic: report the first 5 frames and any frame that blocked > 250 ms
+      const _frameMs = _frameEnd - _frameStart;
+      if (_frameNo <= 5 || _frameMs > 250) {
+        span(`frame#${_frameNo} total=${Math.round(_frameMs)}ms render=${Math.round(_frameEnd - _preRender)}ms ac=${st.acMap.size} alerts=${st.activeAlerts.length}`, _frameMs);
+      }
     };
+    let _frameNo = 0;
+    mark('3d-setup-done, starting tick');
     tick();
 
     // ── Resize observer ──────────────────────────────────────────────────────
@@ -2221,6 +2236,7 @@ export default function AirspaceView3D({
   useEffect(() => {
     const st = sceneRef.current;
     if (!st) return;
+    const _syncStart = performance.now();
     const { scene, acMap, coneToId } = st;
 
     // Measure the actual wall-clock interval between this poll and the previous one.
@@ -2564,6 +2580,10 @@ export default function AirspaceView3D({
         if (gs) { disposeGlideSlopeLine(gs, scene); st.glideSlopeMap.delete(id); }
       }
     }
+
+    // Diagnostic: report slow sync passes (aircraft spawn/update per snapshot)
+    const _syncMs = performance.now() - _syncStart;
+    if (_syncMs > 50) span(`aircraft-sync ac=${aircraft.length}`, _syncMs);
   }, [aircraft]);
 
   // ── Render ────────────────────────────────────────────────────────────────
