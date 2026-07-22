@@ -67,7 +67,7 @@ const FOLLOW_OFFSET  = new THREE.Vector3(0, 700, 1400);
 
 // Director Mode uses a wide, cinematic overview shot — ~10× the normal follow
 // distance so the whole flight path context is visible, not just the aircraft.
-const DIRECTOR_FOLLOW_OFFSET = new THREE.Vector3(0, 3_150, 6_300);
+const DIRECTOR_FOLLOW_OFFSET = new THREE.Vector3(0, 9_450, 18_900);
 
 // Transition speed for manual inspect fly-to (flyProgress increment per frame at 60 fps)
 const FLY_SPEED_NORMAL = 0.022; // ~45 frames ≈ 0.75 s
@@ -75,8 +75,11 @@ const FLY_SPEED_NORMAL = 0.022; // ~45 frames ≈ 0.75 s
 // Director continuous-lerp rates — no discrete fly-to; both position and look-at
 // drift toward their targets every frame so aircraft switches are seamless glides.
 // At 60 fps, lerp(t, 0.006) reaches 95% of target in ~8 s.
-const DIRECTOR_POS_LERP  = 0.006; // camera position drift speed
-const DIRECTOR_LOOK_LERP = 0.009; // look-at settles slightly faster so aircraft stays centred
+const DIRECTOR_POS_LERP       = 0.006;  // camera position drift speed (ongoing switches)
+const DIRECTOR_LOOK_LERP      = 0.009;  // look-at settles slightly faster so aircraft stays centred
+// Intro lerp: on first page-load the camera glides slowly from orbit into director
+// position over 15 s.  lerp(t, 0.003) → 95% in ~15 s at 60 fps.
+const DIRECTOR_POS_LERP_INTRO = 0.003;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function easeInOut(t: number): number {
@@ -451,6 +454,10 @@ interface SceneState {
   /** Smoothly-lerped look-at point used exclusively in director mode.
    *  Persists across aircraft switches so the camera pans rather than snaps. */
   directorLookAt:   THREE.Vector3;
+  /** True once the very first director follow entry has been triggered (page-load intro). */
+  directorIntroStarted: boolean;
+  /** performance.now() timestamp when the 15 s intro lerp ends. */
+  directorIntroEnd:     number;
 }
 
 // ── Helper: begin fly-to animation toward an aircraft ────────────────────────
@@ -533,6 +540,11 @@ export default function AirspaceView3D({
         const dir = new THREE.Vector3();
         st.camera.getWorldDirection(dir);
         st.directorLookAt.copy(st.camera.position).addScaledVector(dir, 500);
+        // First-ever director follow entry → start the 15 s page-load intro glide.
+        if (!st.directorIntroStarted) {
+          st.directorIntroStarted = true;
+          st.directorIntroEnd     = performance.now() + 15_000;
+        }
       }
       // Non-director fly-to setup (used when entering follow manually).
       st.flyFrom.copy(st.camera.position);
@@ -663,8 +675,10 @@ export default function AirspaceView3D({
       leftDragActive:   false,
       leftDragLastX:    0,
       leftDragLastY:    0,
-      directorMode:     false,
-      directorLookAt:   new THREE.Vector3(), // starts at scene origin (airport centre)
+      directorMode:         false,
+      directorLookAt:       new THREE.Vector3(), // starts at scene origin (airport centre)
+      directorIntroStarted: false,
+      directorIntroEnd:     0,
     };
     sceneRef.current = st;
 
@@ -716,11 +730,11 @@ export default function AirspaceView3D({
 
               if (st.directorMode) {
                 // ── Director: one continuous gliding shot ──────────────────
-                // Position and look-at both lerp toward the current target
-                // every frame.  Switching aircraft only changes the *target*,
-                // never the camera's current state, so there are no resets —
-                // just a smooth, never-ending pan through the airspace.
-                camera.position.lerp(liveTarget, DIRECTOR_POS_LERP);
+                // On first page-load use the slower intro lerp (15 s), then
+                // switch to the normal 8 s rate once the intro window closes.
+                const isIntro  = st.directorIntroStarted && performance.now() < st.directorIntroEnd;
+                const posLerp  = isIntro ? DIRECTOR_POS_LERP_INTRO : DIRECTOR_POS_LERP;
+                camera.position.lerp(liveTarget, posLerp);
                 st.directorLookAt.lerp(b.renderPos, DIRECTOR_LOOK_LERP);
                 camera.lookAt(st.directorLookAt);
               } else {
