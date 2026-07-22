@@ -7,7 +7,7 @@ import AircraftDetailPanel from '@/components/panels/AircraftDetailPanel';
 import ControlsHUD from '@/components/ui/ControlsHUD';
 import { getSimAdapter } from '@/sim/engine';
 import { AdsbAdapter } from '@/feed/adsbAdapter';
-import type { DataFeedAdapter, WorldSnapshot } from '@/types';
+import type { DataFeedAdapter, WorldSnapshot, FlightPhase, Aircraft } from '@/types';
 import { isAirborne } from '@/types';
 
 type View = 'airspace' | 'airfield';
@@ -18,6 +18,46 @@ export type DataSource = 'sim' | 'live';
 function sectorLoad(count: number) {
   return Math.min(99, count * 11);
 }
+
+// ── Director Mode ─────────────────────────────────────────────────────────────
+
+const DIRECTOR_DWELL_MS = 10_000; // ms to watch each aircraft before switching
+
+/** Priority score for each flight phase — higher = more cinematically interesting. */
+const DIRECTOR_PHASE_SCORE: Record<FlightPhase, number> = {
+  'landing':           100,
+  'takeoff':            95,
+  'approach':           80,
+  'departure':          70,
+  'enroute-departure':  55,
+  'enroute-arrival':    50,
+  'taxi-out':           35,
+  'taxi-in':            20,
+  'at-gate':             5,
+};
+
+/** Large bonus when an aircraft just changed phase — prioritises transitions. */
+const DIRECTOR_TRANSITION_BONUS = 160;
+
+function directorScore(ac: Aircraft, prevPhase: FlightPhase | undefined): number {
+  const base       = DIRECTOR_PHASE_SCORE[ac.phase] ?? 0;
+  const transition = prevPhase !== undefined && prevPhase !== ac.phase
+    ? DIRECTOR_TRANSITION_BONUS : 0;
+  return base + transition;
+}
+
+/** Human-readable phase label shown in the NOW WATCHING strip. */
+const PHASE_LABEL: Record<FlightPhase, string> = {
+  'enroute-arrival':   'En Route',
+  'approach':          'Approach',
+  'landing':           'Landing',
+  'taxi-in':           'Taxi In',
+  'at-gate':           'At Gate',
+  'taxi-out':          'Taxi Out',
+  'takeoff':           'Takeoff',
+  'departure':         'Departure',
+  'enroute-departure': 'Departing',
+};
 
 export default function App() {
   const [view, setView] = useState<View>('airspace');
@@ -76,9 +116,12 @@ export default function App() {
     setCameraMode('orbit');
   }, [dataSource]);
 
-  // Close panel helper — used by × button and by 2D Esc
+  // Close panel helper — used by × button and by 2D Esc.
+  // Also turns Director off: if the user explicitly dismisses the panel they
+  // don't want the director to immediately re-select something.
   const handleClosePanel = useCallback(() => {
     console.log('[APP] panel closed via UI');
+    setDirectorMode(false);
     setSelectedAcId(null);
     setCameraMode('orbit'); // triggers smooth return-to-orbit in the 3D view
   }, []);
@@ -95,6 +138,27 @@ export default function App() {
   // ── Predicted paths toggle ───────────────────────────────────────────────
   const [showPredictedPaths, setShowPredictedPaths] = useState(false);
 
+  // ── Director Mode state ──────────────────────────────────────────────────
+  const [directorMode, setDirectorMode] = useState(false);
+  /** Stores the last known phase per aircraft ID for transition detection. */
+  const phaseHistRef       = useRef<Map<string, FlightPhase>>(new Map());
+  /** Timestamp of the last director camera switch (ms). */
+  const lastSwitchRef      = useRef<number>(0);
+  /** Stable ref to the current selectedAcId — avoids stale closures in the interval. */
+  const selectedAcIdRef    = useRef<string | null>(null);
+  /** Stable ref to the latest visible aircraft list — avoids re-starting interval on every poll. */
+  const visibleAircraftRef = useRef<Aircraft[]>([]);
+
+  // Keep the stable refs in sync with state/memo values
+  useEffect(() => { selectedAcIdRef.current = selectedAcId; }, [selectedAcId]);
+
+  // Track phase transitions on every snapshot so the scoring function can
+  // detect when an aircraft just changed phase.
+  useEffect(() => {
+    const ph = phaseHistRef.current;
+    for (const ac of snapshot.aircraft) ph.set(ac.id, ac.phase);
+  }, [snapshot.aircraft]);
+
   // ── Display filters (hide from rendering; data is always fully ingested) ──
   /** Hide category-C2 ground vehicles and TWR stations (default ON). */
   const [hideGroundVehicles, setHideGroundVehicles] = useState(true);
@@ -110,6 +174,54 @@ export default function App() {
     }),
     [snapshot.aircraft, hideGroundVehicles, hideAnonymous],
   );
+
+  // Keep the visibleAircraft ref in sync without restarting the director interval
+  useEffect(() => { visibleAircraftRef.current = visibleAircraft; }, [visibleAircraft]);
+
+  // ── Director tick ────────────────────────────────────────────────────────
+  // Runs a 1 s interval only while directorMode is ON.
+  // Reads visibleAircraftRef / selectedAcIdRef / phaseHistRef to avoid stale
+  // closures — the interval is only recreated when directorMode changes.
+  useEffect(() => {
+    if (!directorMode) return;
+
+    const tick = () => {
+      const now = Date.now();
+      if (now - lastSwitchRef.current < DIRECTOR_DWELL_MS) return;
+
+      const ph     = phaseHistRef.current;
+      const list   = visibleAircraftRef.current;
+      const scored = list
+        .filter(ac => ac.phase !== 'at-gate') // stationary parked planes are boring
+        .map(ac => ({ ac, score: directorScore(ac, ph.get(ac.id)) }))
+        .sort((a, b) => b.score - a.score);
+
+      if (scored.length === 0) return;
+
+      // Prefer switching to a different aircraft; stay if nothing better exists
+      const current = selectedAcIdRef.current;
+      let pick = scored[0].ac;
+      if (pick.id === current && scored.length > 1 && scored[1].score >= 30) {
+        pick = scored[1].ac;
+      }
+
+      if (pick.id !== current) {
+        setSelectedAcId(pick.id);
+        setCameraMode(isAirborne(pick) ? 'follow' : 'inspect');
+        lastSwitchRef.current = now;
+        console.log(
+          `[DIRECTOR] → ${pick.callsign} (${pick.phase})` +
+          ` score=${scored.find(s => s.ac.id === pick.id)?.score ?? '?'}`,
+        );
+      }
+    };
+
+    // Fire immediately so the user doesn't stare at an empty screen
+    lastSwitchRef.current = 0;
+    tick();
+    const timer = setInterval(tick, 1_000);
+    return () => clearInterval(timer);
+  }, [directorMode]); // stable — reads all live values through refs
 
   // ── Global keyboard handler ──────────────────────────────────────────────
   // The 3D view handles its own Esc chain internally; we handle 2D Esc here.
@@ -205,6 +317,38 @@ export default function App() {
             ? `${snapshot.aircraft.length - visibleAircraft.length} hidden`
             : ''}
         </span>
+
+        {/* Director toggle — sits at the right edge of the filter bar */}
+        <button
+          onClick={() => {
+            setDirectorMode(v => {
+              const next = !v;
+              console.log(`[APP] Director mode ${next ? 'ON' : 'OFF'}`);
+              if (next) lastSwitchRef.current = 0; // fire immediately on enable
+              return next;
+            });
+          }}
+          title="Director Mode — auto-switches camera to the most interesting event"
+          className={[
+            'ml-2 flex items-center gap-1.5 px-3 py-[2px]',
+            'text-[8px] tracking-widest uppercase rounded border',
+            'transition-colors select-none cursor-pointer',
+            directorMode
+              ? 'border-amber-500/70 text-amber-300 bg-amber-900/25'
+              : 'border-slate-600/50 text-slate-400 hover:text-slate-300 hover:border-slate-500',
+          ].join(' ')}
+        >
+          {/* Pulsing dot while active */}
+          <span className={directorMode ? 'relative flex h-2 w-2' : 'text-slate-600'}>
+            {directorMode ? (
+              <>
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-60" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-400" />
+              </>
+            ) : '▶'}
+          </span>
+          Director
+        </button>
       </div>
 
       {/* ── Main view area ── */}
@@ -246,6 +390,42 @@ export default function App() {
 
         {/* ── Controls HUD — bottom-centre on both views ── */}
         <ControlsHUD activeView={view} />
+
+        {/* ── Director NOW WATCHING strip ─────────────────────────────────── */}
+        {directorMode && selectedAc && (
+          <div
+            key={selectedAc.id} // re-mount animates on each aircraft switch
+            className={[
+              'absolute bottom-14 left-1/2 -translate-x-1/2',
+              'pointer-events-none select-none',
+              'flex items-center gap-3 px-4 py-2 rounded',
+              'bg-black/70 border border-amber-600/30 backdrop-blur-sm',
+              'animate-fade-in',
+            ].join(' ')}
+            style={{ animation: 'directorFade 0.4s ease-out' }}
+          >
+            {/* Animated signal dot */}
+            <span className="relative flex h-2 w-2 shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-50" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-400" />
+            </span>
+            <span className="text-[8px] text-amber-400 tracking-[0.25em] uppercase font-mono">
+              Auto
+            </span>
+            <span className="w-px h-4 bg-amber-800/50 shrink-0" />
+            <span className="text-sm font-mono text-white tracking-wider">
+              {selectedAc.callsign}
+            </span>
+            <span className="text-[10px] text-slate-400 tracking-wider uppercase">
+              {PHASE_LABEL[selectedAc.phase]}
+            </span>
+            {selectedAc.position.alt > 50 && (
+              <span className="text-[10px] text-slate-500 tabular-nums">
+                {(Math.round(selectedAc.position.alt / 100) * 100).toLocaleString()} ft
+              </span>
+            )}
+          </div>
+        )}
       </main>
     </div>
   );
