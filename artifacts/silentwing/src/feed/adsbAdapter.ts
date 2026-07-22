@@ -239,7 +239,7 @@ export class AdsbAdapter implements DataFeedAdapter {
     const age = Date.now() - this.lastPoll;
     let status: 'live' | 'lagging' | 'stalled';
 
-    if (this.lastPoll === 0 || this.lastError !== null) {
+    if (this.lastPoll === 0) {
       status = 'stalled';
     } else if (age > HEALTH_STALLED_MS) {
       status = 'stalled';
@@ -308,6 +308,10 @@ export class AdsbAdapter implements DataFeedAdapter {
 
       const data = await res.json() as { ac?: RawAc[]; now?: number; total?: number };
 
+      // Clear error on any HTTP 200 response — must happen before the timestamp
+      // guard so a discarded-but-valid response doesn't leave lastError set.
+      this.lastError = null;
+
       // FIX 1: timestamp guard — discard snapshots older than the last accepted one.
       // data.now is a Unix epoch in seconds from the ADS-B Exchange server.
       const snapshotNow = data.now ?? (Date.now() / 1000);
@@ -317,7 +321,6 @@ export class AdsbAdapter implements DataFeedAdapter {
       }
       this.latestNow = snapshotNow;
 
-      this.lastError = null;
       this.lastPoll  = Date.now();
 
       const rawList: RawAc[] = data.ac ?? [];
