@@ -192,7 +192,10 @@ export default function App() {
       const ph     = phaseHistRef.current;
       const list   = visibleAircraftRef.current;
       const scored = list
-        .filter(ac => ac.phase !== 'at-gate') // stationary parked planes are boring
+        .filter(ac =>
+          ac.phase !== 'at-gate' &&  // stationary parked planes are boring
+          ac.position.alt < 3_000,   // ignore deep-flight above FL030; keep airport activity
+        )
         .map(ac => ({ ac, score: directorScore(ac, ph.get(ac.id)) }))
         .sort((a, b) => b.score - a.score);
 
