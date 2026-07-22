@@ -167,7 +167,7 @@ export default function WeatherWidget() {
 
   return (
     <div
-      className="absolute bottom-14 left-14 z-40 pointer-events-none select-none"
+      className="absolute bottom-4 left-14 z-40 pointer-events-none select-none"
       style={{ maxWidth: 420 }}
     >
       <div
