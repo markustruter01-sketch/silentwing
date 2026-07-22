@@ -693,10 +693,61 @@ function disposeApproachIndicator(entry: ApproachIndicatorEntry, scene: THREE.Sc
 
 const GLIDE_MAX_DIST    = 9_000; // scene units (≈ NM+ out) — line fully visible at this range
 const GLIDE_PEAK_OPACITY = 0.55; // opacity when aircraft is at or beyond GLIDE_MAX_DIST
+// 1 scene unit = 1 metre (horizontal); 1 NM = 1852 m
+const METRES_PER_NM = 1852;
 
 interface GlideSlopeEntry {
-  line:    THREE.Line;
-  lineMat: THREE.LineBasicMaterial;
+  line:       THREE.Line;
+  lineMat:    THREE.LineBasicMaterial;
+  /** ETA canvas-sprite at the midpoint of the glide slope line. */
+  etaSprite:  THREE.Sprite;
+  etaMat:     THREE.SpriteMaterial;
+  /** Last rendered label key — skip texture rebuild when unchanged. */
+  lastEtaKey: string;
+}
+
+/** Build a canvas texture for the glide slope ETA label.
+ *  Shows "X.X NM  Xm Xs" (or "—" when speed is unavailable). */
+function makeGlideSlopeEtaTexture(distNm: number, etaSec: number | null): THREE.CanvasTexture {
+  const W = 380, H = 88;
+  const cv  = document.createElement('canvas');
+  cv.width  = W; cv.height = H;
+  const ctx = cv.getContext('2d')!;
+
+  // Background pill
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(4,10,20,0.82)';
+  ctx.beginPath();
+  (ctx as CanvasRenderingContext2D & { roundRect: (...a: unknown[]) => void })
+    .roundRect(0, 0, W, H, 10);
+  ctx.fill();
+
+  // Top accent line in approach cyan
+  ctx.fillStyle = '#38bdf8';
+  ctx.fillRect(0, 0, W, 2);
+  // Left accent bar
+  ctx.fillRect(0, 0, 3, H);
+
+  // Distance line
+  ctx.font         = 'bold 28px "Courier New",monospace';
+  ctx.fillStyle    = '#7dd3fc';
+  ctx.textAlign    = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(`${distNm.toFixed(1)} NM`, 12, 8);
+
+  // ETA line
+  ctx.font      = '22px "Courier New",monospace';
+  ctx.fillStyle = '#bae6fd';
+  if (etaSec === null) {
+    ctx.fillText('— s to threshold', 12, 50);
+  } else {
+    const m = Math.floor(etaSec / 60);
+    const s = Math.round(etaSec % 60);
+    const etaStr = m > 0 ? `${m}m ${s.toString().padStart(2,'0')}s to threshold` : `${s}s to threshold`;
+    ctx.fillText(etaStr, 12, 50);
+  }
+
+  return new THREE.CanvasTexture(cv);
 }
 
 function createGlideSlopeLine(scene: THREE.Scene): GlideSlopeEntry {
@@ -712,13 +763,24 @@ function createGlideSlopeLine(scene: THREE.Scene): GlideSlopeEntry {
   const line = new THREE.Line(geo, lineMat);
   line.frustumCulled = false;
   scene.add(line);
-  return { line, lineMat };
+
+  // Initial ETA sprite (texture will be set on first frame)
+  const etaMat    = new THREE.SpriteMaterial({ transparent: true, depthTest: false });
+  const etaSprite = new THREE.Sprite(etaMat);
+  etaSprite.scale.set(570, 132, 1); // scene units — wide enough for the label
+  etaSprite.frustumCulled = false;
+  etaSprite.renderOrder   = 500;
+  scene.add(etaSprite);
+
+  return { line, lineMat, etaSprite, etaMat, lastEtaKey: '' };
 }
 
 function disposeGlideSlopeLine(entry: GlideSlopeEntry, scene: THREE.Scene): void {
-  scene.remove(entry.line);
+  scene.remove(entry.line, entry.etaSprite);
   entry.line.geometry.dispose();
   entry.lineMat.dispose();
+  entry.etaMat.map?.dispose();
+  entry.etaMat.dispose();
 }
 
 // ── Takeoff indicator (vertical line + "TAKE OFF" sign) ──────────────────────
@@ -1756,9 +1818,11 @@ export default function AirspaceView3D({
         }
       }
 
-      // ── Glide slope projected path line (Task #26) ───────────────────────
+      // ── Glide slope projected path line + ETA label (Tasks #26 / #29) ──────
       // Approach-only: thin line from aircraft renderPos to nearest runway
       // threshold.  Opacity fades from GLIDE_PEAK_OPACITY (far) → 0 (on threshold).
+      // A canvas-sprite at the line midpoint shows remaining distance (NM) and
+      // estimated seconds to touchdown derived from the aircraft's ground speed.
       {
         for (const [acId, entry] of st.glideSlopeMap) {
           const b = st.acMap.get(acId);
@@ -1785,6 +1849,30 @@ export default function AirspaceView3D({
           arr[3] = nearestX;      arr[4] = 0;              arr[5] = nearestZ;
           posAttr.needsUpdate = true;
           entry.line.geometry.computeBoundingSphere();
+
+          // ── ETA label at the line midpoint ──────────────────────────────────
+          const midX = (b.renderPos.x + nearestX) * 0.5;
+          const midY = b.renderPos.y * 0.5 + 120; // halfway up, slightly lifted
+          const midZ = (b.renderPos.z + nearestZ) * 0.5;
+          entry.etaSprite.position.set(midX, midY, midZ);
+
+          // Keep sprite opacity in sync with the line so it fades together
+          entry.etaMat.opacity = Math.max(0, distFrac * 1.4 - 0.2); // slightly faster reveal
+
+          // ETA computation: distance in metres / ground speed in m/s
+          const distNm   = nearestDist / METRES_PER_NM;
+          const etaSec   = b.gsMps > 0.5 ? nearestDist / b.gsMps : null;
+
+          // Rebuild texture only when the display values change (rounds to 1 s)
+          const etaRounded = etaSec !== null ? Math.round(etaSec) : -1;
+          const etaKey = `${distNm.toFixed(1)}_${etaRounded}`;
+          if (etaKey !== entry.lastEtaKey) {
+            entry.lastEtaKey = etaKey;
+            const newTex = makeGlideSlopeEtaTexture(distNm, etaSec !== null ? etaRounded : null);
+            entry.etaMat.map?.dispose();
+            entry.etaMat.map = newTex;
+            entry.etaMat.needsUpdate = true;
+          }
         }
       }
 
