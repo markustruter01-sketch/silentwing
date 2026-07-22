@@ -5,6 +5,7 @@ import AirfieldView2D from '@/components/views/AirfieldView2D';
 import AirspaceView3D, { type CameraMode } from '@/components/views/AirspaceView3D';
 import DirectorFocusPanel  from '@/components/panels/DirectorFocusPanel';
 import AlertShell          from '@/components/panels/AlertShell';
+import SequenceLadder, { ARRIVAL_PHASES, DEPARTURE_PHASES } from '@/components/panels/SequenceLadder';
 import ControlsHUD    from '@/components/ui/ControlsHUD';
 import WeatherWidget  from '@/components/panels/WeatherWidget';
 import NotamWidget    from '@/components/panels/NotamWidget';
@@ -336,6 +337,32 @@ export default function App() {
 
   // Keep the visibleAircraft ref in sync without restarting the director interval
   useEffect(() => { visibleAircraftRef.current = visibleAircraft; }, [visibleAircraft]);
+
+  // ── Sequence ladder queues ────────────────────────────────────────────────
+  /** Next 3 arrivals sorted by ascending altitude (lower = closer to threshold). */
+  const arrivalsQueue = useMemo(() =>
+    visibleAircraft
+      .filter(ac => ARRIVAL_PHASES.has(ac.phase) && !ac.isGroundVehicle)
+      .sort((a, b) => a.position.alt - b.position.alt)
+      .slice(0, 3),
+    [visibleAircraft],
+  );
+
+  /** Next 3 departures sorted by ascending ground speed (higher GS = further along departure). */
+  const departuresQueue = useMemo(() =>
+    visibleAircraft
+      .filter(ac => DEPARTURE_PHASES.has(ac.phase) && !ac.isGroundVehicle)
+      .sort((a, b) => {
+        // taxi-out first (no altitude), then takeoff/departure by descending GS
+        const phaseOrder: Record<string, number> = { 'taxi-out': 0, 'takeoff': 1, 'departure': 2 };
+        const ao = phaseOrder[a.phase] ?? 3;
+        const bo = phaseOrder[b.phase] ?? 3;
+        if (ao !== bo) return ao - bo;
+        return b.groundSpeed - a.groundSpeed;
+      })
+      .slice(0, 3),
+    [visibleAircraft],
+  );
 
   // ── Director tick ────────────────────────────────────────────────────────
   // Runs a 1 s interval only while directorMode is ON.
@@ -711,6 +738,22 @@ export default function App() {
             onClose={handleClosePanel}
           />
         )}
+
+        {/* ── Sequence ladder — always visible; pushed below DirectorFocusPanel ── */}
+        <SequenceLadder
+          arrivalsQueue={arrivalsQueue}
+          departuresQueue={departuresQueue}
+          onSelectAc={(id) => {
+            console.log(`[APP] sequence ladder select: ${id}`);
+            setSelectedAcId(id);
+            if (directorMode) setCameraMode('follow');
+          }}
+          topOffset={
+            directorMode && (cameraMode === 'follow' || cameraMode === 'inspect') && selectedAc
+              ? 444   // below DirectorFocusPanel (~420 px tall)
+              : 16    // top-4 when no focus panel
+          }
+        />
 
         {/* ── Info stack — NOTAMs above weather, bottom-left ── */}
         <div className="absolute bottom-4 left-4 z-40 pointer-events-none select-none flex flex-col gap-2" style={{ maxWidth: 420 }}>
