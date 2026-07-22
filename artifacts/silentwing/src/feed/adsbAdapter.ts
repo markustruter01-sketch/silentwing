@@ -59,10 +59,30 @@ function derivePhase(
   }
 
   // Use vertical rate to distinguish departure (climbing) from arrival (descending).
-  // baro_rate > 200 ft/min = clearly climbing; ≤ 200 = level/descending.
-  // Many low-cost transponders omit baro_rate — we fall back to "descent assumed"
-  // when the field is absent, as arrivals outnumber departures near the airport.
-  const climbing = (baroRate ?? 0) > 200;
+  // baro_rate > 200 ft/min = clearly climbing; < -200 = clearly descending.
+  //
+  // Many transponders omit baro_rate at low altitude (fresh ADS-B lock right
+  // after rotation is the most common case).  Blind "assume descent" is wrong
+  // here because a takeoff below 500 ft with no baro_rate looks identical to an
+  // approach — except groundspeed tells them apart:
+  //   • Landing short final (<500 ft): decelerating, typically 120–160 kt
+  //   • Takeoff roll/rotation (<500 ft): accelerating through 100–180 kt
+  // Using ≥ 80 kt as a proxy for "fast enough to be a takeoff" catches the
+  // rotation phase reliably without misclassifying slow go-arounds.
+  //
+  // Above 500 ft the ambiguity matters less (both phases are well-separated by
+  // altitude trend), so we keep the conservative "assume descent" fallback there.
+  let climbing: boolean;
+  if (baroRate !== undefined) {
+    climbing = baroRate > 200;
+  } else if (altFt < 500 && gs >= 80) {
+    // Low altitude + fast + no vertical rate → almost certainly a takeoff/rotation
+    climbing = true;
+  } else {
+    // Default: assume descent (statistically more arrivals than departures in
+    // the terminal area at any given snapshot).
+    climbing = false;
+  }
 
   if (altFt <   500) return climbing ? 'takeoff'   : 'landing';
   if (altFt < 3_000) return climbing ? 'departure' : 'approach';
