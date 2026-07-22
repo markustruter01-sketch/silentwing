@@ -113,6 +113,12 @@ const FOLLOW_OFFSET  = new THREE.Vector3(0, 700, 1400);
 // distance so the whole flight path context is visible, not just the aircraft.
 const DIRECTOR_FOLLOW_OFFSET = new THREE.Vector3(0, 4_500, 9_000);
 
+// Minimum world-space Y the camera is ever allowed to look at.
+// Ground aircraft sit at y ≈ 0, so without this the camera aim dips into the
+// tarmac and the 3D view shows nothing but pavement.  50 units (≈ 50 m) keeps
+// the aimpoint above the runway surface at a believable fuselage height.
+const MIN_LOOK_Y = 50;
+
 // Transition speed for fly-to animations (flyProgress increment per frame at 60 fps)
 const FLY_SPEED_NORMAL = 0.0033; // ~300 frames ≈ 5 s
 
@@ -1291,7 +1297,12 @@ function startFlyTo(st: SceneState, acId: string): void {
     ? toV3(ac.position.x, ac.position.y, ac.position.alt)
     : new THREE.Vector3(0, 0, 0);
 
-  const targetCamPos = acPos.clone().add(INSPECT_OFFSET);
+  // Always look at a point at least MIN_LOOK_Y above the ground so the camera
+  // never aims into the tarmac when following ground / low-altitude aircraft.
+  const lookPos = acPos.clone();
+  lookPos.y = Math.max(MIN_LOOK_Y, lookPos.y);
+
+  const targetCamPos = lookPos.clone().add(INSPECT_OFFSET);
 
   // Derive current camera lookAt from its forward direction
   const dir = new THREE.Vector3();
@@ -1303,7 +1314,7 @@ function startFlyTo(st: SceneState, acId: string): void {
   st.flyFrom.copy(st.camera.position);
   st.flyTo.copy(targetCamPos);
   st.flyLookFrom.copy(currentLookAt);
-  st.flyLookTo.copy(acPos);
+  st.flyLookTo.copy(lookPos);
   st.flyProgress   = 0;
 }
 
@@ -1484,6 +1495,7 @@ export default function AirspaceView3D({
         const b = st.acMap.get(st.selectedAcId);
         if (b) {
           st.directorLookAt.copy(b.renderPos);
+          st.directorLookAt.y = Math.max(MIN_LOOK_Y, st.directorLookAt.y);
         } else {
           const dir = new THREE.Vector3();
           st.camera.getWorldDirection(dir);
@@ -1724,7 +1736,11 @@ export default function AirspaceView3D({
             // Arrived — track the aircraft's interpolated display position
             if (st.selectedAcId) {
               const b = st.acMap.get(st.selectedAcId);
-              if (b) camera.lookAt(b.renderPos);
+              if (b) {
+                const lp = b.renderPos.clone();
+                lp.y = Math.max(MIN_LOOK_Y, lp.y);
+                camera.lookAt(lp);
+              }
             }
           }
           break;
@@ -1756,6 +1772,7 @@ export default function AirspaceView3D({
                   camera.position.lerp(liveTarget, DIRECTOR_POS_LERP);
                 }
                 st.directorLookAt.lerp(b.renderPos, DIRECTOR_LOOK_LERP);
+                st.directorLookAt.y = Math.max(MIN_LOOK_Y, st.directorLookAt.y);
                 camera.lookAt(st.directorLookAt);
               } else {
                 // ── Normal follow ──────────────────────────────────────────
@@ -1766,7 +1783,9 @@ export default function AirspaceView3D({
                 } else {
                   camera.position.copy(liveTarget);
                 }
-                camera.lookAt(b.renderPos);
+                const nlp = b.renderPos.clone();
+                nlp.y = Math.max(MIN_LOOK_Y, nlp.y);
+                camera.lookAt(nlp);
               }
             }
           }
@@ -1816,7 +1835,7 @@ export default function AirspaceView3D({
               const b = st.acMap.get(id);
               if (b) { mx += b.renderPos.x; my += b.renderPos.y; mz += b.renderPos.z; cnt++; }
             }
-            if (cnt > 0) intr.targetLook.set(mx / cnt, my / cnt, mz / cnt);
+            if (cnt > 0) intr.targetLook.set(mx / cnt, Math.max(MIN_LOOK_Y, my / cnt), mz / cnt);
           }
 
           // Guard: if this interrupt was created by an older code path that
