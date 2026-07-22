@@ -106,6 +106,97 @@ const PHASE_HEX: Record<string, number> = {
 const HEX_DEFAULT = 0x94A3B8;
 function phaseHex(phase: string) { return PHASE_HEX[phase] ?? HEX_DEFAULT; }
 
+// ── Deterministic RNG seeded on aircraft ID (for stable fake manifest data) ───
+function seededRng(id: string): () => number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (Math.imul(31, h) + id.charCodeAt(i)) | 0;
+  return () => {
+    h ^= h << 13; h ^= h >> 17; h ^= h << 5;
+    return (h >>> 0) / 0xFFFFFFFF;
+  };
+}
+
+// ── Director floating info panel sprite ─────────────────────────────────────────
+function makeDirectorInfoPanel(ac: Aircraft): THREE.Sprite {
+  const rng = seededRng(ac.id);
+  const pax       = Math.round(rng() * 150 + 50);      // 50–200
+  const crew      = Math.round(rng() * 5  + 2);        // 2–7
+  const hasDG     = rng() < 0.15;
+  const hasAnimals= rng() < 0.10;
+
+  const W = 420, H = 310;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d')!;
+
+  // Background
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(7, 10, 22, 0.92)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Purple left accent bar
+  ctx.fillStyle = '#a855f7';
+  ctx.fillRect(0, 0, 3, H);
+
+  // Subtle purple border (rest of edges)
+  ctx.strokeStyle = 'rgba(168, 85, 247, 0.35)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(1, 1, W - 2, H - 2);
+
+  // Header — callsign
+  ctx.font = 'bold 26px "Courier New", monospace';
+  ctx.fillStyle = '#c084fc';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(ac.callsign, 18, 38);
+
+  // Aircraft type
+  ctx.font = '14px "Courier New", monospace';
+  ctx.fillStyle = '#64748b';
+  ctx.fillText(ac.type || '—', 18, 56);
+
+  // Divider
+  ctx.strokeStyle = 'rgba(168, 85, 247, 0.20)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(18, 66); ctx.lineTo(W - 18, 66); ctx.stroke();
+
+  // Route
+  const orig = ac.origin      ?? '—';
+  const dest = ac.destination ?? 'YBBN';
+  ctx.font = '15px "Courier New", monospace';
+  ctx.fillStyle = '#7dd3fc';
+  ctx.fillText(`${orig}  ›  ${dest}`, 18, 88);
+
+  // Data rows
+  const rows: Array<[string, string, string]> = [
+    ['PAX',   `${pax} passengers`,    '#e2e8f0'],
+    ['CREW',  `${crew} crew`,          '#e2e8f0'],
+    ['DG',    hasDG     ? '⚠  Declared dangerous goods' : 'None declared',
+              hasDG ? '#fbbf24' : '#64748b'],
+    ['ANIM',  hasAnimals ? '🐾  Live animals on board'   : 'None declared',
+              hasAnimals ? '#86efac' : '#64748b'],
+    ['PHASE', ac.phase.replace(/-/g, ' ').toUpperCase(), '#94a3b8'],
+  ];
+
+  let y = 116;
+  for (const [key, val, col] of rows) {
+    ctx.font = 'bold 11px "Courier New", monospace';
+    ctx.fillStyle = '#475569';
+    ctx.fillText(key, 18, y);
+    ctx.font = '13px "Courier New", monospace';
+    ctx.fillStyle = col;
+    ctx.fillText(val, 72, y);
+    y += 36;
+  }
+
+  const tex = new THREE.CanvasTexture(cv);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false });
+  const sp  = new THREE.Sprite(mat);
+  sp.scale.set(840, 620, 1);
+  sp.renderOrder = 10;
+  return sp;
+}
+
 // ── Callsign label sprite ──────────────────────────────────────────────────────
 function makeLabel(callsign: string, hex: number): THREE.Sprite {
   const W = 320, H = 80;
@@ -395,6 +486,10 @@ interface AcBundle {
   corrFromPos:     THREE.Vector3;
   /** performance.now() when the current correction began.  -1 = no correction. */
   corrStartMs:     number;
+  /** Purple selection halo ring shown when director focuses this aircraft. */
+  halo:            THREE.Mesh;
+  /** Floating director info panel sprite; null when not director-selected. */
+  infoPanel:       THREE.Sprite | null;
 }
 
 function disposeBundle(b: AcBundle): void {
@@ -403,6 +498,12 @@ function disposeBundle(b: AcBundle): void {
   b.trail.geometry.dispose(); (b.trail.material as THREE.Material).dispose();
   const sm = b.label.material as THREE.SpriteMaterial;
   sm.map?.dispose(); sm.dispose();
+  // HMR guard — bundles created before this field existed won't have halo
+  if (b.halo) { b.halo.geometry.dispose(); (b.halo.material as THREE.Material).dispose(); }
+  if (b.infoPanel) {
+    const pm = b.infoPanel.material as THREE.SpriteMaterial;
+    pm.map?.dispose(); pm.dispose();
+  }
 }
 
 // Shared stem material — one instance, never disposed here
@@ -840,6 +941,21 @@ export default function AirspaceView3D({
         // Apply renderPos to all visuals
         b.cone.position.copy(b.renderPos);
         b.label.position.set(b.renderPos.x, b.renderPos.y + LABEL_LIFT, b.renderPos.z);
+
+        // Halo: track aircraft + slow Z-rotation pulse
+        if (b.halo && b.halo.visible) {
+          b.halo.position.copy(b.renderPos);
+          b.halo.rotation.z += 0.008; // slow spin in the horizontal plane
+        }
+
+        // Director info panel: float 2 200 scene units to the left of the aircraft
+        if (b.infoPanel) {
+          b.infoPanel.position.set(
+            b.renderPos.x - 2_200,
+            b.renderPos.y + 200,
+            b.renderPos.z,
+          );
+        }
         b.stem.geometry.setFromPoints([
           new THREE.Vector3(b.renderPos.x, 0,             b.renderPos.z),
           new THREE.Vector3(b.renderPos.x, b.renderPos.y, b.renderPos.z),
@@ -1212,6 +1328,17 @@ export default function AirspaceView3D({
         scene.add(cone);
         coneToId.set(cone, ac.id); // register for raycasting
 
+        // Purple selection halo — flat torus ring, hidden until director selects
+        const haloGeo = new THREE.TorusGeometry(70, 7, 8, 64);
+        const haloMat = new THREE.MeshBasicMaterial({
+          color: 0xa855f7, transparent: true, opacity: 0.85, depthWrite: false,
+        });
+        const halo = new THREE.Mesh(haloGeo, haloMat);
+        halo.rotation.x = Math.PI / 2; // lay flat (horizontal ring)
+        halo.renderOrder = 3;
+        halo.visible = false;
+        scene.add(halo);
+
         const stemGeo = new THREE.BufferGeometry().setFromPoints([
           new THREE.Vector3(pos.x, 0, pos.z),
           new THREE.Vector3(pos.x, pos.y, pos.z),
@@ -1283,7 +1410,7 @@ export default function AirspaceView3D({
             })()
           : pos.clone();
         acMap.set(ac.id, {
-          cone, stem, trail, label, trailBuf,
+          cone, stem, trail, label, trailBuf, halo, infoPanel: null,
           renderPos:       spawnPos.clone(),
           lastKnownPos:    spawnPos.clone(),
           lastKnownTimeMs: nowMs,
@@ -1353,13 +1480,9 @@ export default function AirspaceView3D({
         // dimmed so the controller can distinguish a live track from one whose
         // position may be significantly behind the aircraft's true location.
         const isStale = (ac.seenPos ?? 0) > STALE_DISPLAY_S;
-        if (isSelected) {
-          cm.color.setHex(0xFACC15);
-          cm.emissive.setHex(0xFACC15);
-          cm.emissiveIntensity = 0.70;
-          (b.label.material as THREE.SpriteMaterial).opacity = 1.0;
-        } else if (isStale) {
-          // Dim to slate-grey with near-zero glow — still visible but clearly degraded
+
+        // ── Cone colour — never yellow; selection shown via halo ring ─────────
+        if (isStale) {
           cm.color.setHex(0x64748B);
           cm.emissive.setHex(0x334155);
           cm.emissiveIntensity = 0.05;
@@ -1367,8 +1490,24 @@ export default function AirspaceView3D({
         } else {
           cm.color.setHex(hex);
           cm.emissive.setHex(hex);
-          cm.emissiveIntensity = 0.30;
+          cm.emissiveIntensity = isSelected ? 0.55 : 0.30;
           (b.label.material as THREE.SpriteMaterial).opacity = 1.0;
+        }
+
+        // ── Purple halo ring — visible only when director-selected ────────────
+        if (b.halo) b.halo.visible = isSelected;
+
+        // ── Director info panel — create when selected, destroy when not ──────
+        if (b.infoPanel !== undefined) { // HMR guard
+          if (isSelected && st.directorMode && !b.infoPanel) {
+            b.infoPanel = makeDirectorInfoPanel(ac);
+            scene.add(b.infoPanel);
+          } else if ((!isSelected || !st.directorMode) && b.infoPanel) {
+            scene.remove(b.infoPanel);
+            const pm = b.infoPanel.material as THREE.SpriteMaterial;
+            pm.map?.dispose(); pm.dispose();
+            b.infoPanel = null;
+          }
         }
 
         // ── FIX A: trail sanity cap ────────────────────────────────────────
@@ -1389,9 +1528,7 @@ export default function AirspaceView3D({
         // HMR guard: old bundles still have LineBasicMaterial without .uniforms.
         const trailMat = b.trail.material as THREE.ShaderMaterial;
         if (trailMat.uniforms) {
-          trailMat.uniforms.color.value.setHex(
-            isSelected ? 0xFACC15 : (isStale ? 0x64748B : hex),
-          );
+          trailMat.uniforms.color.value.setHex(isStale ? 0x64748B : hex);
         }
       }
     }
@@ -1399,7 +1536,8 @@ export default function AirspaceView3D({
     // Remove aircraft that left the snapshot
     for (const [id, b] of acMap) {
       if (!seen.has(id)) {
-        scene.remove(b.cone, b.stem, b.trail, b.label);
+        scene.remove(b.cone, b.stem, b.trail, b.label, b.halo);
+        if (b.infoPanel) scene.remove(b.infoPanel);
         coneToId.delete(b.cone);
         disposeBundle(b);
         acMap.delete(id);
