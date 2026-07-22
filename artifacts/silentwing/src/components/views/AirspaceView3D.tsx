@@ -833,10 +833,53 @@ function disposeGlideSlopeLine(entry: GlideSlopeEntry, scene: THREE.Scene): void
 const TAKEOFF_LINE_HEIGHT = 500; // scene units (~3 300 ft) above the aircraft
 
 interface TakeoffIndicatorEntry {
-  line:     THREE.Line;
-  lineMat:  THREE.LineBasicMaterial;
-  sign:     THREE.Sprite;
-  signMat:  THREE.SpriteMaterial;
+  line:          THREE.Line;
+  lineMat:       THREE.LineBasicMaterial;
+  sign:          THREE.Sprite;
+  signMat:       THREE.SpriteMaterial;
+  /** Small "#N" sprite above the callsign label; hidden when aircraft is rolling. */
+  queueLabel:    THREE.Sprite;
+  queueLabelMat: THREE.SpriteMaterial;
+  /** 1-based queue position for holding aircraft; 0 = rolling / airborne (label hidden). */
+  queuePos:      number;
+}
+
+function makeQueueLabel(n: number): { sprite: THREE.Sprite; mat: THREE.SpriteMaterial } {
+  const W = 130, H = 60;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d')!;
+  ctx.clearRect(0, 0, W, H);
+  ctx.font        = 'bold 38px "Share Tech Mono", monospace';
+  ctx.fillStyle   = '#818CF8';
+  ctx.textAlign   = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`#${n}`, W / 2, H / 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(W * 1.3, H * 1.3, 1);
+  sprite.frustumCulled = false;
+  sprite.visible = false;
+  return { sprite, mat };
+}
+
+function repaintQueueLabel(entry: TakeoffIndicatorEntry, n: number): void {
+  const W = 130, H = 60;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d')!;
+  ctx.clearRect(0, 0, W, H);
+  ctx.font        = 'bold 38px "Share Tech Mono", monospace';
+  ctx.fillStyle   = '#818CF8';
+  ctx.textAlign   = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`#${n}`, W / 2, H / 2);
+  entry.queueLabelMat.map?.dispose();
+  entry.queueLabelMat.map = new THREE.CanvasTexture(cv);
+  entry.queueLabelMat.map.needsUpdate = true;
+  entry.queueLabelMat.needsUpdate = true;
+  entry.queuePos = n;
 }
 
 function makeTakeoffSign(): { sprite: THREE.Sprite; mat: THREE.SpriteMaterial } {
@@ -880,7 +923,10 @@ function createTakeoffIndicator(scene: THREE.Scene): TakeoffIndicatorEntry {
   const { sprite, mat } = makeTakeoffSign();
   scene.add(sprite);
 
-  return { line, lineMat, sign: sprite, signMat: mat };
+  const { sprite: queueLabel, mat: queueLabelMat } = makeQueueLabel(1);
+  scene.add(queueLabel);
+
+  return { line, lineMat, sign: sprite, signMat: mat, queueLabel, queueLabelMat, queuePos: 0 };
 }
 
 function disposeTakeoffIndicator(entry: TakeoffIndicatorEntry, scene: THREE.Scene): void {
@@ -890,6 +936,9 @@ function disposeTakeoffIndicator(entry: TakeoffIndicatorEntry, scene: THREE.Scen
   scene.remove(entry.sign);
   entry.signMat.map?.dispose();
   entry.signMat.dispose();
+  scene.remove(entry.queueLabel);
+  entry.queueLabelMat.map?.dispose();
+  entry.queueLabelMat.dispose();
 }
 
 // ── Per-aircraft Three.js bundle ──────────────────────────────────────────────
@@ -1951,6 +2000,10 @@ export default function AirspaceView3D({
           entry.line.geometry.computeBoundingSphere();
           // Position the "TAKING OFF" sign sprite just above the line top
           entry.sign.position.set(rx, top + 80, rz);
+          // Queue number label — sits just above the callsign label box
+          if (entry.queueLabel.visible) {
+            entry.queueLabel.position.set(rx, ry + LABEL_LIFT + 120, rz);
+          }
         }
       }
 
@@ -2648,6 +2701,45 @@ export default function AirspaceView3D({
         if (entry) {
           disposeTakeoffIndicator(entry, scene);
           st.takeoffMap.delete(ac.id);
+        }
+      }
+    }
+
+    // ── Assign takeoff queue order ────────────────────────────────────────────
+    // Holding aircraft (slow/stopped at threshold) get a "#N" label above their
+    // callsign box.  Sort by distance to nearest threshold — closest = #1.
+    // Rolling and airborne aircraft have their queue label hidden.
+    {
+      const holding: Array<{ id: string; dist: number }> = [];
+      for (const ac of aircraft) {
+        if (!st.takeoffMap.has(ac.id)) continue;
+        const onGround   = (ac.position.alt ?? 0) < 50;
+        const notVehicle = !ac.isGroundVehicle;
+        const isRolling  = onGround && notVehicle && ac.groundSpeed >= TAKEOFF_ROLL_GS_KT;
+        if (isRolling || !onGround || !notVehicle) continue; // only holding aircraft
+        let minDist = Infinity;
+        for (const [, tx, tz] of st.allThresholds) {
+          const dx = ac.position.x - tx;
+          const dz = ac.position.y - tz;
+          const d  = Math.sqrt(dx * dx + dz * dz);
+          if (d < minDist) minDist = d;
+        }
+        holding.push({ id: ac.id, dist: minDist });
+      }
+      holding.sort((a, b) => a.dist - b.dist);
+
+      // Update queue positions — repaint label canvas only when position changes.
+      const holdingSet = new Set(holding.map(h => h.id));
+      for (let i = 0; i < holding.length; i++) {
+        const entry = st.takeoffMap.get(holding[i].id)!;
+        const newPos = i + 1;
+        if (entry.queuePos !== newPos) repaintQueueLabel(entry, newPos);
+        entry.queueLabel.visible = true;
+      }
+      for (const [id, entry] of st.takeoffMap) {
+        if (!holdingSet.has(id) && entry.queueLabel.visible) {
+          entry.queueLabel.visible = false;
+          entry.queuePos = 0;
         }
       }
     }

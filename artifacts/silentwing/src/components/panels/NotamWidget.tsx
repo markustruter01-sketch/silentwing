@@ -20,12 +20,13 @@ const MAX_SHOWN  = 6;
 const TEXT_LIMIT = 140; // chars before truncation
 
 async function fetchNotams(icao: string): Promise<Notam[]> {
-  const url = `https://aviationweather.gov/api/data/notam?ids=${icao}&format=json`;
-  const res  = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-  if (!res.ok) throw new Error(`NOTAM ${res.status}`);
-  const json: Notam[] = await res.json();
-  // Keep only entries that look like actual NOTAM objects
-  return json.filter(n => n.notamID && n.text).slice(0, MAX_SHOWN);
+  // Proxy through the API server to avoid CORS issues with aviationweather.gov.
+  const url = `/api/notam?icao=${encodeURIComponent(icao)}`;
+  const res  = await fetch(url, { signal: AbortSignal.timeout(12_000) });
+  const body = await res.json() as Notam[] | { error: string };
+  // Upstream returns { error } when the airport/API isn't available.
+  if (!Array.isArray(body)) throw new Error((body as { error: string }).error ?? `NOTAM ${res.status}`);
+  return body.filter(n => n.notamID && n.text).slice(0, MAX_SHOWN);
 }
 
 /** Strip the common NOTAM preamble so the display text is concise. */
@@ -52,7 +53,9 @@ export default function NotamWidget() {
       setFetchedAt(Date.now());
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Unavailable');
+      // Suppress retry noise — NOTAM APIs for non-US airports have no free
+      // public source; show a static unavailable message instead of looping.
+      setError('No free NOTAM source for ' + icao);
     }
   };
 
