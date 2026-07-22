@@ -393,6 +393,17 @@ function _paintAcLabel(
   ctx.globalAlpha = 1.0;
 }
 
+/**
+ * Returns the world-space sprite dimensions for an aircraft label based on
+ * its flight phase.  Taxi aircraft are half-size; gate-parked aircraft are
+ * quarter-size to reduce clutter at the terminal stand area.
+ */
+function labelScaleForPhase(phase: string): [number, number] {
+  if (phase === 'at-gate')                              return [135, 37.5]; // 75 % smaller
+  if (phase === 'taxi-in' || phase === 'taxi-out')      return [270, 75];   // 50 % smaller
+  return [540, 150]; // full size (airborne, approach, landing, takeoff)
+}
+
 function makeAcLabel(callsign: string, headingDeg: number, phase: string): THREE.Sprite {
   const cv = document.createElement('canvas');
   cv.width = AC_LABEL_W; cv.height = AC_LABEL_H;
@@ -402,7 +413,8 @@ function makeAcLabel(callsign: string, headingDeg: number, phase: string): THREE
   const tex = new THREE.CanvasTexture(cv);
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
   const sp = new THREE.Sprite(mat);
-  sp.scale.set(540, 150, 1);
+  const [sw, sh] = labelScaleForPhase(phase);
+  sp.scale.set(sw, sh, 1);
   return sp;
 }
 
@@ -417,6 +429,9 @@ function refreshAcLabel(b: AcBundle, callsign: string, headingDeg: number, phase
   sm.map = new THREE.CanvasTexture(cv);
   sm.map.needsUpdate = true;
   sm.needsUpdate = true;
+  // Update sprite size when aircraft transitions between phase tiers.
+  const [sw, sh] = labelScaleForPhase(phase);
+  b.label.scale.set(sw, sh, 1);
   b.labelPhase = phase;
   b.labelHeadingDeg = headingDeg;
 }
