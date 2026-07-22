@@ -1,0 +1,182 @@
+# SILENTWING — PHASE 6B: THREE MORE DETECTORS
+
+**ENVIRONMENT:** Existing SilentWing Replit dev project. Phase 6A (alert shell +
+separation detector) is built and working. Phase 6B adds THREE new detectors to
+the SAME AlertEngine and the SAME left-edge alert shell. Do NOT rebuild the
+shell. Do NOT touch the existing separation detector's logic. Stop after 6B and
+report.
+
+All three detectors work on LIVE ADS-B data (and Sim). None require flight
+plans. Route-deviation is intentionally EXCLUDED (needs flight plans — parked).
+
+---
+
+## SHARED RULES (apply to all three detectors)
+
+- Each detector consumes the current WorldSnapshot only — adapter-agnostic.
+- Each produces `SWAlert` objects via the existing engine, reusing the existing
+  advisory/caution/critical tiers, dedup-by-key, clear-on-resolve, and
+  re-raise-on-escalation behaviour.
+- Only use FRESH aircraft (skip stale/greyed tracks) UNLESS the detector is
+  specifically about staleness (detector 3).
+- Every alert message states the plain-language why WITH live numbers.
+- Add a new `AlertKind` for each: 'predicted_conflict', 'runway_occupancy',
+  'stale_track'. The existing 'separation' kind stays as-is.
+- Each detector's thresholds live in named constants at the top of its file.
+
+---
+
+## DETECTOR 1 — PREDICTED CONFLICT (straight-line projection)
+
+**Concept:** unlike the separation detector (which fires when aircraft are
+ALREADY too close), this looks AHEAD: project each airborne aircraft forward
+along its current heading at its current ground speed in a straight line, and
+find pairs whose projected paths bring them within separation minima within the
+look-ahead window — before it actually happens.
+
+**Method:**
+- For each pair of airborne fresh aircraft, step forward in time from now to
+  LOOKAHEAD_S (default 120 s) in fixed steps (e.g. every 10 s).
+- At each step, project both aircraft straight-line: 
+  `pos(t) = pos_now + velocity_vector * t` (horizontal from heading+gs;
+  vertical: hold current altitude — straight-line horizontal only, do NOT
+  extrapolate climb/descent in 6B).
+- Compute horizontal + vertical separation at each step.
+- If at ANY future step both horizontal < 3 nm AND vertical < 1000 ft, a
+  predicted conflict exists. Record the TIME-TO-CONFLICT (first step where the
+  breach occurs) and the closest approach.
+
+**Severity by time-to-conflict:**
+- **advisory:** breach predicted 90-120 s out
+- **caution:**  breach predicted 45-90 s out
+- **critical:** breach predicted < 45 s out
+
+**Message example:**
+"QFA523 & VOZ711 — predicted 2.4 nm / 800 ft in 72 s (converging)".
+
+**Rules:**
+- Only pairs whose separation is DECREASING (converging) — if they're already
+  separating, no predicted-conflict alert.
+- If a pair ALSO has an active current-separation alert (detector from 6A),
+  the current breach takes precedence — do not double-alert the same pair with
+  both a separation AND a predicted_conflict alert. Current breach wins.
+- Straight-line only. State clearly this ignores turns (aircraft may be
+  vectored) — this is a heads-up, not a guarantee.
+
+---
+
+## DETECTOR 2 — RUNWAY OCCUPANCY
+
+**Concept:** flag when more than one aircraft is on or dangerously close to the
+same runway — the classic runway-incursion risk.
+
+**Method:**
+- Use the REAL runway geometry (REAL_RUNWAYS from ybbn_real.ts). For each
+  runway, build a capture corridor: within RUNWAY_WIDTH_M (default 60 m) of the
+  runway centreline polyline, along its length, PLUS a short approach/departure
+  extension at each end (default 500 m).
+- For each aircraft, determine if it is within a runway's corridor AND at low
+  altitude (alt < 500 ft OR on ground) — i.e. actually using/crossing the
+  runway, not cruising over it at altitude.
+- If 2+ aircraft occupy the SAME runway corridor simultaneously → runway
+  occupancy alert.
+
+**Severity:**
+- **caution:** 2 aircraft in the same corridor, at least one moving.
+- **critical:** 2+ aircraft in the same corridor AND both moving toward each
+  other or one on the runway while another is on short final (both in the
+  corridor, converging).
+- (No advisory tier for this one — runway conflicts are inherently serious.)
+
+**Message example:**
+"Runway 01L/19R — MAS302 and QFA110 both in runway corridor".
+
+**Rules:**
+- Include ground aircraft here (unlike the airborne-only separation detector) —
+  runway occupancy is fundamentally a ground/near-ground concern.
+- State the runway ref in the message.
+- One alert per runway (not per pair) — if 3 aircraft occupy one runway, it's
+  one alert listing all involved.
+
+---
+
+## DETECTOR 3 — STALE-TRACK ESCALATION
+
+**Concept:** you already dim tracks whose position data is stale (grey). This
+detector ESCALATES a stale track to an actual alert when it becomes dangerous:
+a track whose data is very old is a "ghost" — the controller may be looking at
+a position the aircraft has long left.
+
+**Method:**
+- For each aircraft with seen_pos > STALE_ALERT_S (default 30 s), raise a
+  stale_track alert.
+- Severity by staleness:
+  - **advisory:** seen_pos 30-60 s (track going stale)
+  - **caution:**  seen_pos > 60 s (track significantly stale — position
+    unreliable)
+- (No critical tier — staleness itself isn't an imminent collision, it's a
+  data-integrity warning. But if a stale track is ALSO near other traffic, note
+  that in the message.)
+
+**Message example:**
+"KJR — track stale 47 s, position may be unreliable".
+
+**Rules:**
+- This is the ONE detector that operates ON stale tracks (all others skip them).
+- Clear the alert when fresh data resumes (seen_pos drops back below threshold).
+- Do not spam — one alert per aircraft, updated as staleness grows.
+
+---
+
+## CONFLICT HORIZON TAB (populate the 6A placeholder)
+
+The "Conflict Horizon" tab was a placeholder in 6A. Populate it now:
+- List all active PREDICTED_CONFLICT alerts (detector 1), sorted by
+  time-to-conflict (soonest first).
+- Each row: the aircraft pair, predicted separation, time-to-conflict, severity.
+- This is the forward-looking view; the Alerts tab shows current/all alerts,
+  Conflict Horizon shows specifically what's coming.
+
+---
+
+## VISUAL LINKS (light touch, reuse existing)
+
+- Predicted-conflict pairs: reuse the existing aircraft highlight, but consider
+  a distinct style (e.g. a thin projected line toward the predicted conflict
+  point) if cheap. Optional — do not over-build.
+- Runway-occupancy: highlight the runway corridor and involved aircraft.
+- Do not rewrite the aircraft renderer; extend the existing highlight path.
+
+---
+
+## HARD RULES
+
+1. Reuse the existing AlertEngine, alert shell, tiers, dedup, log, and dismiss
+   behaviour. Do NOT rebuild any of it.
+2. Do NOT modify the existing 6A separation detector.
+3. No double-alerting the same pair with both current-separation AND
+   predicted-conflict — current breach wins.
+4. Advisory tier still NEVER auto-expands and NEVER sounds — same as 6A.
+5. Predicted conflict is straight-line only; message/behaviour must not imply
+   certainty.
+6. Do NOT build route-deviation (needs flight plans — parked).
+7. Do NOT break existing views, live ingest, sim/live toggle, or 6A alerts.
+
+---
+
+## REPORT AFTER BUILDING (raw, no summaries)
+
+1. Raw file list created/modified.
+2. Predicted-conflict: the projection + time-to-conflict code. Show a raw trace
+   of two converging aircraft producing a predicted_conflict alert with correct
+   time-to-conflict and message.
+3. Runway occupancy: the corridor test code. Show a raw trace of two aircraft in
+   one runway corridor producing an alert with the runway ref.
+4. Stale-track: show a raw trace of a >30s stale aircraft producing an alert,
+   and confirm it clears when fresh data resumes.
+5. Confirm no pair gets BOTH a separation and predicted_conflict alert
+   simultaneously (current breach precedence).
+6. Confirm advisory tier still does not auto-expand or sound.
+7. Confirm all three run on a live ADS-B snapshot (or via the dev inject button
+   where live traffic didn't present the condition).
+8. Confirm the Conflict Horizon tab now lists predicted conflicts.
