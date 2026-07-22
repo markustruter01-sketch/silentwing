@@ -191,10 +191,15 @@ export default function App() {
 
       const ph     = phaseHistRef.current;
       const list   = visibleAircraftRef.current;
+      // 80 km radius keeps director inside the terminal area (approach fixes,
+      // runway, taxiways).  Squared comparison avoids a sqrt per aircraft.
+      const DIRECTOR_RADIUS_M2 = 80_000 ** 2;
+
       const scored = list
         .filter(ac =>
-          ac.phase !== 'at-gate' &&  // stationary parked planes are boring
-          ac.position.alt < 3_000,   // ignore deep-flight above FL030; keep airport activity
+          ac.phase !== 'at-gate' &&                                   // boring when stationary
+          ac.position.alt < 3_000 &&                                  // ignore deep-flight above FL030
+          ac.position.x ** 2 + ac.position.y ** 2 < DIRECTOR_RADIUS_M2, // within 80 km of airport
         )
         .map(ac => ({ ac, score: directorScore(ac, ph.get(ac.id)) }))
         .sort((a, b) => b.score - a.score);
