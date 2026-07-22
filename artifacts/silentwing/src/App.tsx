@@ -276,13 +276,20 @@ export default function App() {
     }
   }, [activeAlerts]);
 
-  /** Called by AirspaceView3D when the 9-second pivot-in/hold/pivot-out completes. */
+  /** Called by AirspaceView3D when the pivot-in/hold/pivot-out completes. */
   const handleAlertFocusDone = useCallback(() => {
     console.log('[APP] camera interrupt complete — resuming director');
     alertInterruptActiveRef.current = false;
     setAlertFocusId(null);
     // Reset dwell so the director holds for a full 10 s before switching subjects.
     lastSwitchRef.current = Date.now();
+  }, []);
+
+  /** Manual focus — called when the controller clicks an alert in the list panel. */
+  const handleManualAlertFocus = useCallback((alertId: string) => {
+    console.log(`[APP] manual alert focus → ${alertId}`);
+    alertInterruptActiveRef.current = true;
+    setAlertFocusId(alertId);
   }, []);
 
   // ── Director intro hint ─────────────────────────────────────────────────
@@ -611,6 +618,7 @@ export default function App() {
         {/* ── Phase 6A alert shell — left edge ── */}
         <AlertShell
           activeAlerts={activeAlerts}
+          onAlertFocus={handleManualAlertFocus}
         />
         {/* ── Brisbane Airport title — 3D airspace only ── */}
         {view === 'airspace' && (

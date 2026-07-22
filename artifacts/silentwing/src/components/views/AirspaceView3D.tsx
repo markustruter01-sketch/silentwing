@@ -1175,7 +1175,7 @@ export default function AirspaceView3D({
           intr.elapsedMs += dt;
 
           const PIVOT_IN_MS  = 2000;
-          const HOLD_MS      = 5000;
+          const HOLD_MS      = 6000;  // 2 s in + 6 s hold + 2 s out = 10 s total
           const PIVOT_OUT_MS = 2000;
           const TOTAL_MS     = PIVOT_IN_MS + HOLD_MS + PIVOT_OUT_MS;
 
