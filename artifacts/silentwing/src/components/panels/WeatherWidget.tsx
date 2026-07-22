@@ -154,6 +154,10 @@ export default function WeatherWidget({ profile }: { profile: AirportProfile }) 
   const [wx,    setWx]    = useState<WeatherState | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Guard: profile may be transiently undefined during HMR or a fast airport
+  // switch — render nothing rather than crashing the overlay.
+  if (!profile) return null;
+
   useEffect(() => {
     // Clear stale data immediately on airport change, then fetch fresh weather.
     setWx(null);
