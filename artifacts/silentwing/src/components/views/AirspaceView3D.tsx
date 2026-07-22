@@ -71,7 +71,7 @@ const DIRECTOR_FOLLOW_OFFSET = new THREE.Vector3(0, 1_050, 2_100);
 
 // Transition speeds (flyProgress increment per frame at 60 fps)
 const FLY_SPEED_NORMAL   = 0.022; // ~45 frames ≈ 0.75 s
-const FLY_SPEED_DIRECTOR = 0.010; // ~100 frames ≈ 1.7 s (longer arc = smoother feel)
+const FLY_SPEED_DIRECTOR = 0.00208; // ~480 frames ≈ 8 s
 // Tracking lerp rate after fly-to settles: director uses slow drift so camera
 // glides rather than snapping when the aircraft turns.
 const DIRECTOR_LERP_RATE = 0.04;
