@@ -70,7 +70,7 @@ const FOLLOW_OFFSET  = new THREE.Vector3(0, 700, 1400);
 const DIRECTOR_FOLLOW_OFFSET = new THREE.Vector3(0, 4_500, 9_000);
 
 // Transition speed for fly-to animations (flyProgress increment per frame at 60 fps)
-const FLY_SPEED_NORMAL = 0.0056; // ~180 frames ≈ 3 s
+const FLY_SPEED_NORMAL = 0.0033; // ~300 frames ≈ 5 s
 
 // Director continuous-lerp rates — no discrete fly-to; both position and look-at
 // drift toward their targets every frame so aircraft switches are seamless glides.
@@ -576,7 +576,14 @@ export default function AirspaceView3D({
       const tz  = st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle);
       st.flyFrom.copy(cam.position);
       st.flyTo.set(tx, st.orbitElevation, tz);
-      st.flyLookFrom.copy(st.orbitTarget);
+      // Capture the actual look-at point the camera was aimed at so the
+      // look-at lerp starts from the right place (aircraft or wherever the
+      // camera was pointed) and smoothly glides to the orbit centre.
+      // Without this fix flyLookFrom == flyLookTo == orbitTarget, which
+      // makes the camera immediately snap its look direction on frame 0.
+      const dir3 = new THREE.Vector3();
+      cam.getWorldDirection(dir3);
+      st.flyLookFrom.copy(cam.position).addScaledVector(dir3, 2000);
       st.flyLookTo.copy(st.orbitTarget);
       st.flyProgress = 0;
       st.cameraMode  = 'returning';
@@ -772,7 +779,7 @@ export default function AirspaceView3D({
           // Smooth fly-back to the default orbit position.
           // On completion, hands off to 'orbit' with angle re-synced so
           // the auto-orbit continues seamlessly from the arrived position.
-          st.flyProgress = Math.min(st.flyProgress + 0.018, 1); // ~56 frames ≈ 0.9 s
+          st.flyProgress = Math.min(st.flyProgress + FLY_SPEED_NORMAL, 1); // same 5 s as fly-to
           const t  = easeInOut(st.flyProgress);
           camera.position.lerpVectors(st.flyFrom, st.flyTo, t);
           const lk = new THREE.Vector3().lerpVectors(st.flyLookFrom, st.flyLookTo, t);

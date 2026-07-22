@@ -125,17 +125,30 @@ export default function AlertShell({ activeAlerts, allAlerts, onDismiss }: Alert
   return (
     <div className="absolute left-0 inset-y-0 z-[120] flex pointer-events-none select-none">
 
-      {/* ── Icon strip (always visible) ───────────────────────────────────── */}
-      <div className="w-9 flex flex-col bg-[#060A0F]/92 border-r border-slate-800/50 pointer-events-auto">
-        {TABS.map(tab => {
-          const isActive = expandedTab === tab.id;
-          const count    = tab.id === 'alerts' ? activeAlerts.length
-                         : tab.id === 'log'    ? allAlerts.length
-                         : 0;
-          const glowCls  = tab.id === 'alerts' ? alertsTabClass : '';
-          const iconColor =
-            tab.id === 'alerts' && highest === 'critical' ? 'text-red-400' :
-            tab.id === 'alerts' && highest === 'caution'  ? 'text-amber-400' :
+      {/* ── Notebook tab spine (always visible) ─────────────────────────────── */}
+      {/* Styled as physical notebook section dividers: each tab has a coloured
+          left accent bar, a vertical section label, and subtle page-edge depth. */}
+      <div
+        className="w-11 flex flex-col bg-[#06090D]/95 border-r border-slate-800/40 pointer-events-auto"
+        style={{ boxShadow: '3px 0 14px rgba(0,0,0,0.65)' }}
+      >
+        {TABS.map((tab, idx) => {
+          const isActive  = expandedTab === tab.id;
+          const count     = tab.id === 'alerts' ? activeAlerts.length
+                          : tab.id === 'log'    ? allAlerts.length
+                          : 0;
+          const glowCls   = tab.id === 'alerts' ? alertsTabClass : '';
+
+          // Left accent colour — drives the "section colour" of this notebook tab
+          const accentRgb =
+            tab.id === 'alerts' && highest === 'critical' ? '239,68,68'    :
+            tab.id === 'alerts' && highest === 'caution'  ? '245,158,11'   :
+            tab.id === 'alerts' && highest === 'advisory' ? '250,204,21'   :
+            isActive                                       ? '56,189,248'   : '51,65,85';
+
+          const labelColor =
+            tab.id === 'alerts' && highest === 'critical' ? 'text-red-400'    :
+            tab.id === 'alerts' && highest === 'caution'  ? 'text-amber-400'  :
             tab.id === 'alerts' && highest === 'advisory' ? 'text-yellow-400' :
             isActive ? 'text-sky-400' : 'text-slate-500';
 
@@ -145,52 +158,69 @@ export default function AlertShell({ activeAlerts, allAlerts, onDismiss }: Alert
               onClick={() => toggleTab(tab.id)}
               title={tab.label}
               className={[
-                'relative flex flex-col items-center justify-center gap-0.5 py-3 px-0 w-full',
-                'cursor-pointer transition-colors duration-150',
-                isActive ? 'bg-slate-800/60' : 'hover:bg-slate-800/30',
+                'relative flex flex-col items-center justify-center py-[14px] px-0 w-full',
+                'cursor-pointer transition-colors duration-150 group',
+                // Divider between tabs except last-before-spacer
+                idx < TABS.length - 1 ? 'border-b border-slate-800/40' : '',
+                isActive ? 'bg-slate-800/45' : 'hover:bg-slate-800/20',
                 glowCls,
               ].join(' ')}
             >
-              {/* Icon */}
-              <span className={`text-[15px] leading-none ${iconColor}`}>{tab.icon}</span>
+              {/* ── Coloured left accent bar — the "spine colour" of this section ── */}
+              <div
+                className="absolute left-0 top-3 bottom-3 w-[3px] rounded-r-full transition-all duration-200"
+                style={{
+                  background: `rgb(${accentRgb})`,
+                  opacity:     isActive || count > 0 ? 0.9 : 0.25,
+                }}
+              />
 
-              {/* Rotated label */}
-              <span
-                className={`text-[6.5px] tracking-widest uppercase font-mono leading-none mt-0.5 ${isActive ? 'text-sky-400' : 'text-slate-600'}`}
-                style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
-              >
-                {tab.shortLabel}
-              </span>
-
-              {/* Count badge */}
+              {/* ── Count badge (top, only when non-zero) ─────────────────────── */}
               {count > 0 && (
                 <span className={[
-                  'text-[7px] font-mono font-bold leading-none mt-0.5 px-0.5 rounded-sm',
-                  tab.id === 'alerts' && highest === 'critical' ? 'text-red-300 bg-red-950/70' :
-                  tab.id === 'alerts' && highest === 'caution'  ? 'text-amber-300 bg-amber-950/70' :
-                  tab.id === 'alerts' && highest === 'advisory' ? 'text-yellow-300 bg-yellow-950/70' :
-                  'text-sky-400 bg-sky-950/60',
+                  'text-[8px] font-mono font-bold leading-none mb-2 min-w-[16px] text-center',
+                  'px-1 py-px rounded-sm',
+                  tab.id === 'alerts' && highest === 'critical' ? 'text-red-300 bg-red-950/80 ring-1 ring-red-700/50' :
+                  tab.id === 'alerts' && highest === 'caution'  ? 'text-amber-300 bg-amber-950/80 ring-1 ring-amber-700/50' :
+                  tab.id === 'alerts' && highest === 'advisory' ? 'text-yellow-300 bg-yellow-950/80' :
+                  'text-sky-400 bg-sky-950/70',
                 ].join(' ')}>
                   {count}
                 </span>
               )}
 
-              {/* Active edge indicator */}
+              {/* ── Section label — rotated, notebook-tab style ─────────────────── */}
+              <span
+                className={`font-mono uppercase font-medium tracking-[0.2em] text-[8px] leading-none transition-colors duration-150 ${labelColor}`}
+                style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+              >
+                {tab.shortLabel}
+              </span>
+
+              {/* ── Icon below the label ───────────────────────────────────────── */}
+              <span className={`text-[11px] leading-none mt-2 transition-colors duration-150 ${labelColor}`}>
+                {tab.icon}
+              </span>
+
+              {/* ── Right edge — "open page" indicator when expanded ───────────── */}
               {isActive && (
-                <div className="absolute right-0 inset-y-0 w-[2px] bg-sky-600/60 rounded-l" />
+                <div
+                  className="absolute right-0 top-0 bottom-0 w-[2px]"
+                  style={{ background: `rgb(${accentRgb})`, opacity: 0.5 }}
+                />
               )}
             </button>
           );
         })}
 
-        {/* Spacer */}
-        <div className="flex-1" />
+        {/* ── Rest of the "page" below the tabs ──────────────────────────────── */}
+        <div className="flex-1 border-b border-slate-800/30" />
 
-        {/* Audio toggle */}
+        {/* ── Audio mute toggle ──────────────────────────────────────────────── */}
         <button
           onClick={() => setAudioEnabled(v => !v)}
           title={audioEnabled ? 'Mute alert audio' : 'Enable alert audio'}
-          className="flex items-center justify-center py-2 w-full text-[13px] text-slate-700 hover:text-slate-400 cursor-pointer transition-colors"
+          className="py-3 w-full text-center text-[13px] text-slate-700 hover:text-slate-400 cursor-pointer transition-colors"
         >
           {audioEnabled ? '🔔' : '🔕'}
         </button>

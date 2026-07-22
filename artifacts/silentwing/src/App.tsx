@@ -172,6 +172,10 @@ export default function App() {
   const directorPhaseRef   = useRef<'aircraft' | 'airport'>('aircraft');
   /** Stable ref to the current selectedAcId — avoids stale closures in the interval. */
   const selectedAcIdRef    = useRef<string | null>(null);
+  /** Cooldown map: aircraft id → ms timestamp of last director selection.
+   *  Aircraft visited within DIRECTOR_COOLDOWN_MS receive a heavy score penalty
+   *  so the director cycles through different subjects instead of looping. */
+  const directorCooldownRef = useRef<Map<string, number>>(new Map());
   /** Stable ref to the latest visible aircraft list — avoids re-starting interval on every poll. */
   const visibleAircraftRef = useRef<Aircraft[]>([]);
 
@@ -284,22 +288,38 @@ export default function App() {
       const list   = visibleAircraftRef.current;
       const DIRECTOR_RADIUS_M2 = 10_000 ** 2;
 
+      const DIRECTOR_COOLDOWN_MS = 90_000; // 90 s before an aircraft can be picked again
+      const DIRECTOR_COOLDOWN_PENALTY = 200; // large enough to beat most phase bonuses
+      const cooldown = directorCooldownRef.current;
+
+      // Prune expired cooldown entries
+      for (const [id, ts] of cooldown) {
+        if (now - ts > DIRECTOR_COOLDOWN_MS) cooldown.delete(id);
+      }
+
       const scored = list
         .filter(ac =>
           ac.phase !== 'at-gate' &&
           ac.position.alt < 3_000 &&
           ac.position.x ** 2 + ac.position.y ** 2 < DIRECTOR_RADIUS_M2,
         )
-        .map(ac => ({ ac, score: directorScore(ac, ph.get(ac.id)) }))
+        .map(ac => {
+          const base    = directorScore(ac, ph.get(ac.id));
+          // Penalise recently-seen aircraft so the director cycles through the fleet
+          const penalty = cooldown.has(ac.id) ? DIRECTOR_COOLDOWN_PENALTY : 0;
+          return { ac, score: base - penalty };
+        })
         .sort((a, b) => b.score - a.score);
 
       if (scored.length === 0) return;
 
-      const current = selectedAcIdRef.current;
-      let pick = scored[0].ac;
-      if (pick.id === current && scored.length > 1 && scored[1].score >= 30) {
-        pick = scored[1].ac;
-      }
+      // Always pick the top scorer after cooldown penalties.
+      // (The old "skip current if #2 is good enough" check is now redundant
+      // because the current aircraft carries a full cooldown penalty.)
+      const pick = scored[0].ac;
+
+      // Record this pick in the cooldown map
+      cooldown.set(pick.id, now);
 
       setSelectedAcId(pick.id);
       setCameraMode('follow');

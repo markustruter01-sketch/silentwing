@@ -52,7 +52,13 @@ function project(lat: number, lon: number): { x: number; y: number } {
 const AT_GATE_GS_KT  = 2;   // knots  — aircraft considered stationary at gate
 const AT_GATE_DIST_M = 60;  // metres — gate proximity threshold
 
-function derivePhase(altFt: number, gs: number, acX: number, acY: number): FlightPhase {
+function derivePhase(
+  altFt: number,
+  gs: number,
+  baroRate: number | undefined,
+  acX: number,
+  acY: number,
+): FlightPhase {
   if (altFt < 50) {
     // On the ground — distinguish at-gate from taxiing
     if (gs < AT_GATE_GS_KT) {
@@ -65,9 +71,16 @@ function derivePhase(altFt: number, gs: number, acX: number, acY: number): Fligh
     }
     return 'taxi-in';
   }
-  if (altFt <   500) return 'landing';
-  if (altFt < 3_000) return 'approach';
-  return 'enroute-arrival';
+
+  // Use vertical rate to distinguish departure (climbing) from arrival (descending).
+  // baro_rate > 200 ft/min = clearly climbing; ≤ 200 = level/descending.
+  // Many low-cost transponders omit baro_rate — we fall back to "descent assumed"
+  // when the field is absent, as arrivals outnumber departures near the airport.
+  const climbing = (baroRate ?? 0) > 200;
+
+  if (altFt <   500) return climbing ? 'takeoff'   : 'landing';
+  if (altFt < 3_000) return climbing ? 'departure' : 'approach';
+  return                              climbing ? 'enroute-departure' : 'enroute-arrival';
 }
 
 // ── Callsign sanitisation ─────────────────────────────────────────────────────
@@ -137,7 +150,7 @@ function normalise(raw: RawAc): (Aircraft & { isGroundVehicle: boolean }) | null
     id:             raw.hex,
     callsign,
     type:           raw.t ?? 'UNKN',
-    phase:          isGroundVehicle ? 'taxi-in' : derivePhase(altFt, Math.round(raw.gs ?? 0), x, y),
+    phase:          isGroundVehicle ? 'taxi-in' : derivePhase(altFt, Math.round(raw.gs ?? 0), raw.baro_rate, x, y),
     position:       { x, y, alt: altFt },
     heading,
     groundSpeed:    Math.round(raw.gs ?? 0),
