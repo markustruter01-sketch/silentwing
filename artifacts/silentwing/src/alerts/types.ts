@@ -1,10 +1,14 @@
-// ── SilentWing alert types (Phase 6A) ────────────────────────────────────────
+// ── SilentWing alert types (Phase 6A / 6B) ───────────────────────────────────
 // These are INTERNAL alert types used by the AlertEngine and UI.
 // They are separate from the legacy Alert type in src/types/index.ts so the
 // existing adapter interfaces are not disturbed.
 
 export type SWAlertSeverity = 'advisory' | 'caution' | 'critical';
-export type SWAlertKind     = 'separation'; // 6B will add more
+export type SWAlertKind     =
+  | 'separation'        // Phase 6A — current separation breach
+  | 'predicted_conflict' // Phase 6B — straight-line projected breach
+  | 'runway_occupancy'  // Phase 6B — 2+ aircraft in same runway corridor
+  | 'stale_track';      // Phase 6B — track data too old to trust
 
 export interface SWAlert {
   id:            string;
@@ -20,6 +24,16 @@ export interface SWAlert {
   clearedAt?:    number;   // set when the condition resolves
   acknowledged:  boolean;  // true after controller dismisses
   acknowledgedAt?: number;
+
+  /** Phase 6B — extra data for Conflict Horizon tab */
+  extra?: {
+    /** Time-to-conflict in seconds (predicted_conflict only) */
+    ttcSeconds?:    number;
+    /** Predicted closest horizontal separation in nm (predicted_conflict only) */
+    predClosestNm?: number;
+    /** Predicted closest vertical separation in ft (predicted_conflict only) */
+    predClosestFt?: number;
+  };
 }
 
 /** Numeric rank so severities can be compared: critical > caution > advisory. */

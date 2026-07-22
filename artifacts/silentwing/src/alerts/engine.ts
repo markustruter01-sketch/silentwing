@@ -3,7 +3,7 @@
 // Consumes WorldSnapshots (from any adapter — sim or live) and maintains the
 // full alert state.  Rules:
 //
-//  • One active alert per unique aircraft-pair per kind (no per-poll spam).
+//  • One active alert per unique key per kind (no per-poll spam).
 //  • Alert ID is STABLE while the condition persists.
 //  • clearedAt is set when the condition resolves; the alert stays in the log.
 //  • Dismissed (acknowledged) alerts stay dismissed UNLESS the severity
@@ -13,14 +13,30 @@
 
 import type { WorldSnapshot, Aircraft } from '../types';
 import { detectSeparation }              from './detectors/separation';
-import type { SWAlert, SWAlertSeverity } from './types';
+import { detectPredictedConflict }       from './detectors/predictedConflict';
+import { detectRunwayOccupancy }         from './detectors/runwayOccupancy';
+import { detectStaleTracks }             from './detectors/staleTrack';
+import type { SWAlert, SWAlertSeverity, SWAlertKind } from './types';
 import { severityRank }                  from './types';
 
 let _nextId = 1;
 function newId() { return `sw-${_nextId++}`; }
 
+// ── Generic finding shape ─────────────────────────────────────────────────────
+// Every detector must produce findings that conform to this interface so the
+// engine can process them uniformly.
+interface DetectorFinding {
+  key:          string;
+  kind:         SWAlertKind;
+  severity:     SWAlertSeverity;
+  aircraft:     string[];
+  aircraftIds:  string[];
+  message:      string;
+  extra?: SWAlert['extra'];
+}
+
 export class AlertEngine {
-  /** One active alert per unique pair + kind.  Key = 'kind:idA:idB'. */
+  /** One active alert per unique key.  Key encodes kind + involved IDs. */
   private activeMap = new Map<string, SWAlert>();
   /** Complete append-only log — alerts are never deleted. */
   private log: SWAlert[] = [];
@@ -33,57 +49,116 @@ export class AlertEngine {
     const allAircraft = [...snapshot.aircraft, ...extra];
     const now = snapshot.t;
 
-    const findings = detectSeparation(allAircraft);
+    // ── 1. Separation (Phase 6A) ──────────────────────────────────────────────
+    const sepFindings = detectSeparation(allAircraft).map(f => ({
+      ...f,
+      kind: 'separation' as SWAlertKind,
+    }));
+
+    // Build a set of uncleared separation-alert pair keys so the predicted-conflict
+    // detector can suppress double-alerting the same pair.
+    // Rule: "current breach wins" — suppress predicted_conflict whenever a separation
+    // breach is geometrically active (clearedAt unset), regardless of acknowledgment.
+    const activeSepKeys = new Set<string>(
+      [...this.activeMap.entries()]
+        .filter(([, a]) => a.kind === 'separation' && !a.clearedAt)
+        .map(([key]) => key),
+    );
+    // Also include freshly-found separation findings (they become active this tick)
+    for (const f of sepFindings) activeSepKeys.add(f.key);
+
+    // ── 2. Predicted conflict (Phase 6B) ──────────────────────────────────────
+    const predFindings = detectPredictedConflict(allAircraft, activeSepKeys).map(f => ({
+      key:         f.key,
+      kind:        'predicted_conflict' as SWAlertKind,
+      severity:    f.severity,
+      aircraft:    f.aircraft,
+      aircraftIds: f.aircraftIds,
+      message:     f.message,
+      extra: {
+        ttcSeconds:    f.ttcSeconds,
+        predClosestNm: f.predClosestNm,
+        predClosestFt: f.predClosestFt,
+      },
+    }));
+
+    // ── 3. Runway occupancy (Phase 6B) ────────────────────────────────────────
+    const rwyFindings = detectRunwayOccupancy(allAircraft).map(f => ({
+      ...f,
+      kind: 'runway_occupancy' as SWAlertKind,
+    }));
+
+    // ── 4. Stale tracks (Phase 6B) ────────────────────────────────────────────
+    const staleFindings = detectStaleTracks(allAircraft).map(f => ({
+      ...f,
+      kind: 'stale_track' as SWAlertKind,
+    }));
+
+    // ── 5. Merge all findings and process uniformly ───────────────────────────
+    const allFindings: DetectorFinding[] = [
+      ...sepFindings,
+      ...predFindings,
+      ...rwyFindings,
+      ...staleFindings,
+    ];
+
     const seen = new Set<string>();
 
-    for (const f of findings) {
+    for (const f of allFindings) {
       seen.add(f.key);
       const existing = this.activeMap.get(f.key);
 
       if (!existing) {
-        // ── Brand-new breach ──────────────────────────────────────────────
+        // Brand-new breach
         const alert: SWAlert = {
           id:           newId(),
-          kind:         'separation',
+          kind:         f.kind,
           severity:     f.severity,
           aircraft:     f.aircraft,
           aircraftIds:  f.aircraftIds,
           message:      f.message,
           raisedAt:     now,
           acknowledged: false,
+          extra:        f.extra,
         };
         this.activeMap.set(f.key, alert);
         this.log.push(alert);
 
       } else if (existing.acknowledged) {
-        // ── Previously dismissed — re-raise ONLY on escalation ────────────
+        // Previously dismissed — re-raise ONLY on escalation
         if (severityRank(f.severity) > severityRank(existing.severity)) {
           const newAlert: SWAlert = {
             id:           newId(),
-            kind:         'separation',
+            kind:         f.kind,
             severity:     f.severity,
             aircraft:     f.aircraft,
             aircraftIds:  f.aircraftIds,
             message:      f.message,
             raisedAt:     now,
             acknowledged: false,
+            extra:        f.extra,
           };
           this.activeMap.set(f.key, newAlert);
           this.log.push(newAlert);
         } else {
-          // Same or lower severity — update message only (silent)
+          // Same or lower severity — update message/extra silently
           existing.message = f.message;
+          existing.extra   = f.extra;
         }
 
       } else {
-        // ── Existing live alert — update in-place ─────────────────────────
+        // Existing live alert — update in-place
         existing.severity  = f.severity;
         existing.message   = f.message;
-        existing.clearedAt = undefined; // reopen if it was briefly cleared
+        existing.extra     = f.extra;
+        // Update aircraft list (runway occupancy may gain/lose occupants)
+        existing.aircraft    = f.aircraft;
+        existing.aircraftIds = f.aircraftIds;
+        existing.clearedAt   = undefined; // reopen if briefly cleared
       }
     }
 
-    // ── Clear resolved pairs ──────────────────────────────────────────────────
+    // ── 6. Clear resolved conditions ──────────────────────────────────────────
     for (const [key, alert] of this.activeMap) {
       if (!seen.has(key) && !alert.clearedAt) {
         alert.clearedAt = now;

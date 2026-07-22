@@ -245,7 +245,7 @@ export default function AlertShell({ activeAlerts, allAlerts, onDismiss }: Alert
           {/* Body — scrolls only if content exceeds max-height */}
           <div className="overflow-y-auto">
             {expandedTab === 'alerts'    && <AlertsPanel alerts={activeAlerts} onDismiss={onDismiss} />}
-            {expandedTab === 'conflicts' && <PlaceholderPanel message="No predicted conflicts" note="Phase 6B — Conflict Horizon" />}
+            {expandedTab === 'conflicts' && <ConflictHorizonPanel alerts={activeAlerts} />}
             {expandedTab === 'traffic'   && <PlaceholderPanel message="No forecast data"       note="Phase 7 — Traffic Forecast" />}
             {expandedTab === 'weather'   && <PlaceholderPanel message="No weather impact"      note="Phase 7 — Weather Impact"   />}
             {expandedTab === 'log'       && <LogPanel alerts={allAlerts} />}
@@ -359,6 +359,70 @@ function LogPanel({ alerts }: { alerts: SWAlert[] }) {
               <span>↑ {fmtTime(alert.raisedAt)}</span>
               {alert.clearedAt     && <span>↓ {fmtTime(alert.clearedAt)}</span>}
               {alert.acknowledgedAt && <span>✓ {fmtTime(alert.acknowledgedAt)}</span>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Conflict Horizon panel (Phase 6B) ────────────────────────────────────────
+function ConflictHorizonPanel({ alerts }: { alerts: SWAlert[] }) {
+  const conflicts = alerts
+    .filter(a => a.kind === 'predicted_conflict')
+    .sort((a, b) => (a.extra?.ttcSeconds ?? 999) - (b.extra?.ttcSeconds ?? 999));
+
+  if (conflicts.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-28 gap-1 text-slate-600 font-mono text-[10px]">
+        <span className="text-2xl opacity-20 mb-1">◆</span>
+        No predicted conflicts
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col">
+      {conflicts.map(alert => {
+        const { badge, text, dot } = SEV_COLORS[alert.severity];
+        const ttc     = alert.extra?.ttcSeconds;
+        const predNm  = alert.extra?.predClosestNm;
+        const predFt  = alert.extra?.predClosestFt;
+
+        return (
+          <div
+            key={alert.id}
+            className="px-3 py-2.5 border-b border-slate-800/30 flex flex-col gap-1.5"
+          >
+            {/* Severity badge + pair */}
+            <div className="flex items-center gap-2">
+              <span className={`inline-flex items-center gap-1 text-[7px] font-mono font-bold tracking-widest px-1.5 py-0.5 rounded border uppercase ${badge}`}>
+                <span className={`w-1 h-1 rounded-full ${dot}`} />
+                {alert.severity}
+              </span>
+              <span className="font-mono text-[11px] text-slate-200 tracking-wide">
+                {alert.aircraft.join(' & ')}
+              </span>
+            </div>
+
+            {/* Predicted separation */}
+            {predNm !== undefined && predFt !== undefined && (
+              <p className={`text-[10px] font-mono leading-snug ${text}`}>
+                Predicted {predNm.toFixed(1)} nm / {Math.round(predFt)} ft
+              </p>
+            )}
+
+            {/* Time to conflict */}
+            <div className="flex items-center justify-between">
+              {ttc !== undefined && (
+                <span className={`text-[10px] font-mono font-semibold ${text}`}>
+                  T−{ttc}s
+                </span>
+              )}
+              <span className="text-[8px] font-mono text-slate-700 italic">
+                straight-line only
+              </span>
             </div>
           </div>
         );
