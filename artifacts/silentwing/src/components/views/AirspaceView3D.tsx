@@ -14,6 +14,7 @@ import * as THREE from 'three';
 import { useEffect, useRef } from 'react';
 import type { Aircraft, WorldSnapshot } from '@/types';
 import { isAirborne } from '@/types';
+import { wakeCategory } from '@/utils/wakeCategory';
 import type { Polyline } from '@/data/ybbn_real';
 import type { SWAlert, SWAlertSeverity } from '@/alerts/types';
 import { useAirport } from '@/airports/context';
@@ -62,6 +63,44 @@ const TRAIL_GPS_M     = 25;       // GPS scatter floor (metres)
 const TRAIL_FADE_S    = 20;       // seconds until a trail point fully fades
 const TRAIL_FADE_MS   = TRAIL_FADE_S * 1000;
 const TRAIL_OPACITY   = 0.70;     // peak opacity at the aircraft end of the trail
+
+// ── Shared trail/wake ShaderMaterial GLSL (reused for wake ribbons) ───────────
+const TRAIL_VERTEX_SHADER = `
+  attribute float alpha;
+  varying   float vAlpha;
+  void main() {
+    vAlpha      = alpha;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+const TRAIL_FRAGMENT_SHADER = `
+  uniform vec3  color;
+  varying float vAlpha;
+  void main() {
+    gl_FragColor = vec4(color, vAlpha);
+  }
+`;
+
+// ── Velocity vector constants ─────────────────────────────────────────────────
+const VEL_VEC_LOOKAHEAD_S = 90;   // seconds of look-ahead at current ground speed
+
+// ── Separation bubble constants ───────────────────────────────────────────────
+const SEP_BUBBLE_R    = 5 * 1852; // 5 NM in scene units (metres)
+const SEP_BUBBLE_R_SQ = SEP_BUBBLE_R * SEP_BUBBLE_R;
+
+// ── Wake turbulence ribbon constants ─────────────────────────────────────────
+// Amber ribbon extending behind Heavy-category aircraft using the existing
+// trail buffer with a perpendicular offset.
+const WAKE_HALF_WIDTH  = 90;      // metres either side of track centreline
+const WAKE_FADE_MS     = 90_000;  // 90-second opacity decay
+const WAKE_PEAK_OPACITY = 0.45;
+
+// ── Taxi time ring constants ───────────────────────────────────────────────────
+// Expanding sonar-ping rings on the ground plane (y=1) for taxiing aircraft.
+const TAXI_RING_SPAWN_MS = 3_000; // spawn a new ring every 3 s
+const TAXI_RING_MAX_AGE  = 5_000; // ring fully expands in 5 s
+const TAXI_RING_MIN_R    = 30;    // initial radius (scene units)
+const TAXI_RING_MAX_R    = 400;   // final radius (scene units)
 
 // Camera offset from aircraft for inspect / follow modes
 // (south and above: Z=south in Three.js coordinate space)
@@ -242,6 +281,26 @@ interface PulseRingEntry {
 }
 
 function disposePulseRingEntry(entry: PulseRingEntry, scene: THREE.Scene): void {
+  for (const ring of entry.rings) {
+    scene.remove(ring.mesh);
+    ring.mat.dispose();
+    // PULSE_RING_GEO is shared — do NOT dispose it here
+  }
+  entry.rings.length = 0;
+}
+
+// ── Taxi time ring entry (Task 33) ────────────────────────────────────────────
+// Expanding ground-plane rings (sonar-ping style) for taxiing aircraft.
+// Ring colour transitions white → amber → red as taxi dwell time increases.
+
+interface TaxiRingEntry {
+  rings:       { mesh: THREE.LineLoop; mat: THREE.LineBasicMaterial; spawnMs: number }[];
+  lastSpawnMs: number;
+  /** performance.now() when the aircraft entered its current taxi phase. */
+  taxiStartMs: number;
+}
+
+function disposeTaxiRingEntry(entry: TaxiRingEntry, scene: THREE.Scene): void {
   for (const ring of entry.rings) {
     scene.remove(ring.mesh);
     ring.mat.dispose();
@@ -984,6 +1043,34 @@ interface AcBundle {
    *  visible when the label has been pushed away to resolve an overlap. */
   leaderLine:    THREE.Line;
   leaderLineMat: THREE.LineBasicMaterial;
+
+  // ── Cached per-poll aircraft properties (used by rAF loop) ───────────────
+  /** Current flight phase — cached so the rAF loop can read it without acMap lookup. */
+  phase:           string;
+  /** True when this is a ground vehicle (hidden from some indicators). */
+  isGroundVehicle: boolean;
+  /** True when wake category = Heavy (gets amber wake ribbon). */
+  isHeavy:         boolean;
+  /** True when altitude > 50 ft (airborne classification). */
+  isAirborne:      boolean;
+
+  // ── Velocity vector (Task 33) ─────────────────────────────────────────────
+  /** Thin look-ahead line extending 90 s of travel from the cone. */
+  velVec:    THREE.Line;
+  velVecMat: THREE.LineBasicMaterial;
+
+  // ── Separation bubble (Task 33) ───────────────────────────────────────────
+  /** Very faint translucent sphere (~5 NM radius) around airborne aircraft.
+   *  Turns red when another aircraft's bubble overlaps. */
+  sepBubble:    THREE.Mesh;
+  sepBubbleMat: THREE.MeshBasicMaterial;
+
+  // ── Wake turbulence ribbon (Task 33, Heavy aircraft only) ─────────────────
+  /** Pair of amber lines offset ± perpendicular to heading; null for Medium/Light. */
+  wakeL:    THREE.Line | null;
+  wakeR:    THREE.Line | null;
+  wakeLMat: THREE.ShaderMaterial | null;
+  wakeRMat: THREE.ShaderMaterial | null;
 }
 
 function disposeBundle(b: AcBundle): void {
@@ -995,6 +1082,11 @@ function disposeBundle(b: AcBundle): void {
   // HMR guard — bundles created before this field existed won't have halo/leaderLine
   if (b.halo) { b.halo.geometry.dispose(); (b.halo.material as THREE.Material).dispose(); }
   if (b.leaderLine) { b.leaderLine.geometry.dispose(); b.leaderLineMat?.dispose(); }
+  // Task 33 additions
+  if (b.velVec)    { b.velVec.geometry.dispose(); b.velVecMat?.dispose(); }
+  if (b.sepBubble) { b.sepBubble.geometry.dispose(); b.sepBubbleMat?.dispose(); }
+  if (b.wakeL)     { b.wakeL.geometry.dispose(); b.wakeLMat?.dispose(); }
+  if (b.wakeR)     { b.wakeR.geometry.dispose(); b.wakeRMat?.dispose(); }
 }
 
 // Shared stem material — one instance, never disposed here
@@ -1070,6 +1162,13 @@ interface SceneState {
    *  Computed once at scene-setup and used every rAF frame for glide slope targeting. */
   allThresholds: Array<[string, number, number]>;
 
+  // ── Task 33 — visual aids ─────────────────────────────────────────────────
+  /** Mirror of the showPaths prop — controls velocity vectors, sep bubbles,
+   *  wake ribbons, and taxi rings. Updated via sync effect. */
+  showPaths:   boolean;
+  /** Aircraft ID → expanding ground-plane rings for taxiing aircraft. */
+  taxiRingMap: Map<string, TaxiRingEntry>;
+
   // ── Alert focus interrupt (Task #16) ───────────────────────────────────
   /** The active critical alert ID being focused on, or null. Synced from prop. */
   alertFocusId:   string | null;
@@ -1133,6 +1232,9 @@ export interface AirspaceView3DProps {
   alertFocusId?:     string;
   /** Fired when the full pivot-in → hold → pivot-out sequence completes. */
   onAlertFocusDone?: () => void;
+  /** When true: velocity vectors, separation bubbles, wake ribbons, and taxi
+   *  rings are rendered in the 3D scene.  Mirrors the App-level [P] toggle. */
+  showPaths?: boolean;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -1148,6 +1250,7 @@ export default function AirspaceView3D({
   activeAlerts,
   alertFocusId,
   onAlertFocusDone,
+  showPaths = false,
 }: AirspaceView3DProps) {
   const mountRef       = useRef<HTMLDivElement>(null);
   const sceneRef       = useRef<SceneState | null>(null);
@@ -1182,6 +1285,12 @@ export default function AirspaceView3D({
     const st = sceneRef.current;
     if (st) st.directorMode = directorMode;
   }, [directorMode]);
+
+  // Sync showPaths prop — controls velocity vectors, sep bubbles, wake ribbons, taxi rings.
+  useEffect(() => {
+    const st = sceneRef.current;
+    if (st) st.showPaths = showPaths;
+  }, [showPaths]);
 
   // Sync alertedIds prop so the rAF loop highlights alerted aircraft.
   useEffect(() => {
@@ -1429,6 +1538,8 @@ export default function AirspaceView3D({
       approachMap:          new Map(),
       glideSlopeMap:        new Map(),
       allThresholds:        computeRunwayThresholds(prof.runways, prof.geometry.runways),
+      showPaths:            false,
+      taxiRingMap:          new Map(),
     };
     sceneRef.current = st;
 
@@ -1741,6 +1852,94 @@ export default function AirspaceView3D({
 
         // Label opacity is set per-poll (in the data sync effect) based on seenPos —
         // no per-frame override needed here.
+
+        // ── Velocity vector (Task 33) ──────────────────────────────────────
+        // Thin look-ahead line: 90 s of travel at current ground speed.
+        // Hidden for at-gate and ground vehicles.
+        if (b.velVec) {
+          const showVV = st.showPaths && b.phase !== 'at-gate' && !b.isGroundVehicle;
+          b.velVec.visible = showVV;
+          if (showVV) {
+            const hRad = b.headingDeg * Math.PI / 180;
+            const dist = b.gsMps * VEL_VEC_LOOKAHEAD_S;
+            const vvAttr = b.velVec.geometry.attributes.position as THREE.BufferAttribute;
+            const vvArr  = vvAttr.array as Float32Array;
+            vvArr[0] = b.renderPos.x;                            vvArr[1] = b.renderPos.y; vvArr[2] = b.renderPos.z;
+            vvArr[3] = b.renderPos.x + Math.sin(hRad) * dist;   vvArr[4] = b.renderPos.y; vvArr[5] = b.renderPos.z - Math.cos(hRad) * dist;
+            vvAttr.needsUpdate = true;
+            b.velVec.geometry.computeBoundingSphere();
+          }
+        }
+
+        // ── Separation bubble (Task 33) ────────────────────────────────────
+        // Very faint sphere (~5 NM radius) centred on airborne aircraft.
+        // Overlap detection (colour shift) happens after this loop.
+        if (b.sepBubble) {
+          const showBbl = st.showPaths && b.isAirborne;
+          b.sepBubble.visible = showBbl;
+          if (showBbl) b.sepBubble.position.copy(b.renderPos);
+        }
+
+        // ── Wake turbulence ribbon (Task 33, Heavy aircraft only) ──────────
+        // Amber pair of lines offset perpendicular to heading, using trailBuf
+        // positions with a 90-second opacity decay.
+        if (b.wakeL && b.wakeR && b.wakeLMat && b.wakeRMat) {
+          const showWake = st.showPaths && b.isHeavy;
+          b.wakeL.visible = showWake;
+          b.wakeR.visible = showWake;
+          if (showWake && b.trailBuf.length >= 2) {
+            const n = b.trailBuf.length;
+            const hRad = b.headingDeg * Math.PI / 180;
+            const perpX = Math.cos(hRad) * WAKE_HALF_WIDTH;
+            const perpZ = Math.sin(hRad) * WAKE_HALF_WIDTH;
+
+            const posLAttr = b.wakeL.geometry.attributes.position as THREE.BufferAttribute;
+            const alpLAttr = b.wakeL.geometry.attributes.alpha    as THREE.BufferAttribute;
+            const posRAttr = b.wakeR.geometry.attributes.position as THREE.BufferAttribute;
+            const alpRAttr = b.wakeR.geometry.attributes.alpha    as THREE.BufferAttribute;
+            const posL = posLAttr.array as Float32Array;
+            const alpL = alpLAttr.array as Float32Array;
+            const posR = posRAttr.array as Float32Array;
+            const alpR = alpRAttr.array as Float32Array;
+
+            for (let i = 0; i < n; i++) {
+              const tp = b.trailBuf[i];
+              posL[i*3]   = tp.pos.x - perpX; posL[i*3+1] = tp.pos.y; posL[i*3+2] = tp.pos.z - perpZ;
+              posR[i*3]   = tp.pos.x + perpX; posR[i*3+1] = tp.pos.y; posR[i*3+2] = tp.pos.z + perpZ;
+              const ageFrac = Math.min((nowMs - tp.t) / WAKE_FADE_MS, 1);
+              alpL[i] = alpR[i] = (1 - ageFrac) * WAKE_PEAK_OPACITY;
+            }
+            // Head point tracks live renderPos
+            posL[(n-1)*3]   = b.renderPos.x - perpX; posL[(n-1)*3+1] = b.renderPos.y; posL[(n-1)*3+2] = b.renderPos.z - perpZ;
+            posR[(n-1)*3]   = b.renderPos.x + perpX; posR[(n-1)*3+1] = b.renderPos.y; posR[(n-1)*3+2] = b.renderPos.z + perpZ;
+            alpL[n-1] = alpR[n-1] = WAKE_PEAK_OPACITY;
+
+            posLAttr.needsUpdate = true; alpLAttr.needsUpdate = true;
+            posRAttr.needsUpdate = true; alpRAttr.needsUpdate = true;
+            b.wakeL.geometry.setDrawRange(0, n); b.wakeL.geometry.computeBoundingSphere();
+            b.wakeR.geometry.setDrawRange(0, n); b.wakeR.geometry.computeBoundingSphere();
+          }
+        }
+      }
+
+      // ── Separation bubble overlap detection (Task 33) ────────────────────
+      // Check all airborne pairs and tint overlapping bubbles red.
+      // O(N²) but N is small — typically 10–30 aircraft.
+      if (st.showPaths) {
+        for (const [idA, bA] of st.acMap) {
+          if (!bA.sepBubble?.visible || !bA.sepBubbleMat) continue;
+          let overlaps = false;
+          for (const [idB, bB] of st.acMap) {
+            if (idB === idA || !bB.isAirborne) continue;
+            const dx = bA.renderPos.x - bB.renderPos.x;
+            const dy = bA.renderPos.y - bB.renderPos.y;
+            const dz = bA.renderPos.z - bB.renderPos.z;
+            // Overlap when distance < 2R  →  distance² < 4R²
+            if (dx*dx + dy*dy + dz*dz < 4 * SEP_BUBBLE_R_SQ) { overlaps = true; break; }
+          }
+          bA.sepBubbleMat.color.setHex(overlaps ? 0xff2222 : 0x8899bb);
+          bA.sepBubbleMat.opacity = overlaps ? 0.07 : 0.03;
+        }
       }
 
       // ── Label deconfliction + leader lines ───────────────────────────────
@@ -2103,6 +2302,60 @@ export default function AirspaceView3D({
         }
       }
 
+      // ── Taxi time ring update (Task 33) ──────────────────────────────────
+      // Expanding ground-plane rings for taxiing aircraft; colour based on
+      // how long the aircraft has been in taxi phase.
+      {
+        for (const [acId, entry] of st.taxiRingMap) {
+          const b = st.acMap.get(acId);
+          if (!b) continue;
+          const gx = b.renderPos.x, gz = b.renderPos.z;
+
+          // Colour transitions with taxi dwell time
+          const taxiDurMin = (nowMs - entry.taxiStartMs) / 60_000;
+          const ringColor  = taxiDurMin < 2 ? 0xffffff
+                           : taxiDurMin < 5 ? 0xf59e0b
+                           : 0xef4444;
+
+          // Spawn a new ring when interval has elapsed (only when paths visible)
+          if (st.showPaths && nowMs - entry.lastSpawnMs >= TAXI_RING_SPAWN_MS) {
+            const mat = new THREE.LineBasicMaterial({
+              color:       ringColor,
+              transparent: true,
+              opacity:     0.55,
+              depthWrite:  false,
+            });
+            const mesh = new THREE.LineLoop(PULSE_RING_GEO, mat);
+            mesh.frustumCulled = false;
+            mesh.position.set(gx, 1, gz);
+            mesh.scale.setScalar(TAXI_RING_MIN_R);
+            scene.add(mesh);
+            entry.rings.push({ mesh, mat, spawnMs: nowMs });
+            entry.lastSpawnMs = nowMs;
+          }
+
+          // Advance all rings: expand + fade; collect expired ones
+          const expired: typeof entry.rings = [];
+          for (const ring of entry.rings) {
+            const age = (nowMs - ring.spawnMs) / TAXI_RING_MAX_AGE;
+            if (age >= 1) { expired.push(ring); continue; }
+            ring.mesh.visible = st.showPaths;
+            if (st.showPaths) {
+              ring.mesh.position.set(gx, 1, gz);
+              ring.mesh.scale.setScalar(TAXI_RING_MIN_R + (TAXI_RING_MAX_R - TAXI_RING_MIN_R) * age);
+              ring.mat.opacity = (1 - age) * 0.55;
+              ring.mat.color.setHex(ringColor);
+            }
+          }
+          // Dispose expired rings
+          for (const ring of expired) {
+            scene.remove(ring.mesh);
+            ring.mat.dispose();
+            entry.rings.splice(entry.rings.indexOf(ring), 1);
+          }
+        }
+      }
+
       renderer.render(scene, camera);
     };
     tick();
@@ -2380,7 +2633,14 @@ export default function AirspaceView3D({
       canvas.removeEventListener('pointermove',  onPointerMove);
       canvas.removeEventListener('pointerup',    onPointerUp);
       window.removeEventListener('keydown', onKey);
-      st.acMap.forEach(b => { scene.remove(b.cone, b.stem, b.trail, b.label); disposeBundle(b); });
+      st.acMap.forEach(b => {
+        scene.remove(b.cone, b.stem, b.trail, b.label);
+        if (b.velVec)    scene.remove(b.velVec);
+        if (b.sepBubble) scene.remove(b.sepBubble);
+        if (b.wakeL)     scene.remove(b.wakeL);
+        if (b.wakeR)     scene.remove(b.wakeR);
+        disposeBundle(b);
+      });
       st.acMap.clear();
       st.coneToId.clear();
       st.beamMap.forEach(entry => disposeBeamEntry(entry, scene));
@@ -2395,6 +2655,8 @@ export default function AirspaceView3D({
       st.approachMap.clear();
       st.glideSlopeMap.forEach(entry => disposeGlideSlopeLine(entry, scene));
       st.glideSlopeMap.clear();
+      st.taxiRingMap.forEach(entry => disposeTaxiRingEntry(entry, scene));
+      st.taxiRingMap.clear();
       renderer.dispose();
       if (renderer.domElement.parentNode === el) el.removeChild(renderer.domElement);
       sceneRef.current = null;
@@ -2479,24 +2741,11 @@ export default function AirspaceView3D({
         trailGeo.setDrawRange(0, 2);
         // ShaderMaterial: per-vertex alpha encodes fade along the trail length.
         const trailMat = new THREE.ShaderMaterial({
-          uniforms: { color: { value: new THREE.Color(hex) } },
-          vertexShader: `
-            attribute float alpha;
-            varying   float vAlpha;
-            void main() {
-              vAlpha      = alpha;
-              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-            }
-          `,
-          fragmentShader: `
-            uniform vec3  color;
-            varying float vAlpha;
-            void main() {
-              gl_FragColor = vec4(color, vAlpha);
-            }
-          `,
-          transparent: true,
-          depthWrite:  false,
+          uniforms:       { color: { value: new THREE.Color(hex) } },
+          vertexShader:   TRAIL_VERTEX_SHADER,
+          fragmentShader: TRAIL_FRAGMENT_SHADER,
+          transparent:    true,
+          depthWrite:     false,
         });
         const trail = new THREE.Line(trailGeo, trailMat);
         scene.add(trail);
@@ -2540,9 +2789,69 @@ export default function AirspaceView3D({
               );
             })()
           : pos.clone();
+
+        // ── Task 33: Velocity vector ────────────────────────────────────────
+        const velVecGeo = new THREE.BufferGeometry();
+        velVecGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+        const velVecMat = new THREE.LineBasicMaterial({
+          color: hex, transparent: true, opacity: 0.50, depthWrite: false,
+        });
+        const velVec = new THREE.Line(velVecGeo, velVecMat);
+        velVec.frustumCulled = false;
+        velVec.visible = false;
+        scene.add(velVec);
+
+        // ── Task 33: Separation bubble ──────────────────────────────────────
+        const sepBubbleGeo = new THREE.SphereGeometry(SEP_BUBBLE_R, 16, 12);
+        const sepBubbleMat = new THREE.MeshBasicMaterial({
+          color:       0x8899bb,
+          transparent: true,
+          opacity:     0.03,
+          depthWrite:  false,
+          side:        THREE.BackSide, // visible from both inside and outside
+        });
+        const sepBubble = new THREE.Mesh(sepBubbleGeo, sepBubbleMat);
+        sepBubble.frustumCulled = false;
+        sepBubble.visible = false;
+        scene.add(sepBubble);
+
+        // ── Task 33: Wake turbulence ribbon (Heavy aircraft only) ───────────
+        const spawnIsHeavy  = wakeCategory(ac.type) === 'H';
+        const spawnIsAirborne = isAirborne(ac);
+        let wakeL: THREE.Line | null = null;
+        let wakeR: THREE.Line | null = null;
+        let wakeLMat: THREE.ShaderMaterial | null = null;
+        let wakeRMat: THREE.ShaderMaterial | null = null;
+        if (spawnIsHeavy) {
+          const makeWake = () => {
+            const wGeo = new THREE.BufferGeometry();
+            wGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL_MAX * 3), 3));
+            wGeo.setAttribute('alpha',    new THREE.BufferAttribute(new Float32Array(TRAIL_MAX),     1));
+            wGeo.setDrawRange(0, 0);
+            const wMat = new THREE.ShaderMaterial({
+              uniforms:       { color: { value: new THREE.Color(0xFF8C00) } }, // amber
+              vertexShader:   TRAIL_VERTEX_SHADER,
+              fragmentShader: TRAIL_FRAGMENT_SHADER,
+              transparent:    true,
+              depthWrite:     false,
+            });
+            const wLine = new THREE.Line(wGeo, wMat);
+            wLine.frustumCulled = false;
+            wLine.visible = false;
+            scene.add(wLine);
+            return { line: wLine, mat: wMat };
+          };
+          const wL = makeWake(); const wR = makeWake();
+          wakeL = wL.line; wakeLMat = wL.mat;
+          wakeR = wR.line; wakeRMat = wR.mat;
+        }
+
         acMap.set(ac.id, {
           cone, stem, trail, label, trailBuf, halo,
           leaderLine, leaderLineMat,
+          velVec, velVecMat,
+          sepBubble, sepBubbleMat,
+          wakeL, wakeR, wakeLMat, wakeRMat,
           renderPos:       spawnPos.clone(),
           lastKnownPos:    spawnPos.clone(),
           lastKnownTimeMs: nowMs,
@@ -2555,6 +2864,10 @@ export default function AirspaceView3D({
           callsign:        ac.callsign,
           labelPhase:      ac.phase,
           labelHeadingDeg: ac.heading,
+          phase:           ac.phase,
+          isGroundVehicle: ac.isGroundVehicle ?? false,
+          isHeavy:         spawnIsHeavy,
+          isAirborne:      spawnIsAirborne,
         });
 
       } else {
@@ -2617,6 +2930,14 @@ export default function AirspaceView3D({
             refreshAcLabel(b, b.callsign, ac.heading, ac.phase);
           }
         }
+
+        // ── Task 33: Update cached aircraft properties ─────────────────────
+        b.phase           = ac.phase;
+        b.isGroundVehicle = ac.isGroundVehicle ?? false;
+        b.isHeavy         = wakeCategory(ac.type) === 'H';
+        b.isAirborne      = isAirborne(ac);
+        // Sync velVec colour when phase changes
+        if (b.velVecMat) b.velVecMat.color.setHex(phaseHex(ac.phase));
 
         // ── FIX B: visual stale-track indicator ───────────────────────────
         // SAFETY SIGNAL: aircraft with seen_pos > STALE_DISPLAY_S are shown
@@ -2820,10 +3141,29 @@ export default function AirspaceView3D({
       }
     }
 
+    // ── Sync taxi time rings (Task 33) ───────────────────────────────────────
+    for (const ac of aircraft) {
+      const isTaxiing = (ac.phase === 'taxi-in' || ac.phase === 'taxi-out') && !ac.isGroundVehicle;
+      if (isTaxiing) {
+        if (!st.taxiRingMap.has(ac.id)) {
+          st.taxiRingMap.set(ac.id, {
+            rings: [], lastSpawnMs: -Infinity, taxiStartMs: nowMs,
+          });
+        }
+      } else {
+        const entry = st.taxiRingMap.get(ac.id);
+        if (entry) { disposeTaxiRingEntry(entry, scene); st.taxiRingMap.delete(ac.id); }
+      }
+    }
+
     // Remove aircraft that left the snapshot
     for (const [id, b] of acMap) {
       if (!seen.has(id)) {
         scene.remove(b.cone, b.stem, b.trail, b.label, b.halo);
+        if (b.velVec)    scene.remove(b.velVec);
+        if (b.sepBubble) scene.remove(b.sepBubble);
+        if (b.wakeL)     scene.remove(b.wakeL);
+        if (b.wakeR)     scene.remove(b.wakeR);
         coneToId.delete(b.cone);
         disposeBundle(b);
         acMap.delete(id);
@@ -2836,6 +3176,9 @@ export default function AirspaceView3D({
         // Clean up any glide slope line for the despawned aircraft
         const gs = st.glideSlopeMap.get(id);
         if (gs) { disposeGlideSlopeLine(gs, scene); st.glideSlopeMap.delete(id); }
+        // Clean up any taxi ring for the despawned aircraft (Task 33)
+        const tr = st.taxiRingMap.get(id);
+        if (tr) { disposeTaxiRingEntry(tr, scene); st.taxiRingMap.delete(id); }
       }
     }
   }, [aircraft]);

@@ -683,6 +683,7 @@ export default function App() {
             activeAlerts={activeAlerts}
             alertFocusId={alertFocusId ?? undefined}
             onAlertFocusDone={handleAlertFocusDone}
+            showPaths={showPredictedPaths}
             onSelectAircraft={(id) => {
               console.log(`[APP] 3D select: ${id ?? 'null'}`);
               setSelectedAcId(id);
