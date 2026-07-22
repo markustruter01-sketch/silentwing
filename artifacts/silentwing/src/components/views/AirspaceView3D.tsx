@@ -1876,6 +1876,92 @@ export default function AirspaceView3D({
         }
       }
 
+      // ── Screen-space label deconfliction ─────────────────────────────────
+      // Projects every aircraft label to screen space, detects overlapping
+      // boxes, then pushes overlapping labels down (toward the horizon in
+      // screen space, = away from camera-up in world space) so they stack
+      // like a column rather than drawing on top of each other.
+      //
+      // This runs every frame so the stack adapts continuously as the camera
+      // orbits or follows an aircraft.  The math cost is O(N²) but N ≤ ~30
+      // for any realistic ATC sector so it is negligible.
+      {
+        // Sprite half-extents in world units (must match sp.scale.set in makeAcLabel)
+        const SP_HW = 270;   // 540 / 2
+        const SP_HH = 75;    // 150 / 2
+
+        const domEl      = renderer.domElement;
+        const vpW        = domEl.clientWidth  || domEl.width;
+        const vpH        = domEl.clientHeight || domEl.height;
+        const fovTanHalf = Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5));
+
+        // Camera world-space "up" unit vector — stacking pushes in this direction.
+        const camUp = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+
+        // Collect visible labels: project base position → screen (sx, sy in logical px).
+        // sx/sy are the CURRENT test position (modified during placement).
+        type LEntry = {
+          b:      AcBundle;
+          sx:     number;
+          sy:     number;
+          hwPx:   number;   // screen half-width
+          hhPx:   number;   // screen half-height
+          dist:   number;   // camera distance (for world re-projection)
+        };
+        const lbls: LEntry[] = [];
+        const _vp = new THREE.Vector3();
+
+        for (const [, b] of st.acMap) {
+          _vp.copy(b.label.position).project(camera);
+          if (_vp.z > 1) continue;  // behind far plane / behind camera
+
+          const sx  = (_vp.x + 1) * 0.5 * vpW;
+          const sy  = (1 - _vp.y) * 0.5 * vpH;
+          const dist = camera.position.distanceTo(b.label.position);
+          // Perspective scale factor: world → screen pixels
+          const scale = (vpH * 0.5) / (dist * fovTanHalf);
+          lbls.push({ b, sx, sy, hwPx: SP_HW * scale, hhPx: SP_HH * scale, dist });
+        }
+
+        // Sort top → bottom in screen space.
+        // The topmost (smallest sy) label wins its natural position; others
+        // get stacked below it if they overlap.
+        lbls.sort((a, b) => a.sy - b.sy);
+
+        // Greedy placement: for each label, push its test-sy downward until
+        // it no longer overlaps any already-committed label.
+        const placed: LEntry[] = [];
+        for (const e of lbls) {
+          let testSy = e.sy;
+          let changed = true;
+          while (changed) {
+            changed = false;
+            for (const p of placed) {
+              const overlapX = Math.abs(e.sx - p.sx) < (e.hwPx + p.hwPx);
+              const overlapY = Math.abs(testSy - p.sy) < (e.hhPx + p.hhPx) + 4;
+              if (overlapX && overlapY) {
+                // Push e below p — one label-height gap (+ 4 px breathing room)
+                testSy = p.sy + p.hhPx + e.hhPx + 4;
+                changed = true;
+              }
+            }
+          }
+
+          const screenDeltaY = testSy - e.sy; // positive = moved downward on screen
+          e.sy = testSy;
+          placed.push(e);
+
+          if (screenDeltaY > 0.5) {
+            // Convert screen-Y shift back to world space along the camera-up direction.
+            // Moving a label DOWN on screen ≡ moving it OPPOSITE to camera-up in world.
+            // World units per screen pixel (depth-correct): dist * tanFovHalf / (vpH/2)
+            const worldUnitsPerPx = e.dist * fovTanHalf / (vpH * 0.5);
+            const worldShift      = -screenDeltaY * worldUnitsPerPx;
+            e.b.label.position.addScaledVector(camUp, worldShift);
+          }
+        }
+      }
+
       renderer.render(scene, camera);
     };
     tick();
