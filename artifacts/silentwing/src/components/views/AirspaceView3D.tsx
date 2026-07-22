@@ -28,7 +28,7 @@ export type CameraMode = 'orbit' | 'manual' | 'inspect' | 'follow' | 'returning'
 
 // ── Scene constants ────────────────────────────────────────────────────────────
 const ALT_SCALE    = 0.15;
-const ORBIT_RADIUS     = 2000;    // zoomed in vs wide overview — airport fills frame
+const ORBIT_RADIUS     = 3400;    // wide overview — full airport visible on load
 const ORBIT_HEIGHT     = 900;     // shallower depression (~24°) so sky is visible
 const ORBIT_INIT_ANGLE = Math.PI * 0.6; // starting angle (south of airport, runway visible)
 const ORBIT_SPEED      = 0.00025; // rad/frame ≈ 7 min/revolution at 60 fps
@@ -1962,6 +1962,52 @@ export default function AirspaceView3D({
       st.glideSlopeMap.clear();
       st.taxiRingMap.forEach(entry => disposeTaxiRingEntry(entry, scene));
       st.taxiRingMap.clear();
+
+      // Clear alert beams, pulse rings, and alert labels — they reference old
+      // aircraft positions and old alert state, so they must be torn down.
+      st.beamMap.forEach(b => disposeBeamEntry(b, scene));
+      st.beamMap.clear();
+      st.pulseRingMap.forEach(p => disposePulseRingEntry(p, scene));
+      st.pulseRingMap.clear();
+      st.labelMap.forEach(l => disposeAlertLabel(l, scene));
+      st.labelMap.clear();
+
+      // Clear the weather group (approach cone + wind indicator). The weather
+      // useEffect only re-fires when wind values change, so if YSSY and YBBN
+      // happen to share the same wind reading the old cone would survive.
+      if (weatherGrpRef.current) {
+        scene.remove(weatherGrpRef.current);
+        weatherGrpRef.current.traverse(obj => {
+          const node = obj as THREE.Mesh | THREE.Line;
+          if ((node as THREE.Mesh).geometry) (node as THREE.Mesh).geometry.dispose();
+          const mat = (node as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+          if (mat) {
+            if (Array.isArray(mat)) mat.forEach(m => m.dispose());
+            else mat.dispose();
+          }
+        });
+        weatherGrpRef.current = null;
+      }
+
+      // Clear route ribbons — they are airport-specific (SID/STAR paths).
+      if (routeGroupRef.current) {
+        scene.remove(routeGroupRef.current);
+        routeGroupRef.current.traverse(obj => {
+          const node = obj as THREE.Mesh | THREE.Line;
+          if ((node as THREE.Mesh).geometry) (node as THREE.Mesh).geometry.dispose();
+          const mat = (node as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+          if (mat) {
+            if (Array.isArray(mat)) mat.forEach(m => m.dispose());
+            else mat.dispose();
+          }
+        });
+        routeGroupRef.current       = null;
+        routeLineEntriesRef.current = [];
+      }
+
+      // Reset alertedIds so no stale highlight bleeds into the new airport.
+      st.alertedIds = new Map();
+      st.activeAlerts = [];
 
       // 4. Reset orbit camera to frame the new airport's origin.
       st.orbitTarget.set(0, 0, 0);
