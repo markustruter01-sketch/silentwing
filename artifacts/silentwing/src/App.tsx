@@ -11,7 +11,9 @@ import { getSimAdapter } from '@/sim/engine';
 import { AdsbAdapter, HEALTH_LAGGING_MS, HEALTH_STALLED_MS } from '@/feed/adsbAdapter';
 import { AlertEngine }  from '@/alerts/engine';
 import { YBBN }         from '@/airports/ybbn';
+import { AIRPORTS }     from '@/airports/index';
 import { AirportProvider } from '@/airports/context';
+import type { AirportProfile } from '@/airports/types';
 import type { SWAlert, SWAlertSeverity } from '@/alerts/types';
 import { severityRank } from '@/alerts/types';
 import type { DataFeedAdapter, WorldSnapshot, FlightPhase, Aircraft } from '@/types';
@@ -22,8 +24,8 @@ export type DataSource = 'sim' | 'live';
 
 // Derive a rough sector-load from aircraft count (≤ 99 %)
 // NOTE: placeholder — will be replaced with a real demand metric in Phase 7.
-function sectorLoad(count: number) {
-  return Math.min(99, Math.round(count / YBBN.sectorCapacity * 100));
+function sectorLoad(count: number, capacity: number) {
+  return Math.min(99, Math.round(count / capacity * 100));
 }
 
 // ── Dev-only test-conflict aircraft ──────────────────────────────────────────
@@ -80,14 +82,30 @@ const PHASE_LABEL: Record<FlightPhase, string> = {
 export default function App() {
   const [view, setView] = useState<View>('airspace');
 
+  // ── Active airport ───────────────────────────────────────────────────────
+  const [activeProfile, setActiveProfile] = useState<AirportProfile>(YBBN);
+
   // ── Data source toggle ───────────────────────────────────────────────────
   const [dataSource, setDataSource] = useState<DataSource>('live');
 
-  // Adapter is (re-)created whenever dataSource changes.
-  // useMemo keeps the same instance as long as dataSource is stable.
+  // ── Airport switch handler ───────────────────────────────────────────────
+  // Switches profile, forces live if the new airport has no sim, clears state.
+  const handleAirportSwitch = useCallback((profile: AirportProfile) => {
+    if (profile.icao === activeProfile.icao) return;
+    console.log(`[APP] airport switch → ${profile.icao}`);
+    setActiveProfile(profile);
+    if (!profile.sim) setDataSource('live');
+    setSelectedAcId(null);
+    setCameraMode('orbit');
+    setSWAlerts([]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProfile.icao]);
+
+  // Adapter is (re-)created whenever dataSource or activeProfile changes.
   const adapter = useMemo<DataFeedAdapter>(() => {
-    return dataSource === 'live' ? new AdsbAdapter(YBBN) : getSimAdapter(YBBN);
-  }, [dataSource]);
+    if (dataSource === 'sim' && activeProfile.sim) return getSimAdapter(activeProfile);
+    return new AdsbAdapter(activeProfile);
+  }, [dataSource, activeProfile]);
 
   // Destroy the ADS-B adapter instance when it's replaced (dataSource change
   // or component unmount). The sim adapter is a singleton and must NOT be
@@ -165,7 +183,14 @@ export default function App() {
   const visibleAircraftRef = useRef<Aircraft[]>([]);
 
   // ── Alert engine (Phase 6A) ──────────────────────────────────────────────
-  const alertEngineRef  = useRef(new AlertEngine(YBBN));
+  const alertEngineRef  = useRef(new AlertEngine(activeProfile));
+
+  // Reinitialise the alert engine whenever the active airport changes so stale
+  // Brisbane alerts don't carry over into Sydney (or vice versa).
+  useEffect(() => {
+    alertEngineRef.current = new AlertEngine(activeProfile);
+    setSWAlerts([]);
+  }, [activeProfile]);
   const [swAlerts,       setSWAlerts]       = useState<SWAlert[]>([]);
   const [injectConflict, setInjectConflict] = useState(false);
 
@@ -453,13 +478,17 @@ export default function App() {
         feedStatus={feedHealth.status}
         feedLastUpdate={feedHealth.lastUpdate}
         dataSource={dataSource}
-        onDataSourceChange={setDataSource}
+        onDataSourceChange={(src) => {
+          if (src === 'sim' && !activeProfile.sim) return;
+          setDataSource(src);
+        }}
+        simAvailable={!!activeProfile.sim}
       />
       <StatusStrip
         aircraftCount={visibleAircraft.length}
         alertCount={activeAlerts.length || _legacyAlerts.length}
         groundCount={visibleAircraft.filter(ac => !isAirborne(ac)).length}
-        sectorLoad={sectorLoad(visibleAircraft.length)}
+        sectorLoad={sectorLoad(visibleAircraft.length, activeProfile.sectorCapacity)}
       />
 
       {/* ── Display filters ─────────────────────────────────────────────── */}
@@ -605,21 +634,38 @@ export default function App() {
           activeAlerts={activeAlerts}
           onAlertFocus={handleManualAlertFocus}
         />
-        {/* ── Brisbane Airport title — 3D airspace only ── */}
+        {/* ── Airport title + switcher — 3D airspace only ── */}
         {view === 'airspace' && (
           <div className="absolute inset-x-0 top-3 flex flex-col items-center z-10 pointer-events-none select-none">
             <div className="flex items-baseline gap-3">
-              <span className="text-[10px] font-mono tracking-[0.25em] text-sky-600/70 uppercase">{YBBN.icao}</span>
+              <span className="text-[10px] font-mono tracking-[0.25em] text-sky-600/70 uppercase">{activeProfile.icao}</span>
               <h1 className="text-2xl font-bold tracking-[0.12em] text-sky-100/90 uppercase"
                   style={{ fontFamily: '"Courier New", monospace', textShadow: '0 0 24px rgba(14,165,233,0.45)' }}>
-                {YBBN.name}
+                {activeProfile.name}
               </h1>
               <span className="text-[10px] font-mono tracking-[0.25em] text-sky-600/70 uppercase">ICAO</span>
             </div>
             <div className="mt-0.5 h-px w-64 bg-gradient-to-r from-transparent via-sky-700/50 to-transparent" />
+            {/* Airport switcher — pointer-events re-enabled */}
+            <div className="flex items-center gap-1 mt-2 pointer-events-auto">
+              {Object.values(AIRPORTS).map(ap => (
+                <button
+                  key={ap.icao}
+                  onClick={() => handleAirportSwitch(ap)}
+                  className={[
+                    'font-mono text-[9px] tracking-wider px-2.5 py-0.5 rounded border transition-colors select-none cursor-pointer',
+                    activeProfile.icao === ap.icao
+                      ? 'border-sky-500/60 text-sky-400 bg-sky-900/30'
+                      : 'border-slate-700/60 text-slate-500 hover:text-slate-300 hover:border-slate-500',
+                  ].join(' ')}
+                >
+                  {ap.icao}
+                </button>
+              ))}
+            </div>
           </div>
         )}
-        <AirportProvider>
+        <AirportProvider profile={activeProfile}>
         {view === 'airfield' ? (
           <AirfieldView2D
             aircraft={visibleAircraft}
@@ -661,7 +707,7 @@ export default function App() {
         )}
 
         {/* ── Weather widget — always visible, bottom-left ── */}
-        <WeatherWidget />
+        <WeatherWidget profile={activeProfile} />
 
         {/* ── Controls HUD — bottom-centre on both views ── */}
         <ControlsHUD activeView={view} />

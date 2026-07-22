@@ -28,6 +28,8 @@ export interface AirportProfile {
   icao:      string;   // "YBBN"
   name:      string;   // "Brisbane Airport"
   nameShort: string;   // "BRISBANE INTL"
+  /** IANA timezone for local-time display and weather widget, e.g. "Australia/Brisbane" */
+  timezone:  string;
 
   // ── Projection ──────────────────────────────────────────────────────────────
   // The equirectangular projection origin.  All scene coordinates are relative

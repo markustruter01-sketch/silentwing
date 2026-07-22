@@ -1,11 +1,12 @@
 // ─── WeatherWidget ─────────────────────────────────────────────────────────────
 //
-// Always-visible bottom-left overlay showing live YBBN weather from Open-Meteo
-// (free, no API key) plus a 12-hour forward-look strip.
+// Always-visible bottom-left overlay showing live weather from Open-Meteo
+// (free, no API key) for the ACTIVE airport, plus a 12-hour forward-look strip.
 // Always expanded. Transparent background — only text, icons and a subtle border.
-// Refreshes every 15 minutes.
+// Refreshes every 15 minutes, or immediately when the active airport changes.
 
 import { useEffect, useState } from 'react';
+import type { AirportProfile } from '@/airports/types';
 
 // ── WMO weather-code → display ─────────────────────────────────────────────────
 const WMO: Record<number, { label: string; icon: string }> = {
@@ -65,19 +66,24 @@ interface WeatherState {
   hourly:    HourlySlice[];
 }
 
-// ── Fetch ──────────────────────────────────────────────────────────────────────
-const BASE =
-  'https://api.open-meteo.com/v1/forecast' +
-  '?latitude=-27.384&longitude=153.117' +
-  '&timezone=Australia%2FBrisbane' +
-  '&current=temperature_2m,apparent_temperature,relative_humidity_2m,' +
-  'weather_code,wind_speed_10m,wind_direction_10m,precipitation' +
-  '&hourly=temperature_2m,weather_code,precipitation_probability,' +
-  'wind_speed_10m,wind_direction_10m' +
-  '&forecast_days=2';
+// ── URL builder — depends on active airport ────────────────────────────────────
+function makeWeatherUrl(lat: number, lon: number, tz: string): string {
+  return (
+    'https://api.open-meteo.com/v1/forecast' +
+    `?latitude=${lat}&longitude=${lon}` +
+    `&timezone=${encodeURIComponent(tz)}` +
+    '&current=temperature_2m,apparent_temperature,relative_humidity_2m,' +
+    'weather_code,wind_speed_10m,wind_direction_10m,precipitation' +
+    '&hourly=temperature_2m,weather_code,precipitation_probability,' +
+    'wind_speed_10m,wind_direction_10m' +
+    '&forecast_days=2'
+  );
+}
 
-async function fetchWeather(): Promise<WeatherState> {
-  const res  = await fetch(BASE);
+const REFRESH_MS = 15 * 60 * 1_000; // 15 minutes
+
+async function fetchWeather(url: string): Promise<WeatherState> {
+  const res  = await fetch(url);
   if (!res.ok) throw new Error(`Open-Meteo ${res.status}`);
   const json = await res.json();
 
@@ -119,49 +125,53 @@ function WindArrow({ deg, size = 10 }: { deg: number; size?: number }) {
   );
 }
 
-// ── Hour card ──────────────────────────────────────────────────────────────────
+// ── Hourly card ────────────────────────────────────────────────────────────────
 function HourCard({ h }: { h: HourlySlice }) {
-  const info = wmo(h.weather_code);
-  const hr   = new Date(h.time).getHours().toString().padStart(2, '0');
+  const { icon } = wmo(h.weather_code);
+  const localHour = new Date(h.time + ':00').getHours();
   return (
-    <div className="flex flex-col items-center gap-0.5 min-w-[40px] px-1">
-      <span className="font-mono text-[8px] text-slate-500">{hr}:00</span>
-      <span style={{ fontSize: 14, lineHeight: 1 }}>{info.icon}</span>
-      <span className="font-mono text-[9px] text-slate-200 font-semibold">
+    <div className="flex flex-col items-center gap-[2px] min-w-[36px] px-1 py-1.5">
+      <span className="font-mono text-[8px] text-slate-600">
+        {String(localHour).padStart(2, '0')}h
+      </span>
+      <span style={{ fontSize: 12 }}>{icon}</span>
+      <span className="font-mono text-[8px] text-slate-300">
         {Math.round(h.temperature_2m)}°
       </span>
       {h.precipitation_probability > 20 && (
-        <span className="font-mono text-[7px] text-sky-400">{h.precipitation_probability}%</span>
+        <span className="font-mono text-[7px] text-sky-600">
+          {h.precipitation_probability}%
+        </span>
       )}
-      <div className="flex items-center gap-0.5">
-        <WindArrow deg={h.wind_direction_10m} size={7} />
-        <span className="font-mono text-[7px] text-slate-500">{Math.round(h.wind_speed_10m)}</span>
-      </div>
     </div>
   );
 }
 
-// ── Main component ─────────────────────────────────────────────────────────────
-const REFRESH_MS = 15 * 60 * 1000;
-
-export default function WeatherWidget() {
+// ── Component ──────────────────────────────────────────────────────────────────
+export default function WeatherWidget({ profile }: { profile: AirportProfile }) {
   const [wx,    setWx]    = useState<WeatherState | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = async () => {
-    try {
-      setWx(await fetchWeather());
-      setError(null);
-    } catch {
-      setError('Weather unavailable');
-    }
-  };
-
   useEffect(() => {
+    const url = makeWeatherUrl(profile.origin.lat, profile.origin.lon, profile.timezone);
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const data = await fetchWeather(url);
+        if (!cancelled) { setWx(data); setError(null); }
+      } catch {
+        if (!cancelled) setError('Weather unavailable');
+      }
+    };
+
+    // Reset stale data immediately so we don't show Brisbane wx for Sydney
+    setWx(null);
+    setError(null);
     load();
     const id = setInterval(load, REFRESH_MS);
-    return () => clearInterval(id);
-  }, []);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [profile.icao, profile.origin.lat, profile.origin.lon, profile.timezone]);
 
   const info = wx ? wmo(wx.current.weather_code) : null;
 
@@ -176,9 +186,9 @@ export default function WeatherWidget() {
       >
         {/* ── Location label ── */}
         <div className="flex items-center gap-2 px-3 pt-2 pb-0.5">
-          <span className="font-mono text-[8px] text-slate-600 tracking-[0.2em] uppercase">YBBN</span>
+          <span className="font-mono text-[8px] text-slate-600 tracking-[0.2em] uppercase">{profile.icao}</span>
           <span className="text-slate-700 text-[8px]">·</span>
-          <span className="font-mono text-[8px] text-slate-600 tracking-wider">BRISBANE</span>
+          <span className="font-mono text-[8px] text-slate-600 tracking-wider">{profile.nameShort}</span>
         </div>
 
         {/* ── Current conditions ── */}
