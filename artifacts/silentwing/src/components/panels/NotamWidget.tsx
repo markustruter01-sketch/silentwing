@@ -1,61 +1,76 @@
-// ─── NotamWidget ───────────────────────────────────────────────────────────────
+// ─── WeatherWidget (NotamWidget) ───────────────────────────────────────────────
 //
-// Always-visible NOTAM readout for a given ICAO.
-// Fetches from aviationweather.gov (free, no key) every 30 minutes.
-// Renders at most 6 active NOTAMs, truncated for readability.
+// Live weather observations for the active airport ICAO.
+// Fetches from aviationweather.gov (METAR, free, no key) every 10 minutes.
+// Displays wind, temperature, visibility, QNH, and the raw observation string.
 
 import { useEffect, useState } from 'react';
 import { useAirport } from '@/airports/context';
 
-interface Notam {
-  notamID:        string;
-  text:           string;
-  startDate?:     string;
-  endDate?:       string;
-  classification?: string;
+interface Metar {
+  icaoId:     string;
+  reportTime: string;   // ISO
+  temp:       number;   // °C
+  dewp:       number;   // °C
+  wdir:       number;   // degrees true (0 = variable)
+  wspd:       number;   // knots
+  wgst?:      number;   // gust knots
+  visib:      number;   // statute miles
+  altim:      number;   // hPa (QNH)
+  wxString?:  string;   // present weather e.g. "FG", "RA"
+  metarType:  string;   // "METAR" | "SPECI"
+  rawOb:      string;
 }
 
-const REFRESH_MS = 30 * 60 * 1_000;
-const MAX_SHOWN  = 6;
-const TEXT_LIMIT = 140; // chars before truncation
+const REFRESH_MS = 10 * 60 * 1_000;
 
-async function fetchNotams(icao: string): Promise<Notam[]> {
-  // Proxy through the API server to avoid CORS issues with aviationweather.gov.
-  const url = `/api/notam?icao=${encodeURIComponent(icao)}`;
+async function fetchMetar(icao: string): Promise<Metar> {
+  const url = `/api/metar?icao=${encodeURIComponent(icao)}`;
   const res  = await fetch(url, { signal: AbortSignal.timeout(12_000) });
-  const body = await res.json() as Notam[] | { error: string };
-  // Upstream returns { error } when the airport/API isn't available.
-  if (!Array.isArray(body)) throw new Error((body as { error: string }).error ?? `NOTAM ${res.status}`);
-  return body.filter(n => n.notamID && n.text).slice(0, MAX_SHOWN);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await res.json() as Metar[] | { error: string };
+  if (!Array.isArray(json) || json.length === 0)
+    throw new Error((json as { error?: string }).error ?? 'No data');
+  return json[0];
 }
 
-/** Strip the common NOTAM preamble so the display text is concise. */
-function summarise(text: string): string {
-  // Raw NOTAM text often starts with "!ICAO/ICAO NOTAM..." — drop that header
-  const trimmed = text.replace(/^![A-Z0-9/\s]+\s*/, '').trim();
-  return trimmed.length > TEXT_LIMIT
-    ? trimmed.slice(0, TEXT_LIMIT) + '…'
-    : trimmed;
+function windDir(deg: number): string {
+  if (deg === 0) return 'VRB';
+  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  return dirs[Math.round(deg / 22.5) % 16];
+}
+
+function visFmt(sm: number): string {
+  const m = Math.round(sm * 1_609.34 / 100) * 100;
+  return m >= 9_999 ? '10 km+' : m >= 1_000 ? `${(m / 1000).toFixed(1)} km` : `${m} m`;
+}
+
+function wxLabel(code: string): string {
+  const map: Record<string, string> = {
+    FG: 'FOG', FZFG: 'FRZING FOG', BR: 'MIST', HZ: 'HAZE',
+    RA: 'RAIN', DZ: 'DRIZZLE', SN: 'SNOW', GR: 'HAIL',
+    TS: 'TSTORM', SQ: 'SQUALL', FU: 'SMOKE', SA: 'SAND',
+    RASN: 'RAIN+SNOW', TSRA: 'TSTORM+RAIN',
+  };
+  return map[code] ?? code;
 }
 
 export default function NotamWidget() {
   const profile = useAirport();
   const icao = profile.icao;
 
-  const [notams,    setNotams]    = useState<Notam[] | null>(null);
+  const [metar,     setMetar]     = useState<Metar | null>(null);
   const [error,     setError]     = useState<string | null>(null);
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
 
   const load = async () => {
     try {
-      const data = await fetchNotams(icao);
-      setNotams(data);
+      const data = await fetchMetar(icao);
+      setMetar(data);
       setFetchedAt(Date.now());
       setError(null);
     } catch (e) {
-      // Suppress retry noise — NOTAM APIs for non-US airports have no free
-      // public source; show a static unavailable message instead of looping.
-      setError('No free NOTAM source for ' + icao);
+      setError(e instanceof Error ? e.message : 'Unavailable');
     }
   };
 
@@ -81,10 +96,21 @@ export default function NotamWidget() {
             className="font-mono text-[7px] tracking-[0.25em] font-bold uppercase"
             style={{ color: '#FDE047' }}
           >
-            NOTAM
+            WX
           </span>
           <span className="font-mono text-[7px] text-slate-600">·</span>
           <span className="font-mono text-[7px] text-slate-600 tracking-widest">{icao}</span>
+          {metar && (
+            <>
+              <span className="font-mono text-[7px] text-slate-600">·</span>
+              <span
+                className="font-mono text-[6px] tracking-wider"
+                style={{ color: metar.metarType === 'SPECI' ? '#F87171' : '#94A3B8' }}
+              >
+                {metar.metarType}
+              </span>
+            </>
+          )}
         </div>
         {fetchedAt && (
           <span className="font-mono text-[6px] text-slate-700">
@@ -94,36 +120,64 @@ export default function NotamWidget() {
       </div>
 
       {/* ── Body ── */}
-      <div className="px-3 py-1.5 flex flex-col gap-1.5">
+      <div className="px-3 py-2 flex flex-col gap-1">
         {error ? (
           <span className="font-mono text-[8px] text-slate-600">{error}</span>
-        ) : notams === null ? (
-          <span className="font-mono text-[8px] text-slate-700">Loading NOTAMs…</span>
-        ) : notams.length === 0 ? (
-          <span className="font-mono text-[8px] text-slate-600">No active NOTAMs</span>
+        ) : metar === null ? (
+          <span className="font-mono text-[8px] text-slate-700">Loading…</span>
         ) : (
-          notams.map(n => (
-            <div key={n.notamID} className="flex flex-col gap-0.5">
-              <div className="flex items-center gap-2">
-                <span
-                  className="font-mono text-[7px] font-bold tracking-wide"
-                  style={{ color: '#FDE047', opacity: 0.7 }}
-                >
-                  {n.notamID}
-                </span>
-                {n.classification && (
-                  <span className="font-mono text-[6px] text-slate-600 uppercase tracking-wider">
-                    {n.classification}
-                  </span>
-                )}
-              </div>
-              <span className="font-mono text-[8px] text-slate-300 leading-snug">
-                {summarise(n.text)}
-              </span>
+          <>
+            {/* Row 1 — wind */}
+            <div className="flex items-center gap-3">
+              <Row label="WIND">
+                {metar.wdir === 0
+                  ? `VRB ${metar.wspd}KT`
+                  : `${String(metar.wdir).padStart(3,'0')}° ${windDir(metar.wdir)} ${metar.wspd}KT`
+                  + (metar.wgst ? ` G${metar.wgst}KT` : '')}
+              </Row>
             </div>
-          ))
+
+            {/* Row 2 — visibility + weather */}
+            <div className="flex items-center gap-3">
+              <Row label="VIS">{visFmt(metar.visib)}</Row>
+              {metar.wxString && (
+                <Row label="WX">
+                  <span style={{ color: '#F87171' }}>{wxLabel(metar.wxString)}</span>
+                </Row>
+              )}
+            </div>
+
+            {/* Row 3 — temp / dewpoint */}
+            <div className="flex items-center gap-3">
+              <Row label="TEMP">{metar.temp}°C</Row>
+              <Row label="DP">{metar.dewp}°C</Row>
+              <Row label="QNH">{metar.altim} hPa</Row>
+            </div>
+
+            {/* Raw METAR */}
+            <div
+              className="mt-0.5 pt-1 font-mono text-[6.5px] text-slate-600 leading-tight break-all"
+              style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}
+            >
+              {metar.rawOb}
+            </div>
+          </>
         )}
       </div>
+    </div>
+  );
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline gap-1.5">
+      <span
+        className="font-mono text-[6px] tracking-widest shrink-0"
+        style={{ color: '#FDE047', opacity: 0.55 }}
+      >
+        {label}
+      </span>
+      <span className="font-mono text-[8px] text-slate-200">{children}</span>
     </div>
   );
 }
