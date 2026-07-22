@@ -31,7 +31,7 @@ const STALE_SKIP_S = 30;
 // Only aircraft within this radius of the YBBN scene origin (0, 0) and below
 // the altitude ceiling are fed into the separation detector.  Out-of-area
 // aircraft (Archerfield, Caboolture, etc.) still render but generate no alerts.
-const TERMINAL_RADIUS_NM  = 15;
+const TERMINAL_RADIUS_NM  = 7.5;
 const TERMINAL_RADIUS_M   = TERMINAL_RADIUS_NM * NM; // 27 780 m
 const TERMINAL_RADIUS_M2  = TERMINAL_RADIUS_M * TERMINAL_RADIUS_M;
 const TERMINAL_ALT_CEIL_FT = 15_000;

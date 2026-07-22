@@ -19,7 +19,7 @@ const MOVING_SPD_KTS      = 5;    // ground speed above which aircraft is "movin
 // only for aircraft within the YBBN terminal area.  This prevents Archerfield
 // runway pairings from generating spurious occupancy alerts.
 const NM                  = 1852;
-const TERMINAL_RADIUS_NM  = 15;
+const TERMINAL_RADIUS_NM  = 7.5;
 const TERMINAL_RADIUS_M   = TERMINAL_RADIUS_NM * NM;
 const TERMINAL_RADIUS_M2  = TERMINAL_RADIUS_M * TERMINAL_RADIUS_M;
 

@@ -24,7 +24,7 @@ const CAUTION_TTC_S    = 90;      // < 90 s → caution (≥ 45)
 // ── Terminal-area filter ───────────────────────────────────────────────────────
 // Mirror of the separation detector: only aircraft within 15 nm of YBBN and
 // below 15 000 ft are fed into the predicted-conflict detector.
-const TERMINAL_RADIUS_NM   = 15;
+const TERMINAL_RADIUS_NM   = 7.5;
 const TERMINAL_RADIUS_M    = TERMINAL_RADIUS_NM * NM;
 const TERMINAL_RADIUS_M2   = TERMINAL_RADIUS_M * TERMINAL_RADIUS_M;
 const TERMINAL_ALT_CEIL_FT = 15_000;
