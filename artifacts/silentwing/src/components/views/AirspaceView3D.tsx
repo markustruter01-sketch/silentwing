@@ -1744,13 +1744,19 @@ export default function AirspaceView3D({
       }
 
       // ── Label deconfliction + leader lines ───────────────────────────────
-      // Project all aircraft labels to screen space, push overlapping ones
-      // apart vertically, unproject back to world, and draw a thin leader line
-      // from the displaced label to the aircraft cone for each displaced label.
+      // Project labels to NDC, run a bounded push-apart, unproject back to
+      // world, and draw a leader line when the label was actually displaced.
+      //
+      // Design decisions:
+      //  • Smaller min gap (50 px) — 120 px was pushing labels far off-screen
+      //    when many aircraft cluster at the terminal.
+      //  • Hard clamp (MAX_DISP_NDC ≈ 80 px) — labels may never move more than
+      //    this from their default anchor, so they always stay near their aircraft.
+      //    Dense clusters may still overlap but labels won't drift off-screen.
       {
-        const canvasW = renderer.domElement.clientWidth  || 1;
         const canvasH = renderer.domElement.clientHeight || 1;
-        const MIN_SEP_NDC = (120 / canvasH) * 2; // 120 CSS px minimum gap in NDC
+        const MIN_SEP_NDC  = (50 / canvasH) * 2;   // min gap between label centres
+        const MAX_DISP_NDC = (80 / canvasH) * 2;   // max displacement from anchor
 
         // Collect all bundles + their default-position NDC
         const items: { b: AcBundle; ndc: THREE.Vector3; defY: number }[] = [];
@@ -1764,7 +1770,8 @@ export default function AirspaceView3D({
         // Sort top → bottom in screen space (NDC Y descending = visually higher)
         items.sort((a, b) => b.ndc.y - a.ndc.y);
 
-        // Iterative push-apart (3 passes resolves most common overlaps)
+        // Iterative push-apart — each pass is followed by a hard clamp so no
+        // label can ever drift more than MAX_DISP_NDC from its anchor.
         for (let pass = 0; pass < 3; pass++) {
           for (let i = 0; i + 1 < items.length; i++) {
             const a = items[i], b = items[i + 1];
@@ -1775,14 +1782,22 @@ export default function AirspaceView3D({
               b.ndc.y -= push;
             }
           }
+          // Clamp each label to within MAX_DISP_NDC of its default anchor
+          for (const item of items) {
+            const delta = item.ndc.y - item.defY;
+            if (Math.abs(delta) > MAX_DISP_NDC) {
+              item.ndc.y = item.defY + Math.sign(delta) * MAX_DISP_NDC;
+            }
+          }
         }
 
         // Apply deconflicted positions; draw leader lines for displaced labels
+        const DISPLACE_THRESH = (6 / canvasH) * 2; // treat <6 px as "not moved"
         for (const { b, ndc, defY } of items) {
           const worldPos = ndc.clone().unproject(camera);
           b.label.position.copy(worldPos);
 
-          const displaced = Math.abs(ndc.y - defY) > 0.015;
+          const displaced = Math.abs(ndc.y - defY) > DISPLACE_THRESH;
           if (b.leaderLine) {
             if (displaced) {
               const posAttr = b.leaderLine.geometry.attributes.position as THREE.BufferAttribute;
