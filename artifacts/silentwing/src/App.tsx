@@ -372,6 +372,20 @@ export default function App() {
 
       {/* ── Main view area ── */}
       <main className="flex-1 relative overflow-hidden">
+        {/* ── Brisbane Airport title — 3D airspace only ── */}
+        {view === 'airspace' && (
+          <div className="absolute inset-x-0 top-3 flex flex-col items-center z-10 pointer-events-none select-none">
+            <div className="flex items-baseline gap-3">
+              <span className="text-[10px] font-mono tracking-[0.25em] text-sky-600/70 uppercase">YBBN</span>
+              <h1 className="text-2xl font-bold tracking-[0.12em] text-sky-100/90 uppercase"
+                  style={{ fontFamily: '"Courier New", monospace', textShadow: '0 0 24px rgba(14,165,233,0.45)' }}>
+                Brisbane Airport
+              </h1>
+              <span className="text-[10px] font-mono tracking-[0.25em] text-sky-600/70 uppercase">ICAO</span>
+            </div>
+            <div className="mt-0.5 h-px w-64 bg-gradient-to-r from-transparent via-sky-700/50 to-transparent" />
+          </div>
+        )}
         {view === 'airfield' ? (
           <AirfieldView2D
             aircraft={visibleAircraft}
@@ -387,6 +401,7 @@ export default function App() {
             selectedAcId={selectedAcId}
             cameraMode={cameraMode}
             directorMode={directorMode}
+            weather={snapshot.weather}
             onSelectAircraft={(id) => {
               console.log(`[APP] 3D select: ${id ?? 'null'}`);
               setSelectedAcId(id);

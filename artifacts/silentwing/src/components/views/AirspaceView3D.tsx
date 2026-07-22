@@ -12,7 +12,7 @@
 
 import * as THREE from 'three';
 import { useEffect, useRef } from 'react';
-import type { Aircraft } from '@/types';
+import type { Aircraft, WorldSnapshot } from '@/types';
 import { isAirborne } from '@/types';
 import { REAL_RUNWAYS, REAL_TAXIWAYS, REAL_APRONS } from '@/data/ybbn_real';
 
@@ -229,6 +229,144 @@ function buildGroundGeometry(): THREE.Group {
   return g;
 }
 
+// ── Airport static annotations ────────────────────────────────────────────────
+
+/** Canvas-sprite label styled for runway thresholds / terminal areas. */
+function makeRunwayLabel(text: string): THREE.Sprite {
+  const cv  = document.createElement('canvas');
+  cv.width  = 320; cv.height = 80;
+  const ctx = cv.getContext('2d')!;
+  ctx.beginPath();
+  ctx.roundRect(4, 4, 312, 72, 14);
+  ctx.fillStyle   = 'rgba(6, 14, 28, 0.90)';
+  ctx.fill();
+  ctx.strokeStyle = '#38bdf8';
+  ctx.lineWidth   = 2.5;
+  ctx.stroke();
+  ctx.font         = 'bold 30px "Courier New", monospace';
+  ctx.fillStyle    = '#7dd3fc';
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 160, 40);
+  const tex = new THREE.CanvasTexture(cv);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+  const sp  = new THREE.Sprite(mat);
+  sp.scale.set(640, 160, 1);
+  return sp;
+}
+
+// Runway threshold positions in Three.js scene coords (after flipRealY applied).
+// Derived from REAL_RUNWAYS first/last coords: [label, x, z].
+const RUNWAY_THRESHOLDS: [string, number, number][] = [
+  ['19R',      490.6,   -3032.4],
+  ['01L',     -1007.7,   -102.8],
+  ['01R',      120.3,   2079.9 ],
+  ['19L',     1710.8,  -1030.6 ],
+];
+
+function buildAirportAnnotations(): THREE.Group {
+  const g = new THREE.Group();
+  const H = 90; // hover height (scene units ≈ 600 ft)
+
+  for (const [text, x, z] of RUNWAY_THRESHOLDS) {
+    const sp = makeRunwayLabel(text);
+    sp.position.set(x, H, z);
+    g.add(sp);
+  }
+
+  // Terminal label — gates cluster around (420, -250) in scene coords
+  const term = makeRunwayLabel('TERMINAL');
+  term.position.set(420, H, -250);
+  g.add(term);
+
+  return g;
+}
+
+// ── ILS approach corridor ──────────────────────────────────────────────────────
+// A translucent wedge descending from approach-fix altitude to runway threshold.
+function buildApproachCone(activeDir: '01' | '19'): THREE.Group {
+  const g = new THREE.Group();
+  const RANGE_M  = 9_000;
+  const WIDTH_M  = 1_400;
+  // Height at far end of corridor following a 3° glide slope
+  const farY = RANGE_M * Math.tan((3 * Math.PI) / 180) * ALT_SCALE; // ≈ 71 units
+
+  // Average the two active-direction thresholds for corridor centre
+  let cx: number, cz: number, dz: number;
+  if (activeDir === '01') {
+    cx = (-1007.7 + 120.3) / 2;            // ≈ -444
+    cz = (-102.8  + 2079.9) / 2;           // ≈  989
+    dz = 1;                                 // approach from +Z (south)
+  } else {
+    cx = (490.6 + 1710.8) / 2;             // ≈ 1101
+    cz = (-3032.4 + (-1030.6)) / 2;        // ≈ -2032
+    dz = -1;                                // approach from -Z (north)
+  }
+  const w  = WIDTH_M / 2;
+  const fz = cz + dz * RANGE_M;
+
+  // Filled glide-slope plane
+  const pos = new Float32Array([
+    cx - 30, 0,    cz,
+    cx + 30, 0,    cz,
+    cx - w,  farY, fz,
+    cx + w,  farY, fz,
+  ]);
+  const idx = [0, 2, 1, 1, 2, 3];
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  g.add(new THREE.Mesh(geo,
+    new THREE.MeshBasicMaterial({ color: 0x0ea5e9, transparent: true, opacity: 0.07, side: THREE.DoubleSide, depthWrite: false }),
+  ));
+
+  // Outline edges
+  const edgeMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.30, depthWrite: false });
+  const outline  = [
+    new THREE.Vector3(cx - 30, 0,    cz),
+    new THREE.Vector3(cx - w,  farY, fz),
+    new THREE.Vector3(cx + w,  farY, fz),
+    new THREE.Vector3(cx + 30, 0,    cz),
+    new THREE.Vector3(cx - 30, 0,    cz),
+  ];
+  g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(outline), edgeMat));
+
+  // Centre glide line (brighter)
+  g.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(cx, 0, cz), new THREE.Vector3(cx, farY, fz),
+    ]),
+    new THREE.LineBasicMaterial({ color: 0x7dd3fc, transparent: true, opacity: 0.50, depthWrite: false }),
+  ));
+
+  return g;
+}
+
+// ── Wind direction indicator ───────────────────────────────────────────────────
+// Floating arrow NW of airport showing current wind FROM direction + speed.
+function buildWindIndicator(windDir: number, windSpeed: number): THREE.Group {
+  const g = new THREE.Group();
+  g.position.set(-2200, 680, -1800); // NW of airport, well above aircraft traffic
+
+  // Wind FROM direction — arrow points in the downwind (TO) direction
+  const rad = (windDir * Math.PI) / 180;
+  const dir = new THREE.Vector3(-Math.sin(rad), 0, Math.cos(rad)).normalize();
+  const arrow = new THREE.ArrowHelper(dir, new THREE.Vector3(), 900, 0x38bdf8, 260, 130);
+  (arrow.line.material as THREE.LineBasicMaterial).transparent = true;
+  (arrow.line.material as THREE.LineBasicMaterial).opacity     = 0.72;
+  (arrow.cone.material as THREE.MeshBasicMaterial).transparent = true;
+  (arrow.cone.material as THREE.MeshBasicMaterial).opacity     = 0.72;
+  g.add(arrow);
+
+  // Label
+  const sp = makeRingLabel(`WIND  ${Math.round(windDir).toString().padStart(3,'0')}° / ${Math.round(windSpeed)} kt`);
+  sp.position.set(0, 300, 0);
+  g.add(sp);
+
+  return g;
+}
+
 // ── Per-aircraft Three.js bundle ──────────────────────────────────────────────
 interface AcBundle {
   cone:     THREE.Mesh;
@@ -353,6 +491,8 @@ export interface AirspaceView3DProps {
   onCameraMode:     (mode: CameraMode) => void;
   /** When true the camera uses a wide cinematic offset and smooth tracking. */
   directorMode?:    boolean;
+  /** Live weather — drives approach corridor and wind indicator. */
+  weather?:         WorldSnapshot['weather'];
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -363,9 +503,12 @@ export default function AirspaceView3D({
   onSelectAircraft,
   onCameraMode,
   directorMode = false,
+  weather,
 }: AirspaceView3DProps) {
-  const mountRef  = useRef<HTMLDivElement>(null);
-  const sceneRef  = useRef<SceneState | null>(null);
+  const mountRef       = useRef<HTMLDivElement>(null);
+  const sceneRef       = useRef<SceneState | null>(null);
+  /** Three.js group rebuilt whenever weather changes (approach cone + wind arrow). */
+  const weatherGrpRef  = useRef<THREE.Group | null>(null);
 
   // Stable callback refs — updated every render so event handlers always call
   // the latest versions without needing to be re-registered.
@@ -423,6 +566,20 @@ export default function AirspaceView3D({
     }
   }, [cameraMode]);
 
+  // ── Sync weather prop → rebuild approach cone + wind arrow ───────────────────
+  useEffect(() => {
+    const st = sceneRef.current;
+    if (!st) return;
+    // Remove previous weather group
+    if (weatherGrpRef.current) { st.scene.remove(weatherGrpRef.current); weatherGrpRef.current = null; }
+    if (!weather) return;
+    const wg = new THREE.Group();
+    wg.add(buildApproachCone(weather.activeRunwayDirection));
+    wg.add(buildWindIndicator(weather.windDir, weather.windSpeed));
+    st.scene.add(wg);
+    weatherGrpRef.current = wg;
+  }, [weather?.activeRunwayDirection, weather?.windDir, weather?.windSpeed]);
+
   // ── Sync external selectedAcId prop → sceneRef ──────────────────────────────
   useEffect(() => {
     const st = sceneRef.current;
@@ -479,6 +636,7 @@ export default function AirspaceView3D({
 
     scene.add(buildGroundGeometry());
     scene.add(buildAltRings());
+    scene.add(buildAirportAnnotations());
 
     // Initialise mutable state
     const st: SceneState = {
