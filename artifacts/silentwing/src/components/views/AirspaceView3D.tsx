@@ -21,8 +21,8 @@ export type CameraMode = 'orbit' | 'manual' | 'inspect' | 'follow' | 'returning'
 
 // ── Scene constants ────────────────────────────────────────────────────────────
 const ALT_SCALE    = 0.15;
-const ORBIT_RADIUS     = 7500;    // wide overview — all altitude rings in frame
-const ORBIT_HEIGHT     = 5000;    // elevated for a clear top-down-ish perspective
+const ORBIT_RADIUS     = 3750;    // 50% closer than the original wide overview
+const ORBIT_HEIGHT     = 2500;    // proportionally lower for a tighter perspective
 const ORBIT_INIT_ANGLE = Math.PI * 0.6; // starting angle (south of airport, runway visible)
 const ORBIT_SPEED      = 0.00025; // rad/frame ≈ 7 min/revolution at 60 fps
 const LOOK_AT      = new THREE.Vector3(0, 0, 0); // airfield centre (was y=700)
