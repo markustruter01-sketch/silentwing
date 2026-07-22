@@ -73,6 +73,7 @@ interface RawAc {
   gs?:           number;
   alt_baro?:     number | 'ground';  // ← CRITICAL: string "ground" when on ground
   alt_geom?:     number;
+  baro_rate?:    number;             // ft/min, positive = climbing; absent on many entries
   category?:     string;
   seen_pos?:     number;  // seconds since this entry's position was last updated
   seen?:         number;  // seconds since any message from this aircraft
@@ -124,6 +125,8 @@ function normalise(raw: RawAc): (Aircraft & { isGroundVehicle: boolean }) | null
     confidence:     1.0,
     // FIX B: pass seen_pos through so the 3D view can flag stale tracks
     seenPos:        raw.seen_pos ?? 0,
+    // Vertical rate for 3D velocity extrapolation (ft/min; absent on many entries)
+    verticalRate:   raw.baro_rate,
     isGroundVehicle,
   };
 }

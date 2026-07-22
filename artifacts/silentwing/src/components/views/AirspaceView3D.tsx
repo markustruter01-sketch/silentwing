@@ -29,14 +29,24 @@ const LABEL_LIFT      = 210;      // Three.js Y-units above cone
 const TRAIL_MAX       = 600;      // max trail points
 
 // ── ADS-B feed quality constants ──────────────────────────────────────────────
-// Knots → m/s for trail-cap and stale-check calculations.
+// Knots → m/s for trail-cap and velocity extrapolation.
 const KT_TO_MPS       = 0.514444;
 // Aircraft whose seen_pos exceeds this are shown dimmed — their displayed
 // position may be significantly behind their true position.  SAFETY SIGNAL.
-const STALE_DISPLAY_S = 15;       // seconds
-// If a new poll's position is within this of the last known target, the
-// position is considered unchanged (stale transponder data, not real movement).
-const STALE_POS_M     = 1;        // metres
+const STALE_DISPLAY_S  = 15;      // seconds
+// Aircraft whose seen_pos exceeds this do NOT extrapolate (more conservative than
+// the display threshold — we stop predicting before we start dimming).
+const STALE_EXTRAP_S   = 10;      // seconds
+// Aircraft at or below this ground speed are treated as stopped — no extrapolation.
+const GS_EXTRAP_MIN_KT = 2;       // knots
+// Maximum time we extrapolate ahead with no fresh poll.  Beyond this the aircraft
+// holds its extrapolated position rather than flying further off into space.
+const MAX_EXTRAP_S     = 12;      // seconds
+// Duration of the smooth correction blending after each new real position arrives.
+const CORR_DURATION_MS = 1000;    // ms
+// If a new poll's position is within this of the last known position, the
+// transponder has not transmitted a new fix — no correction needed.
+const STALE_POS_M      = 1;       // metres
 // Trail-cap parameters.  A new trail point is dropped if it is further from the
 // previous point than: gs_mps × pollInterval_s × TRAIL_SLACK + TRAIL_GPS_M.
 // This kills starburst from seen_pos oscillation without hiding genuine motion.
@@ -168,18 +178,29 @@ interface AcBundle {
   trail:    THREE.Line;
   label:    THREE.Sprite;
   trailBuf: THREE.Vector3[];
-  /** Smoothly interpolated display position — the value applied to visuals each frame.
-   *  Advances from fromPos toward targetPos via smoothstep over interpDurationMs. */
+
+  // ── Velocity extrapolation state ─────────────────────────────────────────
+  /** Rendered position — written by the tick loop, applied to visuals each frame. */
   renderPos:       THREE.Vector3;
-  /** Position at which this interpolation segment started (renderPos at poll time). */
-  fromPos:         THREE.Vector3;
-  /** Latest real position from the most recent poll — overwritten, never accumulated. */
-  targetPos:       THREE.Vector3;
-  /** performance.now() timestamp when the current interpolation segment began. */
-  interpStartMs:   number;
-  /** Actual measured wall-clock interval between the two most recent polls (ms).
-   *  Derived from consecutive data.now deltas so it tracks real poll cadence. */
-  interpDurationMs: number;
+  /** Real position from the most recent accepted poll (Three.js world coords).
+   *  Overwritten on each poll, never accumulated. */
+  lastKnownPos:    THREE.Vector3;
+  /** performance.now() (ms) when lastKnownPos was recorded. */
+  lastKnownTimeMs: number;
+  /** Aircraft heading in degrees (0=north, clockwise). Updated per-poll. */
+  headingDeg:      number;
+  /** Horizontal ground speed in m/s.  0 when extrapolation is suppressed. */
+  gsMps:           number;
+  /** Vertical rate in Three.js Y-units/s (converted from baro_rate ft/min).
+   *  0 when unavailable or when extrapolation is suppressed. */
+  vyPerS:          number;
+  /** Last seen_pos from ADS-B (seconds since position fix).  Stored so the
+   *  tick loop can apply the stale guard without touching React state. */
+  seenPos:         number;
+  /** renderPos snapshot taken at the start of the current correction blend. */
+  corrFromPos:     THREE.Vector3;
+  /** performance.now() when the current correction began.  -1 = no correction. */
+  corrStartMs:     number;
 }
 
 function disposeBundle(b: AcBundle): void {
@@ -439,32 +460,77 @@ export default function AirspaceView3D({
         }
       }
 
-      // ── Duration-based smoothstep interpolation ──────────────────────────
-      // Each aircraft glides from fromPos to targetPos over the full measured
-      // poll interval.  t runs 0→1 across that duration so motion is continuous
-      // for the entire inter-poll gap — aircraft are NEVER parked between polls.
+      // ── Velocity extrapolation tick ───────────────────────────────────────
+      //
+      // Each frame we advance an aircraft's renderPos by dead-reckoning from its
+      // last known real position along its current heading at its ground speed.
+      // When a new poll arrives (in the data sync effect below) the extrapolation
+      // error is corrected with a 1 s smooth blend so there is no snap.
+      //
+      // Guards enforced here every frame:
+      //   • Stale aircraft (seenPos ≥ STALE_EXTRAP_S) hold position — no motion.
+      //   • Ground-stopped aircraft (gsMps == 0) hold position — no motion.
+      //   • Extrapolation is capped at MAX_EXTRAP_S seconds ahead.
+      //   • renderPos.y is always clamped ≥ 0 (never underground).
       const nowMs = performance.now();
 
       for (const [, b] of st.acMap) {
-        // Guard: stale bundles from HMR mid-session may lack the new fields
-        if (!b.renderPos || !b.fromPos || !b.targetPos) continue;
+        // HMR guard: stale bundles from a hot-reload may lack the new fields
+        if (!b.renderPos || !b.lastKnownPos) continue;
 
-        // Normalised progress across this poll segment, clamped to [0, 1]
-        const rawT = Math.min((nowMs - b.interpStartMs) / b.interpDurationMs, 1);
-        // Smoothstep easing — eases in and out, avoids hard velocity discontinuity
-        // at each poll boundary: f(t) = t² (3 − 2t)
-        const t = rawT * rawT * (3 - 2 * rawT);
+        // Can we extrapolate this aircraft?  Both the freshness and speed guards
+        // must pass — extrapolating a silent transponder invents fake motion.
+        const canExtrap = b.seenPos < STALE_EXTRAP_S && b.gsMps > 0;
 
-        b.renderPos.lerpVectors(b.fromPos, b.targetPos, t);
-        // FIX 3: clamp altitude — cone never sinks below the ground plane
+        if (canExtrap) {
+          // Time since last known position, capped so we never fly indefinitely
+          const dtS    = Math.min((nowMs - b.lastKnownTimeMs) / 1000, MAX_EXTRAP_S);
+          const hRad   = b.headingDeg * Math.PI / 180;
+          // Forward extrapolation: heading 0=north → -Z, 90=east → +X
+          const extrapX = b.lastKnownPos.x + b.gsMps * Math.sin(hRad) * dtS;
+          const extrapZ = b.lastKnownPos.z - b.gsMps * Math.cos(hRad) * dtS;
+          const extrapY = b.lastKnownPos.y + b.vyPerS * dtS; // altitude
+
+          if (b.corrStartMs >= 0) {
+            // ── Correction blend ─────────────────────────────────────────────
+            // Smoothly merge from corrFromPos toward the extrapolated truth over
+            // CORR_DURATION_MS.  As corrT → 1 the blend converges to the pure
+            // extrapolation track with no discontinuity.
+            const rawCorrT = Math.min((nowMs - b.corrStartMs) / CORR_DURATION_MS, 1);
+            const corrT    = rawCorrT * rawCorrT * (3 - 2 * rawCorrT); // smoothstep
+            b.renderPos.set(
+              b.corrFromPos.x + (extrapX - b.corrFromPos.x) * corrT,
+              b.corrFromPos.y + (extrapY - b.corrFromPos.y) * corrT,
+              b.corrFromPos.z + (extrapZ - b.corrFromPos.z) * corrT,
+            );
+            if (rawCorrT >= 1) b.corrStartMs = -1; // correction complete
+          } else {
+            // ── Pure extrapolation ────────────────────────────────────────────
+            b.renderPos.set(extrapX, extrapY, extrapZ);
+          }
+        } else {
+          // Stale or ground-stopped: hold at last known position.
+          // If a correction was in progress (e.g. fresh→stale transition) let it
+          // finish blending toward lastKnownPos so there is no snap.
+          if (b.corrStartMs >= 0) {
+            const rawCorrT = Math.min((nowMs - b.corrStartMs) / CORR_DURATION_MS, 1);
+            const corrT    = rawCorrT * rawCorrT * (3 - 2 * rawCorrT);
+            b.renderPos.lerpVectors(b.corrFromPos, b.lastKnownPos, corrT);
+            if (rawCorrT >= 1) b.corrStartMs = -1;
+          } else {
+            b.renderPos.copy(b.lastKnownPos);
+          }
+        }
+
+        // Underground clamp — never let a cone sink below the ground plane
         b.renderPos.y = Math.max(0, b.renderPos.y);
 
         // Apply renderPos to all visuals
         b.cone.position.copy(b.renderPos);
         b.label.position.set(b.renderPos.x, b.renderPos.y + LABEL_LIFT, b.renderPos.z);
         b.stem.geometry.setFromPoints([
-          new THREE.Vector3(b.renderPos.x, 0,              b.renderPos.z),
-          new THREE.Vector3(b.renderPos.x, b.renderPos.y,  b.renderPos.z),
+          new THREE.Vector3(b.renderPos.x, 0,             b.renderPos.z),
+          new THREE.Vector3(b.renderPos.x, b.renderPos.y, b.renderPos.z),
         ]);
         b.stem.geometry.computeBoundingSphere();
 
@@ -788,10 +854,23 @@ export default function AirspaceView3D({
         scene.add(label);
 
         const trailBuf: THREE.Vector3[] = [pos.clone(), pos.clone()];
-        // Spawn: renderPos = fromPos = targetPos = real position; no motion until first update
-        acMap.set(ac.id, { cone, stem, trail, label, trailBuf,
-          renderPos: pos.clone(), fromPos: pos.clone(), targetPos: pos.clone(),
-          interpStartMs: nowMs, interpDurationMs: st.pollDurationMs });
+        // Spawn: start at real position; extrapolation begins immediately from here.
+        // No correction needed on first appearance.
+        const spawnGsMps = (ac.seenPos ?? 0) < STALE_EXTRAP_S && ac.groundSpeed >= GS_EXTRAP_MIN_KT
+          ? ac.groundSpeed * KT_TO_MPS
+          : 0;
+        acMap.set(ac.id, {
+          cone, stem, trail, label, trailBuf,
+          renderPos:       pos.clone(),
+          lastKnownPos:    pos.clone(),
+          lastKnownTimeMs: nowMs,
+          headingDeg:      ac.heading,
+          gsMps:           spawnGsMps,
+          vyPerS:          ((ac.verticalRate ?? 0) / 60) * ALT_SCALE,
+          seenPos:         ac.seenPos ?? 0,
+          corrFromPos:     pos.clone(),
+          corrStartMs:     -1,   // no correction on first appearance
+        });
 
       } else {
         // ── Update ────────────────────────────────────────────────────────
@@ -799,20 +878,38 @@ export default function AirspaceView3D({
         const b  = acMap.get(ac.id)!;
         const cm = b.cone.material as THREE.MeshLambertMaterial;
 
-        // ── FIX B: stale-position guard ───────────────────────────────────
-        // If the new position is within STALE_POS_M of the last known target
-        // the transponder has not transmitted a new fix — don't restart the
-        // interpolation segment, just keep the aircraft at its current position.
-        const posActuallyMoved = pos.distanceTo(b.targetPos) > STALE_POS_M;
-        if (posActuallyMoved) {
-          // Begin a new segment: glide from current renderPos to new fix
-          b.fromPos.copy(b.renderPos);
-          b.targetPos.copy(pos);
-          b.interpStartMs    = nowMs;
-          b.interpDurationMs = st.pollDurationMs;
-        }
+        // ── Velocity state update ─────────────────────────────────────────
+        //
+        // Determine whether this aircraft can be extrapolated after this poll.
+        const nowCanExtrap  = (ac.seenPos ?? 0) < STALE_EXTRAP_S && ac.groundSpeed >= GS_EXTRAP_MIN_KT;
+        // Was it being extrapolated before? (gsMps > 0 means extrapolation was on)
+        const wasExtrapolating = b.gsMps > 0;
 
-        // Heading snaps immediately (no perceptible jerk)
+        const posActuallyMoved = pos.distanceTo(b.lastKnownPos) > STALE_POS_M;
+
+        if (posActuallyMoved) {
+          // New real position from the transponder: correct from current renderPos
+          // (which may be ahead of truth due to extrapolation) toward the new fix.
+          // The tick loop blends corrFromPos → extrap(newPos, dt) over CORR_DURATION_MS.
+          b.corrFromPos.copy(b.renderPos);
+          b.corrStartMs = nowMs;
+        } else if (wasExtrapolating && !nowCanExtrap) {
+          // Aircraft went stale or stopped mid-extrapolation: smooth it back to
+          // lastKnownPos so it doesn't snap to a position it already passed.
+          b.corrFromPos.copy(b.renderPos);
+          b.corrStartMs = nowMs;
+        }
+        // (If position unchanged and extrapolation eligibility unchanged, no correction)
+
+        // Overwrite known state — never accumulate
+        b.lastKnownPos.copy(pos);
+        b.lastKnownTimeMs = nowMs;
+        b.headingDeg      = ac.heading;
+        b.gsMps           = nowCanExtrap ? ac.groundSpeed * KT_TO_MPS : 0;
+        b.vyPerS          = ((ac.verticalRate ?? 0) / 60) * ALT_SCALE;
+        b.seenPos         = ac.seenPos ?? 0;
+
+        // Heading snaps immediately (no perceptible jerk at these speeds)
         b.cone.rotation.y = headY;
 
         // ── FIX B: visual stale-track indicator ───────────────────────────

@@ -45,6 +45,10 @@ export interface Aircraft {
    *  aircraft (treat as 0).  SAFETY NOTE: large values mean the displayed
    *  track may not reflect current aircraft position. */
   seenPos?: number;
+  /** Barometric vertical rate in ft/min (positive = climbing).  Absent when
+   *  the transponder does not report it or for sim aircraft.  Used by the 3D
+   *  view's velocity extrapolation to advance altitude between polls. */
+  verticalRate?: number;
 }
 
 export interface Alert {

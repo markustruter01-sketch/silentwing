@@ -1,0 +1,35 @@
+Add a velocity-extrapolation layer for smooth motion between polls.
+This reintroduces forward dead-reckoning but bounded to avoid the previous
+backwards-snap and underground-sink bugs. Keep all existing guards.
+
+DESIGN:
+  - Each aircraft holds: displayPos (rendered), lastKnownPos + lastKnownTime
+    (from most recent accepted poll), heading, gs, and vertical rate if
+    available (baro_rate from ADS-B, ft/min).
+  - EXTRAPOLATE every frame: advance displayPos forward from lastKnownPos
+    along heading at gs, scaled by (now - lastKnownTime). Horizontal only from
+    heading+gs; vertical from baro_rate if present, else hold altitude.
+  - CORRECT on new poll: when a newer real position arrives, do NOT snap and do
+    NOT accumulate. Compute the error between where extrapolation predicted the
+    aircraft would be NOW and the new real position advanced to now, then ease
+    displayPos toward the corrected track over ~1s. Overwrite, never .add().
+
+CRITICAL GUARDS (keep all):
+  1. Only extrapolate aircraft with FRESH data (seen_pos < ~10s). Stale
+     aircraft (seen_pos high) do NOT extrapolate — they hold position and stay
+     dimmed/grey. Extrapolating a silent transponder would invent fake motion,
+     which is worse than a honest freeze. This is the key rule.
+  2. Clamp displayPos.y >= 0 always (no underground).
+  3. Cap extrapolation distance: never project more than gs * MAX_EXTRAP_SECONDS
+    (e.g. 12s) ahead — if no fresh poll arrives, stop advancing rather than
+    flying off into empty space.
+  4. Keep the timestamp guard and in-flight guard.
+  5. Ground aircraft (gs < 2kt) do not extrapolate.
+
+Report RAW:
+  a. The extrapolation + correction tick code.
+  b. Confirm stale (high seen_pos) aircraft do NOT get artificial motion.
+  c. Confirm no .add() accumulation and no backwards-snap path.
+  d. Confirm displayPos.y clamped >= 0 and extrapolation distance-capped.
+  e. Does a straight-and-level fresh aircraft now move perfectly smoothly
+     between polls? It should.
