@@ -67,7 +67,7 @@ const FOLLOW_OFFSET  = new THREE.Vector3(0, 700, 1400);
 
 // Director Mode uses a wide, cinematic overview shot — ~10× the normal follow
 // distance so the whole flight path context is visible, not just the aircraft.
-const DIRECTOR_FOLLOW_OFFSET = new THREE.Vector3(0, 9_450, 18_900);
+const DIRECTOR_FOLLOW_OFFSET = new THREE.Vector3(0, 4_500, 9_000);
 
 // Transition speed for manual inspect fly-to (flyProgress increment per frame at 60 fps)
 const FLY_SPEED_NORMAL = 0.022; // ~45 frames ≈ 0.75 s
@@ -192,8 +192,8 @@ function makeDirectorInfoPanel(ac: Aircraft): THREE.Sprite {
   const tex = new THREE.CanvasTexture(cv);
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false });
   const sp  = new THREE.Sprite(mat);
-  // Scale must be large enough to read at the director camera distance (~21 000 scene units away)
-  sp.scale.set(8_000, 6_200, 1);
+  // Scale calibrated for director camera distance (~10 000 scene units away)
+  sp.scale.set(3_200, 2_480, 1);
   sp.renderOrder = 10;
   return sp;
 }
@@ -952,8 +952,8 @@ export default function AirspaceView3D({
         // Director info panel: float 2 200 scene units to the left of the aircraft
         if (b.infoPanel) {
           b.infoPanel.position.set(
-            b.renderPos.x - 6_000,
-            b.renderPos.y + 800,
+            b.renderPos.x - 3_500,
+            b.renderPos.y + 400,
             b.renderPos.z,
           );
         }
