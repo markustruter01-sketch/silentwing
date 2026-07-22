@@ -603,13 +603,7 @@ function makeApproachSign(phase: 'approach' | 'landing'): THREE.Sprite {
   cv.width  = W; cv.height = H;
   const ctx = cv.getContext('2d')!;
   ctx.clearRect(0, 0, W, H);
-  // Dark pill background
-  ctx.fillStyle = 'rgba(4,8,20,0.88)';
-  ctx.beginPath();
-  (ctx as CanvasRenderingContext2D & { roundRect: (...a: unknown[]) => void })
-    .roundRect(4, 4, W - 8, H - 8, 8);
-  ctx.fill();
-  // Accent border — sky blue for approach, softer blue for landing
+  // Border only — no fill background
   const borderHex = phase === 'approach' ? '#38BDF8' : '#60A5FA';
   const textHex   = phase === 'approach' ? '#7dd3fc' : '#93c5fd';
   ctx.strokeStyle = borderHex;
