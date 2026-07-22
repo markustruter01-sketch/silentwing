@@ -1,0 +1,46 @@
+FIX the backwards-snap. Root cause confirmed: lastKnownPos is stored as the
+raw transponder position (seen_pos seconds old) but timestamped as now, so
+extrapolation restarts from a past position. Fix both faults:
+
+FIX 1 — Age-compensate the incoming position (the core fix):
+On each accepted poll, before storing lastKnownPos, project the raw position
+FORWARD by its own staleness so it represents NOW, not seen_pos seconds ago:
+
+  ageS       = ac.seenPos ?? 0
+  hRad       = ac.heading * PI/180
+  gsMps      = ac.groundSpeed * KT_TO_MPS
+  // advance the stale fix forward to present time
+  compX      = rawPos.x + gsMps * sin(hRad) * ageS
+  compZ      = rawPos.z - gsMps * cos(hRad) * ageS
+  compY      = rawPos.y + vyPerS * ageS
+  b.lastKnownPos.set(compX, max(0, compY), compZ)
+  b.lastKnownTimeMs = nowMs        // now correct: compensated pos IS the now-position
+
+  Only age-compensate FRESH, moving aircraft (canExtrap). Stale/stationary
+  aircraft store raw position as before (they're held + greyed, not moving).
+
+FIX 2 — Correction blend targets the compensated position:
+The 1s correction blend must ease toward the age-compensated lastKnownPos
+(now representing the present), not the raw stale fix. Since Fix 1 makes
+lastKnownPos represent NOW, the existing blend-toward-extrapolated-position
+logic becomes correct automatically — but verify the blend target uses the
+compensated value.
+
+FIX 3 — Reduce MAX_EXTRAP_S below the poll interval:
+Change MAX_EXTRAP_S from 12 to 9 (just above the 8s poll interval, so a
+normally-timed poll always arrives before the cap, but a missed poll doesn't
+let the aircraft run 12s ahead). This shrinks worst-case correction distance.
+
+Keep: timestamp guard, in-flight guard, y>=0 clamp, stale-aircraft-hold +
+grey dimming, trail sanity cap. Do NOT age-compensate or extrapolate stale
+(high seen_pos) aircraft — they must stay held and grey.
+
+Report RAW:
+  a. The age-compensation code in the poll-update path.
+  b. Confirm lastKnownTimeMs is set to nowMs AND lastKnownPos now represents
+     the present position (raw + velocity*seen_pos), not the raw stale fix.
+  c. Walk through the same 250kt / seen_pos=8s example from the diagnosis and
+     show the net backward travel is now ~0 (not ~896m).
+  d. Confirm stale aircraft are NOT age-compensated (they hold + grey).
+  e. Does a fresh moving aircraft now transition across polls with NO visible
+     backward motion?

@@ -41,7 +41,7 @@ const STALE_EXTRAP_S   = 10;      // seconds
 const GS_EXTRAP_MIN_KT = 2;       // knots
 // Maximum time we extrapolate ahead with no fresh poll.  Beyond this the aircraft
 // holds its extrapolated position rather than flying further off into space.
-const MAX_EXTRAP_S     = 12;      // seconds
+const MAX_EXTRAP_S     = 9;       // seconds — just above 8 s poll gap; shrinks worst-case correction
 // Duration of the smooth correction blending after each new real position arrives.
 const CORR_DURATION_MS = 1000;    // ms
 // If a new poll's position is within this of the last known position, the
@@ -854,21 +854,32 @@ export default function AirspaceView3D({
         scene.add(label);
 
         const trailBuf: THREE.Vector3[] = [pos.clone(), pos.clone()];
-        // Spawn: start at real position; extrapolation begins immediately from here.
-        // No correction needed on first appearance.
-        const spawnGsMps = (ac.seenPos ?? 0) < STALE_EXTRAP_S && ac.groundSpeed >= GS_EXTRAP_MIN_KT
-          ? ac.groundSpeed * KT_TO_MPS
-          : 0;
+        // Spawn: age-compensate the initial fix so extrapolation starts from
+        // the present position, not a seen_pos-seconds-old raw fix.
+        const spawnCanExtrap = (ac.seenPos ?? 0) < STALE_EXTRAP_S && ac.groundSpeed >= GS_EXTRAP_MIN_KT;
+        const spawnGsMps  = spawnCanExtrap ? ac.groundSpeed * KT_TO_MPS : 0;
+        const spawnVyPerS = ((ac.verticalRate ?? 0) / 60) * ALT_SCALE;
+        const spawnPos    = spawnCanExtrap
+          ? (() => {
+              const ageS = ac.seenPos ?? 0;
+              const hRad = ac.heading * Math.PI / 180;
+              return new THREE.Vector3(
+                pos.x + spawnGsMps * Math.sin(hRad) * ageS,
+                Math.max(0, pos.y + spawnVyPerS * ageS),
+                pos.z - spawnGsMps * Math.cos(hRad) * ageS,
+              );
+            })()
+          : pos.clone();
         acMap.set(ac.id, {
           cone, stem, trail, label, trailBuf,
-          renderPos:       pos.clone(),
-          lastKnownPos:    pos.clone(),
+          renderPos:       spawnPos.clone(),
+          lastKnownPos:    spawnPos.clone(),
           lastKnownTimeMs: nowMs,
           headingDeg:      ac.heading,
           gsMps:           spawnGsMps,
-          vyPerS:          ((ac.verticalRate ?? 0) / 60) * ALT_SCALE,
+          vyPerS:          spawnVyPerS,
           seenPos:         ac.seenPos ?? 0,
-          corrFromPos:     pos.clone(),
+          corrFromPos:     spawnPos.clone(),
           corrStartMs:     -1,   // no correction on first appearance
         });
 
@@ -881,33 +892,46 @@ export default function AirspaceView3D({
         // ── Velocity state update ─────────────────────────────────────────
         //
         // Determine whether this aircraft can be extrapolated after this poll.
-        const nowCanExtrap  = (ac.seenPos ?? 0) < STALE_EXTRAP_S && ac.groundSpeed >= GS_EXTRAP_MIN_KT;
-        // Was it being extrapolated before? (gsMps > 0 means extrapolation was on)
+        const nowCanExtrap    = (ac.seenPos ?? 0) < STALE_EXTRAP_S && ac.groundSpeed >= GS_EXTRAP_MIN_KT;
         const wasExtrapolating = b.gsMps > 0;
 
-        const posActuallyMoved = pos.distanceTo(b.lastKnownPos) > STALE_POS_M;
-
-        if (posActuallyMoved) {
-          // New real position from the transponder: correct from current renderPos
-          // (which may be ahead of truth due to extrapolation) toward the new fix.
-          // The tick loop blends corrFromPos → extrap(newPos, dt) over CORR_DURATION_MS.
+        // Start a correction blend on every poll for extrapolatable aircraft.
+        // Fix 1 (age-compensation below) means this correction is near-zero for
+        // straight-and-level flight; it absorbs heading/speed changes cleanly.
+        if (nowCanExtrap) {
           b.corrFromPos.copy(b.renderPos);
           b.corrStartMs = nowMs;
         } else if (wasExtrapolating && !nowCanExtrap) {
-          // Aircraft went stale or stopped mid-extrapolation: smooth it back to
-          // lastKnownPos so it doesn't snap to a position it already passed.
+          // Aircraft went stale or stopped: blend back to raw lastKnownPos.
           b.corrFromPos.copy(b.renderPos);
           b.corrStartMs = nowMs;
         }
-        // (If position unchanged and extrapolation eligibility unchanged, no correction)
 
-        // Overwrite known state — never accumulate
-        b.lastKnownPos.copy(pos);
-        b.lastKnownTimeMs = nowMs;
-        b.headingDeg      = ac.heading;
-        b.gsMps           = nowCanExtrap ? ac.groundSpeed * KT_TO_MPS : 0;
-        b.vyPerS          = ((ac.verticalRate ?? 0) / 60) * ALT_SCALE;
-        b.seenPos         = ac.seenPos ?? 0;
+        // Update velocity fields first — vyPerS is needed for age-compensation.
+        b.headingDeg = ac.heading;
+        b.gsMps      = nowCanExtrap ? ac.groundSpeed * KT_TO_MPS : 0;
+        b.vyPerS     = ((ac.verticalRate ?? 0) / 60) * ALT_SCALE;
+        b.seenPos    = ac.seenPos ?? 0;
+
+        // ── Fix 1: age-compensate the incoming position ───────────────────
+        // The transponder fix is seen_pos seconds old.  Project it forward
+        // along heading/speed so lastKnownPos represents NOW, not the past.
+        // This eliminates the backwards snap: extrap restarts from the present
+        // position (dt≈0) rather than from a stale fix seen_pos seconds behind.
+        // Stale/stopped aircraft use the raw position — they are held + greyed
+        // and we must not invent motion for silent transponders.
+        if (nowCanExtrap) {
+          const ageS = ac.seenPos ?? 0;
+          const hRad = ac.heading * Math.PI / 180;
+          b.lastKnownPos.set(
+            pos.x + b.gsMps * Math.sin(hRad) * ageS,
+            Math.max(0, pos.y + b.vyPerS * ageS),
+            pos.z - b.gsMps * Math.cos(hRad) * ageS,
+          );
+        } else {
+          b.lastKnownPos.copy(pos);
+        }
+        b.lastKnownTimeMs = nowMs; // correct: compensated pos IS the now-position
 
         // Heading snaps immediately (no perceptible jerk at these speeds)
         b.cone.rotation.y = headY;
