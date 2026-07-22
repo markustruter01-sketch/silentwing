@@ -226,7 +226,9 @@ export default function App() {
 
       if (pick.id !== current) {
         setSelectedAcId(pick.id);
-        setCameraMode(isAirborne(pick) ? 'follow' : 'inspect');
+        // Director always stays in follow — inspect mode snaps the camera
+        // close and breaks the continuous wide-shot glide.
+        setCameraMode('follow');
         lastSwitchRef.current = now;
         console.log(
           `[DIRECTOR] → ${pick.callsign} (${pick.phase})` +

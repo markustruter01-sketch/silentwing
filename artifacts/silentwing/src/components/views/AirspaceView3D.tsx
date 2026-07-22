@@ -616,7 +616,7 @@ export default function AirspaceView3D({
     scene.fog = new THREE.FogExp2(0x07090F, 0.000048);
 
     // Camera
-    const camera = new THREE.PerspectiveCamera(42, W / H, 10, 80000);
+    const camera = new THREE.PerspectiveCamera(60, W / H, 10, 80000);
     camera.position.set(
       ORBIT_RADIUS * Math.cos(ORBIT_INIT_ANGLE),
       ORBIT_HEIGHT,
