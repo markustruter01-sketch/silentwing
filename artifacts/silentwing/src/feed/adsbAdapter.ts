@@ -164,6 +164,9 @@ function normalise(raw: RawAc): (Aircraft & { isGroundVehicle: boolean }) | null
     // Vertical rate for 3D velocity extrapolation (ft/min; absent on many entries)
     verticalRate:   raw.baro_rate,
     isGroundVehicle,
+    // Authoritative on-ground signal — true only when alt_baro is the string
+    // "ground".  alt_geom must never promote a ground aircraft to airborne.
+    onGround:       raw.alt_baro === 'ground',
   };
 }
 

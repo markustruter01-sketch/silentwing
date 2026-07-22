@@ -14,6 +14,15 @@ const END_EXTENSION_M     = 500;  // metres beyond each runway end
 const ALT_CUTOFF_FT       = 500;  // max altitude to be "on/near" runway
 const MOVING_SPD_KTS      = 5;    // ground speed above which aircraft is "moving"
 
+// ── Terminal-area filter ───────────────────────────────────────────────────────
+// Runway-occupancy intentionally includes ground aircraft (that is its job), but
+// only for aircraft within the YBBN terminal area.  This prevents Archerfield
+// runway pairings from generating spurious occupancy alerts.
+const NM                  = 1852;
+const TERMINAL_RADIUS_NM  = 15;
+const TERMINAL_RADIUS_M   = TERMINAL_RADIUS_NM * NM;
+const TERMINAL_RADIUS_M2  = TERMINAL_RADIUS_M * TERMINAL_RADIUS_M;
+
 // ── Output shape ──────────────────────────────────────────────────────────────
 export interface RunwayOccupancyFinding {
   /** Stable dedup key — 'runway_occupancy:<ref>'. */
@@ -120,10 +129,15 @@ const EXTENDED_RUNWAYS = REAL_RUNWAYS.map(rwy => ({
 
 // ── Detector ──────────────────────────────────────────────────────────────────
 export function detectRunwayOccupancy(aircraft: Aircraft[]): RunwayOccupancyFinding[] {
-  // Ground + low-altitude aircraft (seenPos check intentionally relaxed here
-  // because ground radar may update more slowly, but still skip truly ancient tracks)
-  const nearGround = aircraft.filter(
-    ac => ac.position.alt < ALT_CUTOFF_FT && (ac.seenPos ?? 0) <= 60,
+  // Ground + low-altitude aircraft within the YBBN terminal area.
+  // seenPos check is intentionally relaxed (≤ 60 s) because ground radar may
+  // update more slowly, but truly ancient tracks are still skipped.
+  // The terminal-area radius filter prevents Archerfield runway pairings from
+  // generating spurious occupancy alerts.
+  const nearGround = aircraft.filter(ac =>
+    ac.position.alt < ALT_CUTOFF_FT &&
+    ac.position.x ** 2 + ac.position.y ** 2 <= TERMINAL_RADIUS_M2 &&
+    (ac.seenPos ?? 0) <= 60,
   );
 
   const findings: RunwayOccupancyFinding[] = [];

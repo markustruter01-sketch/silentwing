@@ -49,6 +49,11 @@ export interface Aircraft {
    *  the transponder does not report it or for sim aircraft.  Used by the 3D
    *  view's velocity extrapolation to advance altitude between polls. */
   verticalRate?: number;
+  /** True when the ADS-B transponder reported alt_baro = "ground".
+   *  This flag is the authoritative on-ground signal — it must never be
+   *  overridden by alt_geom, phase heuristics, or any other field.
+   *  Absent on sim aircraft (treat as false). */
+  onGround?: boolean;
 }
 
 export interface Alert {

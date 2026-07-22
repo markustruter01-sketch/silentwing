@@ -21,6 +21,19 @@ const CRITICAL_TTC_S   = 45;      // < 45 s → critical
 const CAUTION_TTC_S    = 90;      // < 90 s → caution (≥ 45)
                                   // ≥ 90 s → advisory
 
+// ── Terminal-area filter ───────────────────────────────────────────────────────
+// Mirror of the separation detector: only aircraft within 15 nm of YBBN and
+// below 15 000 ft are fed into the predicted-conflict detector.
+const TERMINAL_RADIUS_NM   = 15;
+const TERMINAL_RADIUS_M    = TERMINAL_RADIUS_NM * NM;
+const TERMINAL_RADIUS_M2   = TERMINAL_RADIUS_M * TERMINAL_RADIUS_M;
+const TERMINAL_ALT_CEIL_FT = 15_000;
+
+// ── Genuine-airborne guard ────────────────────────────────────────────────────
+// Require meaningful groundspeed so parked/slow GA at elevated aerodromes
+// (Archerfield alt_geom 175–350 ft) cannot enter the airborne pool.
+const MIN_AIRBORNE_GS_KT = 40;
+
 // ── Output shape ──────────────────────────────────────────────────────────────
 export interface PredictedConflictFinding {
   /** Stable dedup key — 'predicted_conflict:idA:idB' with IDs sorted. */
@@ -68,10 +81,17 @@ export function detectPredictedConflict(
   /** Set of separation-alert pair keys active RIGHT NOW ('separation:idA:idB'). */
   activeSeparationKeys: Set<string>,
 ): PredictedConflictFinding[] {
-  // Fresh, airborne tracks only
-  const airborne = aircraft.filter(
-    ac => ac.position.alt > 50 && (ac.seenPos ?? 0) <= STALE_SKIP_S,
-  );
+  // Terminal-area, genuine-airborne, fresh tracks only.
+  // Same exclusion logic as the separation detector — see separation.ts for rationale.
+  const airborne = aircraft.filter(ac => {
+    if (ac.onGround) return false;
+    if (ac.position.alt <= 50) return false;
+    if (ac.groundSpeed < MIN_AIRBORNE_GS_KT) return false;
+    if (ac.position.alt >= TERMINAL_ALT_CEIL_FT) return false;
+    if (ac.position.x ** 2 + ac.position.y ** 2 > TERMINAL_RADIUS_M2) return false;
+    if ((ac.seenPos ?? 0) > STALE_SKIP_S) return false;
+    return true;
+  });
 
   const findings: PredictedConflictFinding[] = [];
 
