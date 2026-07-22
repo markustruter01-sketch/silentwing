@@ -1,0 +1,44 @@
+# SILENTWING — STATE CHECK (read-only, no changes)
+
+**ENVIRONMENT:** Existing SilentWing Replit dev project, just rolled back to a
+Brisbane-only working state. Before we add Sydney, I need an accurate picture of
+what this rolled-back build currently contains. DO NOT CHANGE ANY CODE. Read and
+report only.
+
+Report RAW answers to each:
+
+1. **Airport profile system — present or not?**
+   - Does `src/airports/` exist? If so, list its files.
+   - Is there an `AirportProfile` type and a YBBN profile object, OR is Brisbane
+     still hardcoded via constants scattered through the code?
+   - Does the app read airport data from an active-profile/context, or directly
+     from hardcoded YBBN values?
+
+2. **Any Sydney/YSSY remnants?**
+   - grep the whole codebase for "YSSY", "yssy", "Sydney". List every hit and
+     which file. (We rolled back before adding Sydney, but confirm nothing
+     survived.)
+   - Is there a `yssy_real.ts` file? An airport switcher UI? A second registered
+     airport?
+
+3. **The 3D scene lifecycle — how is AirspaceView3D set up right now?**
+   - Does `<AirspaceView3D>` have a `key` prop? (We do NOT want one.)
+   - Does its setup effect have deps `[]` (runs once at mount) or something else?
+   - Where is the Three.js scene/renderer created, and where is the ground
+     geometry (runways/taxiways/aprons/gates) built? Quote the geometry-build
+     call site.
+   - Is the geometry built once at mount, or rebuilt on any dependency change?
+
+4. **Does Brisbane currently work?**
+   - Confirm the app runs, live ADS-B polls succeed (show one [ADSB] poll ok),
+     feed-health is LIVE, and there is NO freeze on load.
+
+5. **The known freeze-prone spots (so we avoid them):**
+   - Confirm whether aircraft spawn (cone/stem/trail/label creation) is
+     synchronous in one effect when a batch of aircraft arrives.
+   - Confirm whether trail materials/geometries are shared (one template) or
+     created per-aircraft.
+
+Report all five as raw findings. Change nothing. This is purely to establish the
+starting point before we add Sydney the RIGHT way (one persistent scene, swap
+geometry inside it, no remount, one change at a time).
