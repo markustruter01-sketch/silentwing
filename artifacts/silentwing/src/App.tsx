@@ -139,7 +139,7 @@ export default function App() {
   const [showPredictedPaths, setShowPredictedPaths] = useState(false);
 
   // ── Director Mode state ──────────────────────────────────────────────────
-  const [directorMode, setDirectorMode] = useState(false);
+  const [directorMode, setDirectorMode] = useState(true); // starts ON
   /** Stores the last known phase per aircraft ID for transition detection. */
   const phaseHistRef       = useRef<Map<string, FlightPhase>>(new Map());
   /** Timestamp of the last director camera switch (ms). */
@@ -148,6 +148,16 @@ export default function App() {
   const selectedAcIdRef    = useRef<string | null>(null);
   /** Stable ref to the latest visible aircraft list — avoids re-starting interval on every poll. */
   const visibleAircraftRef = useRef<Aircraft[]>([]);
+
+  // ── Director intro hint ─────────────────────────────────────────────────
+  // Shown for 5 seconds on load, fades out over the last second.
+  const [showDirectorHint,    setShowDirectorHint]    = useState(true);
+  const [directorHintVisible, setDirectorHintVisible] = useState(true);
+  useEffect(() => {
+    const t1 = setTimeout(() => setDirectorHintVisible(false), 4_000); // start fade
+    const t2 = setTimeout(() => setShowDirectorHint(false),    5_000); // remove from DOM
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, []);
 
   // Keep the stable refs in sync with state/memo values
   useEffect(() => { selectedAcIdRef.current = selectedAcId; }, [selectedAcId]);
@@ -400,6 +410,31 @@ export default function App() {
 
         {/* ── Controls HUD — bottom-centre on both views ── */}
         <ControlsHUD activeView={view} />
+
+        {/* ── Director intro hint ──────────────────────────────────────────── */}
+        {showDirectorHint && (
+          <div
+            className={[
+              'fixed right-4 z-[200] pointer-events-none select-none',
+              'transition-opacity duration-1000',
+              directorHintVisible ? 'opacity-100' : 'opacity-0',
+            ].join(' ')}
+            style={{ top: '68px' }}
+          >
+            <div className="flex items-center gap-2 bg-slate-900/95 border border-amber-500/60
+              rounded-lg px-3 py-2 shadow-xl shadow-black/60">
+              <span className="text-[11px] text-amber-300 font-mono tracking-wide whitespace-nowrap">
+                Toggle Camera Director Mode Off Here
+              </span>
+              {/* Arrow pointing down toward the Director button in the filter bar */}
+              <span className="text-amber-400 text-base leading-none">↓</span>
+            </div>
+            {/* Connector line to the button */}
+            <div className="flex justify-end pr-6">
+              <div className="w-px h-2 bg-amber-500/40" />
+            </div>
+          </div>
+        )}
 
         {/* ── Director NOW WATCHING strip ─────────────────────────────────── */}
         {directorMode && selectedAc && (

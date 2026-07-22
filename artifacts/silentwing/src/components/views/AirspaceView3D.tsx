@@ -69,12 +69,14 @@ const FOLLOW_OFFSET  = new THREE.Vector3(0, 700, 1400);
 // distance so the whole flight path context is visible, not just the aircraft.
 const DIRECTOR_FOLLOW_OFFSET = new THREE.Vector3(0, 1_050, 2_100);
 
-// Transition speeds (flyProgress increment per frame at 60 fps)
-const FLY_SPEED_NORMAL   = 0.022; // ~45 frames ≈ 0.75 s
-const FLY_SPEED_DIRECTOR = 0.00208; // ~480 frames ≈ 8 s
-// Tracking lerp rate after fly-to settles: director uses slow drift so camera
-// glides rather than snapping when the aircraft turns.
-const DIRECTOR_LERP_RATE = 0.04;
+// Transition speed for manual inspect fly-to (flyProgress increment per frame at 60 fps)
+const FLY_SPEED_NORMAL = 0.022; // ~45 frames ≈ 0.75 s
+
+// Director continuous-lerp rates — no discrete fly-to; both position and look-at
+// drift toward their targets every frame so aircraft switches are seamless glides.
+// At 60 fps, lerp(t, 0.006) reaches 95% of target in ~8 s.
+const DIRECTOR_POS_LERP  = 0.006; // camera position drift speed
+const DIRECTOR_LOOK_LERP = 0.009; // look-at settles slightly faster so aircraft stays centred
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function easeInOut(t: number): number {
@@ -314,6 +316,9 @@ interface SceneState {
   leftDragLastY:    number;
   /** Mirror of the directorMode prop — updated each render via sync effect. */
   directorMode:     boolean;
+  /** Smoothly-lerped look-at point used exclusively in director mode.
+   *  Persists across aircraft switches so the camera pans rather than snaps. */
+  directorLookAt:   THREE.Vector3;
 }
 
 // ── Helper: begin fly-to animation toward an aircraft ────────────────────────
@@ -385,9 +390,14 @@ export default function AirspaceView3D({
     if (st.cameraMode === 'returning') return;
     console.log(`[3D CAM] prop→scene sync: ${st.cameraMode} → ${cameraMode}`);
     if (cameraMode === 'follow' && st.selectedAcId) {
-      // Always animate into follow rather than snapping — works from any source
-      // mode (inspect, orbit, manual). Director uses the wider offset so the
-      // fly-to captures more of the approach/departure corridor.
+      if (st.directorMode) {
+        // Director: seed the smooth look-at from the camera's current forward
+        // direction so the first frame doesn't jump to scene origin.
+        const dir = new THREE.Vector3();
+        st.camera.getWorldDirection(dir);
+        st.directorLookAt.copy(st.camera.position).addScaledVector(dir, 500);
+      }
+      // Non-director fly-to setup (used when entering follow manually).
       st.flyFrom.copy(st.camera.position);
       st.flyProgress = 0;
       st.cameraMode  = 'follow';
@@ -417,23 +427,10 @@ export default function AirspaceView3D({
   useEffect(() => {
     const st = sceneRef.current;
     if (!st) return;
-    const prevId = st.selectedAcId;
     st.selectedAcId = selectedAcId;
-
-    // Director aircraft switch: when the director picks a new target while
-    // already in follow mode, restart the fly-to from the current camera
-    // position so the transition is always smooth regardless of how far the
-    // next aircraft is from the previous one.
-    if (
-      st.directorMode &&
-      selectedAcId !== null &&
-      selectedAcId !== prevId &&
-      st.cameraMode === 'follow'
-    ) {
-      st.flyFrom.copy(st.camera.position);
-      st.flyProgress = 0;
-      console.log(`[3D CAM] director switch → ${selectedAcId} (smooth fly-to)`);
-    }
+    // Director aircraft switches need no special handling here — the continuous
+    // position/look-at lerp in the rAF tick automatically glides to the new
+    // target without any position reset or fly-to restart.
   }, [selectedAcId]);
 
   // ── One-time Three.js scene setup ───────────────────────────────────────────
@@ -515,6 +512,7 @@ export default function AirspaceView3D({
       leftDragLastX:    0,
       leftDragLastY:    0,
       directorMode:     false,
+      directorLookAt:   new THREE.Vector3(), // starts at scene origin (airport centre)
     };
     sceneRef.current = st;
 
@@ -561,27 +559,29 @@ export default function AirspaceView3D({
           if (st.selectedAcId) {
             const b = st.acMap.get(st.selectedAcId);
             if (b) {
-              // Choose offset based on director mode: wide cinematic vs tight follow
               const offset     = st.directorMode ? DIRECTOR_FOLLOW_OFFSET : FOLLOW_OFFSET;
               const liveTarget = b.renderPos.clone().add(offset);
 
-              if (st.flyProgress < 1) {
-                // Animated fly-to: lerp from captured start toward live target.
-                // flyTo updates each frame so the endpoint tracks the moving aircraft.
-                const speed = st.directorMode ? FLY_SPEED_DIRECTOR : FLY_SPEED_NORMAL;
-                st.flyProgress = Math.min(st.flyProgress + speed, 1);
-                const t = easeInOut(st.flyProgress);
-                camera.position.lerpVectors(st.flyFrom, liveTarget, t);
-              } else if (st.directorMode) {
-                // Director settled: gentle lerp so the camera glides with the
-                // aircraft rather than rigidly locked behind it.
-                camera.position.lerp(liveTarget, DIRECTOR_LERP_RATE);
+              if (st.directorMode) {
+                // ── Director: one continuous gliding shot ──────────────────
+                // Position and look-at both lerp toward the current target
+                // every frame.  Switching aircraft only changes the *target*,
+                // never the camera's current state, so there are no resets —
+                // just a smooth, never-ending pan through the airspace.
+                camera.position.lerp(liveTarget, DIRECTOR_POS_LERP);
+                st.directorLookAt.lerp(b.renderPos, DIRECTOR_LOOK_LERP);
+                camera.lookAt(st.directorLookAt);
               } else {
-                // Normal follow: snap exactly to offset (existing behaviour).
-                camera.position.copy(liveTarget);
+                // ── Normal follow ──────────────────────────────────────────
+                if (st.flyProgress < 1) {
+                  st.flyProgress = Math.min(st.flyProgress + FLY_SPEED_NORMAL, 1);
+                  const t = easeInOut(st.flyProgress);
+                  camera.position.lerpVectors(st.flyFrom, liveTarget, t);
+                } else {
+                  camera.position.copy(liveTarget);
+                }
+                camera.lookAt(b.renderPos);
               }
-
-              camera.lookAt(b.renderPos);
             }
           }
           break;
