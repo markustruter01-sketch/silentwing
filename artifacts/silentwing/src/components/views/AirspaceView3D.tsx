@@ -52,6 +52,12 @@ const STALE_POS_M      = 1;       // metres
 // This kills starburst from seen_pos oscillation without hiding genuine motion.
 const TRAIL_SLACK     = 1.5;      // 50 % margin for poll-timing jitter
 const TRAIL_GPS_M     = 25;       // GPS scatter floor (metres)
+// Trail fade: each point disappears TRAIL_FADE_S seconds after it was recorded.
+// Opacity runs from TRAIL_OPACITY (newest point, nearest the aircraft) to 0
+// (at the TRAIL_FADE_S mark).  Points past the limit are dropped each frame.
+const TRAIL_FADE_S    = 20;       // seconds until a trail point fully fades
+const TRAIL_FADE_MS   = TRAIL_FADE_S * 1000;
+const TRAIL_OPACITY   = 0.70;     // peak opacity at the aircraft end of the trail
 
 // Camera offset from aircraft for inspect / follow modes
 // (south and above: Z=south in Three.js coordinate space)
@@ -177,7 +183,8 @@ interface AcBundle {
   stem:     THREE.Line;
   trail:    THREE.Line;
   label:    THREE.Sprite;
-  trailBuf: THREE.Vector3[];
+  /** Timestamped trail points.  Oldest at index 0, newest at the tail. */
+  trailBuf: { pos: THREE.Vector3; t: number }[];
 
   // ── Velocity extrapolation state ─────────────────────────────────────────
   /** Rendered position — written by the tick loop, applied to visuals each frame. */
@@ -534,6 +541,41 @@ export default function AirspaceView3D({
         ]);
         b.stem.geometry.computeBoundingSphere();
 
+        // ── Per-frame trail fade ─────────────────────────────────────────────
+        // Every frame: drop points older than TRAIL_FADE_S, then write
+        // positions + per-vertex alpha to the GPU so the trail fades from
+        // full opacity at the aircraft to transparent at the 20-second mark.
+        if (b.trailBuf && b.trailBuf.length > 0) {
+          // Expire tail — keep at least 2 so the Line geometry stays valid.
+          while (b.trailBuf.length > 2 && nowMs - b.trailBuf[0].t > TRAIL_FADE_MS) {
+            b.trailBuf.shift();
+          }
+
+          const n        = b.trailBuf.length;
+          const posAttr  = b.trail.geometry.attributes.position as THREE.BufferAttribute;
+          const alpAttr  = b.trail.geometry.attributes.alpha    as THREE.BufferAttribute;
+          // HMR guard: old bundles may not have the alpha attribute yet.
+          if (posAttr && alpAttr) {
+            const posArr = posAttr.array as Float32Array;
+            const alpArr = alpAttr.array as Float32Array;
+
+            for (let i = 0; i < n; i++) {
+              const tp = b.trailBuf[i];
+              posArr[i * 3]     = tp.pos.x;
+              posArr[i * 3 + 1] = tp.pos.y;
+              posArr[i * 3 + 2] = tp.pos.z;
+              // alpha: 1 (TRAIL_OPACITY) at newest point → 0 at TRAIL_FADE_S
+              const ageFrac = Math.min((nowMs - tp.t) / TRAIL_FADE_MS, 1);
+              alpArr[i]     = (1 - ageFrac) * TRAIL_OPACITY;
+            }
+
+            posAttr.needsUpdate = true;
+            alpAttr.needsUpdate = true;
+            b.trail.geometry.setDrawRange(0, n);
+            b.trail.geometry.computeBoundingSphere();
+          }
+        }
+
         // Label opacity is set per-poll (in the data sync effect) based on seenPos —
         // no per-frame override needed here.
       }
@@ -835,16 +877,41 @@ export default function AirspaceView3D({
         const stem = new THREE.Line(stemGeo, STEM_MAT);
         scene.add(stem);
 
-        // Pre-allocated trail buffer (no per-tick realloc)
-        const trailArr  = new Float32Array(TRAIL_MAX * 3);
-        trailArr[0] = pos.x; trailArr[1] = pos.y; trailArr[2] = pos.z;
-        trailArr[3] = pos.x; trailArr[4] = pos.y; trailArr[5] = pos.z;
-        const trailAttr = new THREE.BufferAttribute(trailArr, 3);
-        const trailGeo  = new THREE.BufferGeometry();
-        trailGeo.setAttribute('position', trailAttr);
+        // Pre-allocated trail buffer (no per-tick realloc).
+        // Each vertex has a position (xyz) and a per-vertex alpha float so the
+        // rAF loop can fade the trail from opaque (nearest plane) to transparent
+        // (TRAIL_FADE_S seconds behind) without a custom geometry rebuild.
+        const trailPosArr   = new Float32Array(TRAIL_MAX * 3);
+        trailPosArr[0] = pos.x; trailPosArr[1] = pos.y; trailPosArr[2] = pos.z;
+        trailPosArr[3] = pos.x; trailPosArr[4] = pos.y; trailPosArr[5] = pos.z;
+        const trailAlphaArr = new Float32Array(TRAIL_MAX);
+        trailAlphaArr[0] = trailAlphaArr[1] = TRAIL_OPACITY;
+        const trailGeo = new THREE.BufferGeometry();
+        trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPosArr, 3));
+        trailGeo.setAttribute('alpha',    new THREE.BufferAttribute(trailAlphaArr, 1));
         trailGeo.setDrawRange(0, 2);
-        const trailMat  = new THREE.LineBasicMaterial({ color: hex, transparent: true, opacity: 0.55 });
-        const trail     = new THREE.Line(trailGeo, trailMat);
+        // ShaderMaterial: per-vertex alpha encodes fade along the trail length.
+        const trailMat = new THREE.ShaderMaterial({
+          uniforms: { color: { value: new THREE.Color(hex) } },
+          vertexShader: `
+            attribute float alpha;
+            varying   float vAlpha;
+            void main() {
+              vAlpha      = alpha;
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+          `,
+          fragmentShader: `
+            uniform vec3  color;
+            varying float vAlpha;
+            void main() {
+              gl_FragColor = vec4(color, vAlpha);
+            }
+          `,
+          transparent: true,
+          depthWrite:  false,
+        });
+        const trail = new THREE.Line(trailGeo, trailMat);
         scene.add(trail);
 
         const label = makeLabel(ac.callsign, hex);
@@ -853,7 +920,10 @@ export default function AirspaceView3D({
         (label.material as THREE.SpriteMaterial).opacity = 1.0;
         scene.add(label);
 
-        const trailBuf: THREE.Vector3[] = [pos.clone(), pos.clone()];
+        const trailBuf: { pos: THREE.Vector3; t: number }[] = [
+          { pos: pos.clone(), t: nowMs },
+          { pos: pos.clone(), t: nowMs },
+        ];
         // Spawn: age-compensate the initial fix so extrapolation starts from
         // the present position, not a seen_pos-seconds-old raw fix.
         const spawnCanExtrap = (ac.seenPos ?? 0) < STALE_EXTRAP_S && ac.groundSpeed >= GS_EXTRAP_MIN_KT;
@@ -964,28 +1034,23 @@ export default function AirspaceView3D({
         // than the aircraft could have travelled in one poll interval.
         // This kills starburst from seen_pos oscillation (fresh/stale position
         // alternation) without hiding genuine motion of fast-moving aircraft.
-        const gsMps       = ac.groundSpeed * KT_TO_MPS;
+        const gsMps        = ac.groundSpeed * KT_TO_MPS;
         const maxTrailJump = gsMps * (st.pollDurationMs / 1000) * TRAIL_SLACK + TRAIL_GPS_M;
-        const lastTp      = b.trailBuf[b.trailBuf.length - 1];
+        const lastTp       = b.trailBuf[b.trailBuf.length - 1].pos;
         if (pos.distanceTo(lastTp) <= maxTrailJump) {
-          b.trailBuf.push(pos.clone());
+          b.trailBuf.push({ pos: pos.clone(), t: nowMs });
           if (b.trailBuf.length > TRAIL_MAX) b.trailBuf.shift();
         }
 
-        // Write trail buffer into pre-allocated GPU attribute
-        const ta  = b.trail.geometry.attributes.position as THREE.BufferAttribute;
-        const arr = ta.array as Float32Array;
-        for (let i = 0; i < b.trailBuf.length; i++) {
-          arr[i * 3]     = b.trailBuf[i].x;
-          arr[i * 3 + 1] = b.trailBuf[i].y;
-          arr[i * 3 + 2] = b.trailBuf[i].z;
+        // GPU trail writes (positions + alphas) happen every frame in the rAF
+        // loop so the fade is continuous.  Here we only update the colour.
+        // HMR guard: old bundles still have LineBasicMaterial without .uniforms.
+        const trailMat = b.trail.material as THREE.ShaderMaterial;
+        if (trailMat.uniforms) {
+          trailMat.uniforms.color.value.setHex(
+            isSelected ? 0xFACC15 : (isStale ? 0x64748B : hex),
+          );
         }
-        ta.needsUpdate = true;
-        b.trail.geometry.setDrawRange(0, b.trailBuf.length);
-        b.trail.geometry.computeBoundingSphere();
-        (b.trail.material as THREE.LineBasicMaterial).color.setHex(
-          isSelected ? 0xFACC15 : (isStale ? 0x64748B : hex),
-        );
       }
     }
 
