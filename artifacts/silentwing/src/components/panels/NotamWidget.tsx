@@ -127,8 +127,9 @@ export default function NotamWidget() {
           <span className="font-mono text-[9px] text-slate-700">Loading…</span>
         ) : (
           <>
-            {/* Single horizontal row — all fields inline */}
-            <div className="flex items-center gap-5 flex-wrap">
+            {/* Single horizontal row — label stacked above value so each
+                column is narrow enough for all fields to share one line. */}
+            <div className="flex items-start gap-4">
               <Field label="WIND">
                 {metar.wdir === 0
                   ? `VRB ${metar.wspd}KT`
@@ -162,14 +163,14 @@ export default function NotamWidget() {
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-baseline gap-1.5">
+    <div className="flex flex-col gap-0.5">
       <span
-        className="font-mono text-[7px] tracking-widest shrink-0"
+        className="font-mono text-[6px] tracking-widest"
         style={{ color: '#FDE047', opacity: 0.55 }}
       >
         {label}
       </span>
-      <span className="font-mono text-[10px] text-slate-200">{children}</span>
+      <span className="font-mono text-[9px] text-slate-200 whitespace-nowrap">{children}</span>
     </div>
   );
 }
