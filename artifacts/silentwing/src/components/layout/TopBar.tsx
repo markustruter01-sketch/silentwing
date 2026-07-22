@@ -9,6 +9,8 @@ interface TopBarProps {
   feedLastUpdate?: number;
   dataSource: DataSource;
   onDataSourceChange: (s: DataSource) => void;
+  /** When true the SIM button is greyed and non-interactive (e.g. live-only airport). */
+  simDisabled?: boolean;
 }
 
 function SimClock() {
@@ -78,9 +80,11 @@ function FeedHealthIndicator({
 function DataSourceToggle({
   value,
   onChange,
+  simDisabled = false,
 }: {
   value: DataSource;
   onChange: (s: DataSource) => void;
+  simDisabled?: boolean;
 }) {
   return (
     <div
@@ -88,7 +92,8 @@ function DataSourceToggle({
       title="Data source"
     >
       {(['sim', 'live'] as const).map(src => {
-        const active = value === src;
+        const active    = value === src;
+        const disabled  = src === 'sim' && simDisabled;
         const activeClass =
           src === 'live'
             ? 'bg-emerald-900/70 text-emerald-300 border border-emerald-700/50'
@@ -96,10 +101,15 @@ function DataSourceToggle({
         return (
           <button
             key={src}
-            onClick={() => onChange(src)}
+            onClick={() => !disabled && onChange(src)}
+            title={disabled ? 'Simulation not available for this airport' : undefined}
             className={[
               'px-2 py-0.5 rounded text-[10px] font-mono tracking-widest uppercase transition-all duration-150',
-              active ? activeClass : 'text-slate-500 hover:text-slate-300 border border-transparent',
+              disabled
+                ? 'text-slate-700 border border-transparent cursor-not-allowed'
+                : active
+                  ? activeClass
+                  : 'text-slate-500 hover:text-slate-300 border border-transparent',
             ].join(' ')}
           >
             {src === 'sim' ? 'SIM' : 'LIVE'}

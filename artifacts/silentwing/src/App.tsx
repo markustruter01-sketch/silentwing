@@ -13,6 +13,8 @@ import { getSimAdapter } from '@/sim/engine';
 import { AdsbAdapter, HEALTH_LAGGING_MS, HEALTH_STALLED_MS } from '@/feed/adsbAdapter';
 import { AlertEngine }  from '@/alerts/engine';
 import { YBBN }         from '@/airports/ybbn';
+import { YSSY }         from '@/airports/yssy';
+import type { AirportProfile } from '@/airports/types';
 import { AirportProvider } from '@/airports/context';
 import type { SWAlert, SWAlertSeverity } from '@/alerts/types';
 import { severityRank } from '@/alerts/types';
@@ -24,8 +26,8 @@ export type DataSource = 'sim' | 'live';
 
 // Derive a rough sector-load from aircraft count (≤ 99 %)
 // NOTE: placeholder — will be replaced with a real demand metric in Phase 7.
-function sectorLoad(count: number) {
-  return Math.min(99, Math.round(count / YBBN.sectorCapacity * 100));
+function sectorLoad(count: number, capacity: number) {
+  return Math.min(99, Math.round(count / capacity * 100));
 }
 
 // ── Dev-only test-conflict aircraft ──────────────────────────────────────────
@@ -57,11 +59,18 @@ export default function App() {
   // ── Data source toggle ───────────────────────────────────────────────────
   const [dataSource, setDataSource] = useState<DataSource>('live');
 
-  // Adapter is (re-)created whenever dataSource changes.
-  // useMemo keeps the same instance as long as dataSource is stable.
+  // ── Active airport profile ────────────────────────────────────────────────
+  const [activeProfile, setActiveProfile] = useState<AirportProfile>(YBBN);
+  /** Stable ref — lets switch callbacks read the current profile without stale closures. */
+  const activeProfileRef = useRef<AirportProfile>(YBBN);
+  activeProfileRef.current = activeProfile;
+
+  // Adapter is (re-)created whenever dataSource or activeProfile changes.
+  // YSSY is live-only; guard against accidental sim start on an airport with no sim config.
   const adapter = useMemo<DataFeedAdapter>(() => {
-    return dataSource === 'live' ? new AdsbAdapter(YBBN) : getSimAdapter(YBBN);
-  }, [dataSource]);
+    if (dataSource === 'live' || !activeProfile.sim) return new AdsbAdapter(activeProfile);
+    return getSimAdapter(activeProfile);
+  }, [dataSource, activeProfile]);
 
   // Destroy the ADS-B adapter instance when it's replaced (dataSource change
   // or component unmount). The sim adapter is a singleton and must NOT be
@@ -273,6 +282,31 @@ export default function App() {
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
 
+  // ── Airport switch handler ────────────────────────────────────────────────
+  /**
+   * Swap the active airport IN PLACE — no scene remount.
+   *   1. Force live if the new airport has no sim config.
+   *   2. Rebuild ground geometry inside the existing Three.js scene.
+   *   3. Reset the alert engine with the new airport boundaries.
+   *   4. Set activeProfile → triggers new AdsbAdapter(newProfile) via useMemo.
+   */
+  const handleSwitchAirport = useCallback((newProfile: AirportProfile) => {
+    if (newProfile.icao === activeProfileRef.current.icao) return;
+    console.log(`[APP] airport switch ${activeProfileRef.current.icao} → ${newProfile.icao}`);
+    // YSSY (and any live-only airport) cannot run the sim
+    if (!newProfile.sim && dataSource === 'sim') setDataSource('live');
+    // Swap geometry inside the existing scene — spawn queue fills aircraft over frames
+    rebuildGroundRef.current?.(newProfile);
+    // Fresh alert engine scoped to the new airport; clear stale alerts immediately
+    alertEngineRef.current = new AlertEngine(newProfile);
+    setSWAlerts([]);
+    // Clear selection / camera state that belonged to the old airport
+    setSelectedAcId(null);
+    setCameraMode('orbit');
+    setAlertFocusId(null);
+    setActiveProfile(newProfile);
+  }, [dataSource]);
+
 
   // ── Display filters (hide from rendering; data is always fully ingested) ──
   /** Hide category-C2 ground vehicles and TWR stations (default ON). */
@@ -385,16 +419,43 @@ export default function App() {
         feedLastUpdate={feedHealth.lastUpdate}
         dataSource={dataSource}
         onDataSourceChange={setDataSource}
+        simDisabled={!activeProfile.sim}
       />
       <StatusStrip
         aircraftCount={visibleAircraft.length}
         alertCount={activeAlerts.length || _legacyAlerts.length}
         groundCount={visibleAircraft.filter(ac => !isAirborne(ac)).length}
-        sectorLoad={sectorLoad(visibleAircraft.length)}
+        sectorLoad={sectorLoad(visibleAircraft.length, activeProfile.sectorCapacity)}
       />
 
       {/* ── Display filters ─────────────────────────────────────────────── */}
       <div className="flex items-center gap-3 px-4 py-[3px] bg-[#060A0F] border-b border-slate-800/30 shrink-0">
+
+        {/* ── Airport switcher ── */}
+        <div
+          className="flex items-center gap-0.5 bg-slate-900 border border-slate-800 rounded p-0.5"
+          title="Switch airport"
+        >
+          {([YBBN, YSSY] as const).map(prof => {
+            const active = activeProfile.icao === prof.icao;
+            return (
+              <button
+                key={prof.icao}
+                onClick={() => handleSwitchAirport(prof)}
+                className={[
+                  'px-2 py-0.5 rounded text-[10px] font-mono tracking-widest uppercase transition-all duration-150',
+                  active
+                    ? 'bg-sky-900/70 text-sky-300 border border-sky-700/50'
+                    : 'text-slate-500 hover:text-slate-300 border border-transparent',
+                ].join(' ')}
+              >
+                {prof.icao}
+              </button>
+            );
+          })}
+        </div>
+        <span className="w-px self-stretch bg-slate-800/60" aria-hidden />
+
         <span className="text-[8px] tracking-[0.2em] text-slate-600 uppercase select-none">Filters</span>
         {([
           ['Hide vehicles',  hideGroundVehicles, setHideGroundVehicles],
@@ -460,8 +521,8 @@ export default function App() {
           <>
             <span className="ml-3 w-px self-stretch bg-slate-800/80" aria-hidden />
             <button
-              onClick={() => rebuildGroundRef.current?.(YBBN)}
-              title="DEV: Dispose current ground geometry + all aircraft and rebuild Brisbane in-place (tests the airport-swap mechanism without tearing down the scene)"
+              onClick={() => rebuildGroundRef.current?.(activeProfile)}
+              title="DEV: Dispose current ground geometry + all aircraft and rebuild current airport in-place (tests the airport-swap mechanism without tearing down the scene)"
               className="flex items-center gap-1 px-2 py-[2px] text-[7px] font-mono tracking-widest uppercase rounded border border-slate-700/40 text-slate-700 hover:text-slate-500 transition-colors select-none cursor-pointer"
             >
               ↺ geo
@@ -543,21 +604,21 @@ export default function App() {
           activeAlerts={activeAlerts}
           onAlertFocus={handleManualAlertFocus}
         />
-        {/* ── Brisbane Airport title — 3D airspace only ── */}
+        {/* ── Airport title — 3D airspace only ── */}
         {view === 'airspace' && (
           <div className="absolute inset-x-0 top-3 flex flex-col items-center z-10 pointer-events-none select-none">
             <div className="flex items-baseline gap-3">
-              <span className="text-[10px] font-mono tracking-[0.25em] text-sky-600/70 uppercase">{YBBN.icao}</span>
+              <span className="text-[10px] font-mono tracking-[0.25em] text-sky-600/70 uppercase">{activeProfile.icao}</span>
               <h1 className="text-2xl font-bold tracking-[0.12em] text-sky-100/90 uppercase"
                   style={{ fontFamily: '"Courier New", monospace', textShadow: '0 0 24px rgba(14,165,233,0.45)' }}>
-                {YBBN.name}
+                {activeProfile.name}
               </h1>
               <span className="text-[10px] font-mono tracking-[0.25em] text-sky-600/70 uppercase">ICAO</span>
             </div>
             <div className="mt-0.5 h-px w-64 bg-gradient-to-r from-transparent via-sky-700/50 to-transparent" />
           </div>
         )}
-        <AirportProvider>
+        <AirportProvider profile={activeProfile}>
         {view === 'airfield' ? (
           <AirfieldView2D
             aircraft={visibleAircraft}

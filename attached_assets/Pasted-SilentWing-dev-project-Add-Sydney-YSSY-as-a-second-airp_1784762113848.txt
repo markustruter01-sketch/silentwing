@@ -1,0 +1,38 @@
+SilentWing dev project. Add Sydney (YSSY) as a second airport using the
+now-proven safe mechanisms. A file `yssy_real.ts` is uploaded in src/data/.
+Do NOT add a key prop / remount. Use the spawn queue and rebuildGroundGeometry
+from the prior two changes.
+
+1. Create src/airports/yssy.ts mirroring ybbn.ts:
+   - icao "YSSY", name "Sydney Airport", nameShort "SYDNEY INTL"
+   - origin { lat: -33.9461, lon: 151.1772 }  (matches yssy_real.ts)
+   - fetchRadiusNm 50
+   - geometry from yssy_real.ts (YSSY_RUNWAYS/TAXIWAYS/APRONS/GATES)
+   - runways: 16L/34R (16L hdg ~157), 16R/34L (16R hdg ~157), 07/25 (07 hdg ~073)
+   - calmWindDefaultDir "34L"
+   - terminalRadiusNm 7.5, terminalAltCeilFt 15000, airspaceRadiusM 55560
+   - sectorCapacity 25, sim: undefined (Sydney live-only)
+   - geoPolygons: [] ; viewbox computed from yssy geometry extents
+   - thresholds/corridors COMPUTED via existing helpers (not stored)
+
+2. Register YSSY in the airports registry alongside YBBN.
+
+3. Add a top-bar dropdown switcher (Brisbane / Sydney). On switch:
+   - Update the active profile (context state).
+   - Call rebuildGroundGeometry(newProfile) to swap ground geometry IN THE
+     EXISTING SCENE (no remount).
+   - Destroy the old ADS-B adapter and create one for the new airport's coords
+     (re-point the /api/adsb query params to the new origin+radius).
+   - The spawn queue handles the new airport's aircraft over several frames.
+   - When Sydney is active, disable/hide the SIM toggle (Sydney is live-only);
+     if in Sim mode when switching to Sydney, force Live.
+
+Report RAW:
+  a. Switch YBBN->YSSY: confirm NO freeze, NO page-unresponsive, camera keeps
+     rotating throughout the switch.
+  b. Confirm Sydney's THREE runways render (not Brisbane's) and the label reads
+     "SYDNEY AIRPORT".
+  c. Confirm the feed re-points (show the new request URL with Sydney coords) and
+     Sydney aircraft appear on Sydney's runways.
+  d. Switch back YSSY->YBBN: Brisbane renders correctly again, no freeze.
+Do not batch other changes.
