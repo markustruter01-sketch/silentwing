@@ -192,7 +192,8 @@ function makeDirectorInfoPanel(ac: Aircraft): THREE.Sprite {
   const tex = new THREE.CanvasTexture(cv);
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false });
   const sp  = new THREE.Sprite(mat);
-  sp.scale.set(840, 620, 1);
+  // Scale must be large enough to read at the director camera distance (~21 000 scene units away)
+  sp.scale.set(8_000, 6_200, 1);
   sp.renderOrder = 10;
   return sp;
 }
@@ -944,15 +945,15 @@ export default function AirspaceView3D({
 
         // Halo: track aircraft + slow Z-rotation pulse
         if (b.halo && b.halo.visible) {
-          b.halo.position.copy(b.renderPos);
+          b.halo.position.set(b.renderPos.x, b.renderPos.y - 40, b.renderPos.z);
           b.halo.rotation.z += 0.008; // slow spin in the horizontal plane
         }
 
         // Director info panel: float 2 200 scene units to the left of the aircraft
         if (b.infoPanel) {
           b.infoPanel.position.set(
-            b.renderPos.x - 2_200,
-            b.renderPos.y + 200,
+            b.renderPos.x - 6_000,
+            b.renderPos.y + 800,
             b.renderPos.z,
           );
         }
@@ -1331,7 +1332,7 @@ export default function AirspaceView3D({
         // Purple selection halo — flat torus ring, hidden until director selects
         const haloGeo = new THREE.TorusGeometry(70, 7, 8, 64);
         const haloMat = new THREE.MeshBasicMaterial({
-          color: 0xa855f7, transparent: true, opacity: 0.85, depthWrite: false,
+          color: 0xa855f7, transparent: true, opacity: 0.50, depthWrite: false,
         });
         const halo = new THREE.Mesh(haloGeo, haloMat);
         halo.rotation.x = Math.PI / 2; // lay flat (horizontal ring)
