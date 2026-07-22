@@ -2592,6 +2592,30 @@ export default function AirspaceView3D({
           st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle),
         );
         camera.lookAt(st.orbitTarget);
+
+        // Scrolling while in manual counts as user activity — reset idle timer
+        // so the camera doesn't snap back to orbit mid-zoom.
+        if (st.cameraMode === 'manual') {
+          if (st.panResumeTimer !== null) clearTimeout(st.panResumeTimer);
+          st.panResumeTimer = setTimeout(() => {
+            if (st.cameraMode !== 'manual') { st.panResumeTimer = null; return; }
+            st.panResumeTimer = null;
+            st.angle = Math.atan2(
+              camera.position.z - st.orbitTarget.z,
+              camera.position.x - st.orbitTarget.x,
+            );
+            const tx = st.orbitTarget.x + st.orbitRadius * Math.cos(st.angle);
+            const tz = st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle);
+            st.flyFrom.copy(camera.position);
+            st.flyTo.set(tx, st.orbitElevation, tz);
+            st.flyLookFrom.copy(st.orbitTarget);
+            st.flyLookTo.copy(st.orbitTarget);
+            st.flyProgress = 0;
+            st.cameraMode  = 'returning';
+            camModeRef.current('orbit');
+            console.log('[3D CAM] scroll idle 10 s → returning (smooth fly-back to orbit)');
+          }, 10_000);
+        }
       } else {
         // inspect / follow — dolly along view axis
         const dir = new THREE.Vector3();
@@ -2650,6 +2674,32 @@ export default function AirspaceView3D({
         if (st.cameraMode === 'orbit') {
           st.cameraMode = 'manual';
           camModeRef.current('manual');
+          console.log('[3D CAM] left-drag → manual (resumes after 10 s idle)');
+        }
+
+        // Reset idle-return timer on EVERY drag frame, not just the first mode
+        // switch.  Without this the timer fires 30 s after the INITIAL drag that
+        // switched to manual, even if the user has been rotating continuously.
+        if (st.cameraMode === 'manual') {
+          if (st.panResumeTimer !== null) clearTimeout(st.panResumeTimer);
+          st.panResumeTimer = setTimeout(() => {
+            if (st.cameraMode !== 'manual') { st.panResumeTimer = null; return; }
+            st.panResumeTimer = null;
+            st.angle = Math.atan2(
+              camera.position.z - st.orbitTarget.z,
+              camera.position.x - st.orbitTarget.x,
+            );
+            const tx = st.orbitTarget.x + st.orbitRadius * Math.cos(st.angle);
+            const tz = st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle);
+            st.flyFrom.copy(camera.position);
+            st.flyTo.set(tx, st.orbitElevation, tz);
+            st.flyLookFrom.copy(st.orbitTarget);
+            st.flyLookTo.copy(st.orbitTarget);
+            st.flyProgress = 0;
+            st.cameraMode  = 'returning';
+            camModeRef.current('orbit');
+            console.log('[3D CAM] left-drag idle 10 s → returning (smooth fly-back to orbit)');
+          }, 10_000);
         }
         return;
       }
@@ -2680,9 +2730,10 @@ export default function AirspaceView3D({
         console.log('[3D CAM] right-drag pan → manual (resumes in 30 s idle)');
       }
 
-      // Reset 30 s idle timer — on expiry, re-sync angle and resume orbit
+      // Reset 10 s idle timer — on expiry, re-sync angle and resume orbit
       if (st.panResumeTimer !== null) clearTimeout(st.panResumeTimer);
       st.panResumeTimer = setTimeout(() => {
+        if (st.cameraMode !== 'manual') { st.panResumeTimer = null; return; }
         st.panResumeTimer = null;
         // Re-sync angle from current position, then fly smoothly back.
         st.angle = Math.atan2(
@@ -2698,8 +2749,8 @@ export default function AirspaceView3D({
         st.flyProgress = 0;
         st.cameraMode  = 'returning';
         camModeRef.current('orbit');
-        console.log('[3D CAM] pan idle 30 s → returning (smooth fly-back to orbit)');
-      }, 30_000);
+        console.log('[3D CAM] pan idle 10 s → returning (smooth fly-back to orbit)');
+      }, 10_000);
     };
 
     const onPointerUp = (e: PointerEvent) => {

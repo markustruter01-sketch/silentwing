@@ -708,7 +708,7 @@ export default function App() {
             weather={snapshot.weather}
             alertedIds={alertedIds}
             activeAlerts={activeAlerts}
-            alertFocusId={alertFocusId ?? undefined}
+            alertFocusId={directorMode ? (alertFocusId ?? undefined) : undefined}
             onAlertFocusDone={handleAlertFocusDone}
             showPaths={showPredictedPaths}
             onSelectAircraft={(id) => {
