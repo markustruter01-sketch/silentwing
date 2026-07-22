@@ -9,8 +9,6 @@ interface TopBarProps {
   feedLastUpdate?: number;
   dataSource: DataSource;
   onDataSourceChange: (s: DataSource) => void;
-  /** When false the SIM button is hidden (live-only airports). Default true. */
-  simAvailable?: boolean;
 }
 
 function SimClock() {
@@ -80,19 +78,16 @@ function FeedHealthIndicator({
 function DataSourceToggle({
   value,
   onChange,
-  simAvailable = true,
 }: {
   value: DataSource;
   onChange: (s: DataSource) => void;
-  simAvailable?: boolean;
 }) {
-  const sources = simAvailable ? (['sim', 'live'] as const) : (['live'] as const);
   return (
     <div
       className="flex items-center gap-0.5 bg-slate-900 border border-slate-800 rounded p-0.5"
       title="Data source"
     >
-      {sources.map(src => {
+      {(['sim', 'live'] as const).map(src => {
         const active = value === src;
         const activeClass =
           src === 'live'
@@ -122,7 +117,6 @@ const TopBar: React.FC<TopBarProps> = ({
   feedLastUpdate = 0,
   dataSource,
   onDataSourceChange,
-  simAvailable = true,
 }) => {
   return (
     <header
@@ -169,7 +163,7 @@ const TopBar: React.FC<TopBarProps> = ({
       {/* Right cluster */}
       <div className="flex items-center gap-3 min-w-[180px] justify-end">
         {/* Data source — the architectural proof toggle */}
-        <DataSourceToggle value={dataSource} onChange={onDataSourceChange} simAvailable={simAvailable} />
+        <DataSourceToggle value={dataSource} onChange={onDataSourceChange} />
         <div className="w-px h-4 bg-slate-800" />
         <FeedHealthIndicator status={feedStatus} lastUpdate={feedLastUpdate} />
         <div className="w-px h-4 bg-slate-800" />

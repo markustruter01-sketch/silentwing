@@ -27,31 +27,9 @@ if (!basePath) {
   );
 }
 
-// TEMPORARY freeze-diagnosis middleware: logs perf-probe marks from the browser
-// to the workflow console so a frozen tab can be diagnosed server-side.
-const perfProbePlugin = {
-  name: 'perf-probe',
-  configureServer(server: import('vite').ViteDevServer) {
-    server.middlewares.use((req, res, next) => {
-      if (req.method === 'POST' && req.url?.endsWith('__perfprobe')) {
-        let body = '';
-        req.on('data', (c: Buffer) => { body += c; });
-        req.on('end', () => {
-          console.log(`[PERFPROBE] ${body}`);
-          res.statusCode = 204;
-          res.end();
-        });
-        return;
-      }
-      next();
-    });
-  },
-};
-
 export default defineConfig({
   base: basePath,
   plugins: [
-    perfProbePlugin,
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),

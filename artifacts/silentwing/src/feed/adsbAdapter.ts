@@ -182,9 +182,6 @@ export class AdsbAdapter implements DataFeedAdapter {
   private latestNow = -Infinity;
   // FIX 1: in-flight guard — prevents concurrent overlapping requests
   private inFlight  = false;
-  // Lifecycle guards: polling only runs between start() and destroy()
-  private started   = false;
-  private destroyed = false;
 
   private readonly profile: AirportProfile;
   /** Equirectangular project function bound to the profile's origin. */
@@ -208,18 +205,6 @@ export class AdsbAdapter implements DataFeedAdapter {
     this.apiUrl = `/api/adsb?lat=${lat0}&lon=${lon0}&dist=${profile.fetchRadiusNm}`;
 
     this.latest = this._empty(Date.now());
-    // NOTE: construction is side-effect free. Polling does NOT begin until
-    // start() is called — this lets React construct instances safely inside
-    // effects without leaking timers from discarded renders.
-  }
-
-  /**
-   * Begin polling. Must be called exactly once, from a useEffect (never from
-   * render/useMemo). Idempotent — repeat calls are ignored.
-   */
-  start(): void {
-    if (this.started) return;
-    this.started = true;
     this._start();
   }
 
@@ -254,7 +239,7 @@ export class AdsbAdapter implements DataFeedAdapter {
     const age = Date.now() - this.lastPoll;
     let status: 'live' | 'lagging' | 'stalled';
 
-    if (this.lastPoll === 0) {
+    if (this.lastPoll === 0 || this.lastError !== null) {
       status = 'stalled';
     } else if (age > HEALTH_STALLED_MS) {
       status = 'stalled';
@@ -273,7 +258,6 @@ export class AdsbAdapter implements DataFeedAdapter {
    * dangling intervals or listeners.
    */
   destroy(): void {
-    this.destroyed = true;
     if (this.timer) { clearInterval(this.timer); this.timer = null; }
     if (this.visHandler) {
       document.removeEventListener('visibilitychange', this.visHandler);
@@ -285,50 +269,31 @@ export class AdsbAdapter implements DataFeedAdapter {
   // ── Private ────────────────────────────────────────────────────────────────
 
   private _start(): void {
-    // Page Visibility: fire a catchup poll when returning from genuine background.
-    //
-    // CRITICAL — do NOT clear/restart the timer based on visibilityState.
-    // In embedded iframes (e.g. the Replit preview pane) the document fires a
-    // 'visibilitychange' to 'hidden' immediately after load and NEVER fires
-    // 'visible'.  Clearing the timer in the 'hidden' branch permanently kills
-    // the interval: the startup unconditional poll fires once, then the
-    // visibilitychange-to-hidden arrives and destroys the setInterval, and
-    // because 'visible' never follows, _startTimer() is never re-called.
-    //
-    // The tick-level guard (!document.hidden inside _startTimer's callback) is
-    // sufficient to suppress actual fetches while the tab is genuinely
-    // backgrounded without destroying and recreating the interval.
+    // Page Visibility: pause when tab is hidden, resume (and immediately poll)
+    // when it becomes visible again.  Protects the RapidAPI request quota.
     this.visHandler = () => {
       if (document.visibilityState === 'visible') {
-        // Returning from genuine background — fire an immediate catchup poll.
-        // The setInterval is already running; no need to restart it.
         this._poll();
+        if (!this.timer) this._startTimer();
+      } else {
+        if (this.timer) { clearInterval(this.timer); this.timer = null; }
       }
-      // Deliberately no clearInterval on 'hidden': see comment above.
     };
     document.addEventListener('visibilitychange', this.visHandler);
 
-    // Always start unconditionally so embedded iframes are never stuck.
-    this._poll();
-    this._startTimer();
+    if (document.visibilityState === 'visible') {
+      this._poll();
+      this._startTimer();
+    }
   }
 
   private _startTimer(): void {
     this.timer = setInterval(() => {
-      // No document.hidden guard here: in embedded iframes (e.g. Replit preview)
-      // document.hidden is always true, which would suppress every tick and leave
-      // the feed permanently stalled after the first startup poll.  The quota
-      // cost of polling while genuinely backgrounded is negligible (one HTTP
-      // request per 8 s).  The destroyed-flag check inside _poll() is the real
-      // lifecycle guard.
-      this._poll();
+      if (document.visibilityState === 'visible') this._poll();
     }, POLL_INTERVAL_MS);
   }
 
   private async _poll(): Promise<void> {
-    // Lifecycle guard — a destroyed adapter must never poll (e.g. an in-flight
-    // visibilitychange callback firing after destroy()).
-    if (this.destroyed) return;
     // FIX 1: in-flight guard — skip if a previous request has not yet resolved
     if (this.inFlight) return;
     this.inFlight = true;
@@ -343,14 +308,6 @@ export class AdsbAdapter implements DataFeedAdapter {
 
       const data = await res.json() as { ac?: RawAc[]; now?: number; total?: number };
 
-      // Lifecycle guard — destroy() may have been called while the request was
-      // in flight; a destroyed adapter must not accept snapshots or notify subs.
-      if (this.destroyed) return;
-
-      // Clear error on any HTTP 200 response — must happen before the timestamp
-      // guard so a discarded-but-valid response doesn't leave lastError set.
-      this.lastError = null;
-
       // FIX 1: timestamp guard — discard snapshots older than the last accepted one.
       // data.now is a Unix epoch in seconds from the ADS-B Exchange server.
       const snapshotNow = data.now ?? (Date.now() / 1000);
@@ -360,6 +317,7 @@ export class AdsbAdapter implements DataFeedAdapter {
       }
       this.latestNow = snapshotNow;
 
+      this.lastError = null;
       this.lastPoll  = Date.now();
 
       const rawList: RawAc[] = data.ac ?? [];

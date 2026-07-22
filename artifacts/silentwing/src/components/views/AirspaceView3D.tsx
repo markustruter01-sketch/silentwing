@@ -18,7 +18,6 @@ import type { Polyline } from '@/data/ybbn_real';
 import type { SWAlert, SWAlertSeverity } from '@/alerts/types';
 import { useAirport } from '@/airports/context';
 import { computeRunwayThresholds, computeApproachCorridors } from '@/airports/helpers';
-import { mark, span } from '@/lib/perfProbe';
 
 // ── Camera mode — exported so App can type-check ──────────────────────────────
 export type CameraMode = 'orbit' | 'manual' | 'inspect' | 'follow' | 'returning';
@@ -651,6 +650,41 @@ function buildWindIndicator(windDir: number, windSpeed: number): THREE.Group {
   return g;
 }
 
+// ── Approach / landing indicator (diagonal line + sign) ──────────────────────
+// One indicator per aircraft in the 'approach' or 'landing' phase.
+// The line descends forward along the aircraft's heading, evoking a glide
+// slope; the sprite sign at the lower end always faces the camera.
+
+const APPROACH_LINE_DROP    = 300; // scene units below the aircraft
+const APPROACH_LINE_FORWARD = 450; // scene units ahead along heading
+
+interface ApproachIndicatorEntry {
+  line:    THREE.Line;
+  lineMat: THREE.LineBasicMaterial;
+  /** Phase this entry was created for — used to detect approach↔landing transitions. */
+  phase:   'approach' | 'landing';
+}
+
+function createApproachIndicator(scene: THREE.Scene, phase: 'approach' | 'landing'): ApproachIndicatorEntry {
+  const posArr = new Float32Array(6);
+  const lineGeo = new THREE.BufferGeometry();
+  lineGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+  const lineColor = phase === 'approach' ? 0x38BDF8 : 0x60A5FA;
+  const lineMat = new THREE.LineBasicMaterial({
+    color: lineColor, transparent: true, opacity: 0.65, depthWrite: false,
+  });
+  const line = new THREE.Line(lineGeo, lineMat);
+  line.frustumCulled = false;
+  scene.add(line);
+
+  return { line, lineMat, phase };
+}
+
+function disposeApproachIndicator(entry: ApproachIndicatorEntry, scene: THREE.Scene): void {
+  scene.remove(entry.line);
+  entry.line.geometry.dispose();
+  entry.lineMat.dispose();
+}
 
 // ── Glide slope projected path line (Task #26) ──────────────────────────────
 // For 'approach' aircraft only: a thin line from the aircraft's renderPos to
@@ -659,61 +693,10 @@ function buildWindIndicator(windDir: number, windSpeed: number): THREE.Group {
 
 const GLIDE_MAX_DIST    = 9_000; // scene units (≈ NM+ out) — line fully visible at this range
 const GLIDE_PEAK_OPACITY = 0.55; // opacity when aircraft is at or beyond GLIDE_MAX_DIST
-// 1 scene unit = 1 metre (horizontal); 1 NM = 1852 m
-const METRES_PER_NM = 1852;
 
 interface GlideSlopeEntry {
-  line:       THREE.Line;
-  lineMat:    THREE.LineBasicMaterial;
-  /** ETA canvas-sprite at the midpoint of the glide slope line. */
-  etaSprite:  THREE.Sprite;
-  etaMat:     THREE.SpriteMaterial;
-  /** Reused canvas + texture — redrawn in place, never reallocated. */
-  etaCanvas:  HTMLCanvasElement;
-  etaCtx:     CanvasRenderingContext2D;
-  etaTex:     THREE.CanvasTexture;
-  /** Last rendered label key — skip texture redraw when unchanged. */
-  lastEtaKey: string;
-}
-
-/** Build a canvas texture for the glide slope ETA label.
- *  Shows "X.X NM  Xm Xs" (or "—" when speed is unavailable). */
-/** Redraw the ETA label into an EXISTING canvas — no allocation, no new GPU texture. */
-function drawGlideSlopeEta(ctx: CanvasRenderingContext2D, distNm: number, etaSec: number | null): void {
-  const W = 380, H = 88;
-
-  // Background pill
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = 'rgba(4,10,20,0.82)';
-  ctx.beginPath();
-  (ctx as CanvasRenderingContext2D & { roundRect: (...a: unknown[]) => void })
-    .roundRect(0, 0, W, H, 10);
-  ctx.fill();
-
-  // Top accent line in approach cyan
-  ctx.fillStyle = '#38bdf8';
-  ctx.fillRect(0, 0, W, 2);
-  // Left accent bar
-  ctx.fillRect(0, 0, 3, H);
-
-  // Distance line
-  ctx.font         = 'bold 28px "Courier New",monospace';
-  ctx.fillStyle    = '#7dd3fc';
-  ctx.textAlign    = 'left';
-  ctx.textBaseline = 'top';
-  ctx.fillText(`${distNm.toFixed(1)} NM`, 12, 8);
-
-  // ETA line
-  ctx.font      = '22px "Courier New",monospace';
-  ctx.fillStyle = '#bae6fd';
-  if (etaSec === null) {
-    ctx.fillText('— s to threshold', 12, 50);
-  } else {
-    const m = Math.floor(etaSec / 60);
-    const s = Math.round(etaSec % 60);
-    const etaStr = m > 0 ? `${m}m ${s.toString().padStart(2,'0')}s to threshold` : `${s}s to threshold`;
-    ctx.fillText(etaStr, 12, 50);
-  }
+  line:    THREE.Line;
+  lineMat: THREE.LineBasicMaterial;
 }
 
 function createGlideSlopeLine(scene: THREE.Scene): GlideSlopeEntry {
@@ -729,30 +712,13 @@ function createGlideSlopeLine(scene: THREE.Scene): GlideSlopeEntry {
   const line = new THREE.Line(geo, lineMat);
   line.frustumCulled = false;
   scene.add(line);
-
-  // ETA sprite with a single reused canvas + texture (redrawn in place each
-  // time the displayed value changes — no per-update allocations or uploads
-  // of brand-new textures).
-  const etaCanvas  = document.createElement('canvas');
-  etaCanvas.width  = 380; etaCanvas.height = 88;
-  const etaCtx     = etaCanvas.getContext('2d')!;
-  const etaTex     = new THREE.CanvasTexture(etaCanvas);
-  const etaMat     = new THREE.SpriteMaterial({ map: etaTex, transparent: true, depthTest: false });
-  const etaSprite  = new THREE.Sprite(etaMat);
-  etaSprite.scale.set(570, 132, 1); // scene units — wide enough for the label
-  etaSprite.frustumCulled = false;
-  etaSprite.renderOrder   = 500;
-  scene.add(etaSprite);
-
-  return { line, lineMat, etaSprite, etaMat, etaCanvas, etaCtx, etaTex, lastEtaKey: '' };
+  return { line, lineMat };
 }
 
 function disposeGlideSlopeLine(entry: GlideSlopeEntry, scene: THREE.Scene): void {
-  scene.remove(entry.line, entry.etaSprite);
+  scene.remove(entry.line);
   entry.line.geometry.dispose();
   entry.lineMat.dispose();
-  entry.etaMat.map?.dispose();
-  entry.etaMat.dispose();
 }
 
 // ── Takeoff indicator (vertical line + "TAKE OFF" sign) ──────────────────────
@@ -818,8 +784,6 @@ interface AcBundle {
   corrFromPos:     THREE.Vector3;
   /** performance.now() when the current correction began.  -1 = no correction. */
   corrStartMs:     number;
-  /** Pre-allocated Float32Array backing the stem geometry (updated in-place each frame). */
-  stemPosArr:      Float32Array;
   /** Purple selection halo ring shown when director focuses this aircraft. */
   halo:            THREE.Mesh;
   /** Callsign string — stored so refreshAcLabel can repaint without extra props. */
@@ -831,64 +795,17 @@ interface AcBundle {
 }
 
 function disposeBundle(b: AcBundle): void {
-  // cone/halo use shared geometries (CONE_GEO, HALO_GEO) — do NOT dispose them.
-  // Only dispose the per-aircraft materials.
-  (b.cone.material as THREE.Material).dispose();
+  b.cone.geometry.dispose(); (b.cone.material as THREE.Material).dispose();
   b.stem.geometry.dispose();
   b.trail.geometry.dispose(); (b.trail.material as THREE.Material).dispose();
   const sm = b.label.material as THREE.SpriteMaterial;
   sm.map?.dispose(); sm.dispose();
   // HMR guard — bundles created before this field existed won't have halo
-  if (b.halo) { (b.halo.material as THREE.Material).dispose(); }
+  if (b.halo) { b.halo.geometry.dispose(); (b.halo.material as THREE.Material).dispose(); }
 }
 
 // Shared stem material — one instance, never disposed here
 const STEM_MAT = new THREE.LineBasicMaterial({ color: 0x334155, transparent: true, opacity: 0.50 });
-
-// ── Shared aircraft geometries & trail material template ──────────────────────
-//
-// PROBLEM: spawning 14 aircraft simultaneously on the first ADS-B poll caused
-// a hard page-freeze because each aircraft created its own THREE.ShaderMaterial,
-// triggering 14 synchronous GLSL program compilations on the GPU driver thread.
-//
-// FIX:
-//  • CONE_GEO / HALO_GEO — shared buffer across all aircraft meshes (geometries
-//    are just vertex data; the mesh's own matrix provides its unique position).
-//  • TRAIL_MAT_TEMPLATE — single ShaderMaterial compiled ONCE at module load.
-//    Each aircraft calls .clone() which creates a new uniforms object (so each
-//    aircraft has its own color uniform) but reuses the already-compiled GL
-//    program — Three.js caches programs by GLSL source string.
-//
-// disposeBundle must NOT dispose these shared objects.
-
-const CONE_GEO = (() => {
-  const g = new THREE.ConeGeometry(27.5, 85, 4, 1);
-  g.rotateX(-Math.PI / 2); // apex faces −Z (north)
-  return g;
-})();
-
-const HALO_GEO = new THREE.TorusGeometry(70, 7, 8, 64);
-
-const TRAIL_MAT_TEMPLATE = new THREE.ShaderMaterial({
-  uniforms: { color: { value: new THREE.Color(0xffffff) } },
-  vertexShader: `
-    attribute float alpha;
-    varying   float vAlpha;
-    void main() {
-      vAlpha      = alpha;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    }
-  `,
-  fragmentShader: `
-    uniform vec3  color;
-    varying float vAlpha;
-    void main() {
-      gl_FragColor = vec4(color, vAlpha);
-    }
-  `,
-  transparent: true,
-  depthWrite:  false,
-});
 
 // ── Mutable scene state (lives in sceneRef, never in React state) ─────────────
 interface SceneState {
@@ -952,6 +869,8 @@ interface SceneState {
   labelMap: Map<string, AlertLabelEntry>;
   /** Aircraft ID → takeoff vertical-line + sign indicator. */
   takeoffMap: Map<string, TakeoffIndicatorEntry>;
+  /** Aircraft ID → approach/landing diagonal-line + sign indicator. */
+  approachMap: Map<string, ApproachIndicatorEntry>;
   /** Aircraft ID → glide slope projected path line (approach phase only). */
   glideSlopeMap: Map<string, GlideSlopeEntry>;
   /** All runway threshold positions [designator, x, z] in Three.js scene coords.
@@ -1217,28 +1136,12 @@ export default function AirspaceView3D({
   useEffect(() => {
     const el = mountRef.current;
     if (!el) return;
-    mark('3d-setup-start');
 
     const W = el.clientWidth  || window.innerWidth;
     const H = el.clientHeight || window.innerHeight;
 
-    // Renderer — guard WebGL context creation so environments without WebGL
-    // (headless browsers, GPU-less VMs) degrade to a fallback message instead
-    // of crashing the whole React tree (which would tear down the data feed).
-    let renderer: THREE.WebGLRenderer;
-    try {
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    } catch (err) {
-      console.warn('[3D] WebGL unavailable — 3D view disabled:', err);
-      const msg = document.createElement('div');
-      msg.textContent = '3D view unavailable (WebGL not supported in this browser)';
-      msg.style.cssText =
-        'display:flex;align-items:center;justify-content:center;height:100%;' +
-        'color:#64748b;font-size:13px;letter-spacing:0.05em;';
-      el.appendChild(msg);
-      return () => { el.removeChild(msg); };
-    }
-    mark('3d-renderer-created');
+    // Renderer
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(W, H);
     renderer.setClearColor(0x07090F, 1);
@@ -1278,7 +1181,6 @@ export default function AirspaceView3D({
     scene.add(buildGroundGeometry(prof.geometry.runways, prof.geometry.taxiways, prof.geometry.aprons));
     scene.add(buildAltRings());
     scene.add(buildAirportAnnotations(thresholds, prof.terminalLabelPos));
-    mark('3d-geometry-built');
 
     // Initialise mutable state
     const st: SceneState = {
@@ -1324,7 +1226,7 @@ export default function AirspaceView3D({
       alertFocusDone:       null,
       alertInterrupt:       null,
       takeoffMap:           new Map(),
-
+      approachMap:          new Map(),
       glideSlopeMap:        new Map(),
       allThresholds:        computeRunwayThresholds(prof.runways, prof.geometry.runways),
     };
@@ -1364,8 +1266,6 @@ export default function AirspaceView3D({
     const tick = () => {
       st.animId = requestAnimationFrame(tick);
       const nowMs = performance.now();
-      const _frameStart = nowMs;
-      _frameNo++;
 
       switch (st.cameraMode) {
         case 'orbit': {
@@ -1579,12 +1479,11 @@ export default function AirspaceView3D({
           b.halo.rotation.z += 0.008; // slow spin in the horizontal plane
         }
 
-        // Update stem endpoints in-place — no allocation, no new Vector3s.
-        const sa = b.stemPosArr;
-        sa[0] = b.renderPos.x; sa[1] = 0;             sa[2] = b.renderPos.z;
-        sa[3] = b.renderPos.x; sa[4] = b.renderPos.y; sa[5] = b.renderPos.z;
-        const stemAttr = b.stem.geometry.attributes.position as THREE.BufferAttribute;
-        stemAttr.needsUpdate = true;
+        b.stem.geometry.setFromPoints([
+          new THREE.Vector3(b.renderPos.x, 0,             b.renderPos.z),
+          new THREE.Vector3(b.renderPos.x, b.renderPos.y, b.renderPos.z),
+        ]);
+        b.stem.geometry.computeBoundingSphere();
 
         // ── Per-frame trail fade ─────────────────────────────────────────────
         // Every frame: drop points older than TRAIL_FADE_S, then write
@@ -1624,7 +1523,7 @@ export default function AirspaceView3D({
             posAttr.needsUpdate = true;
             alpAttr.needsUpdate = true;
             b.trail.geometry.setDrawRange(0, n);
-            // No computeBoundingSphere: trail.frustumCulled = false at spawn.
+            b.trail.geometry.computeBoundingSphere();
           }
         }
 
@@ -1638,11 +1537,9 @@ export default function AirspaceView3D({
       {
         const tSec = nowMs / 1000;
 
-        // Remove beams whose alerts are no longer active.
-        // Set lookup — O(alerts) instead of O(alerts²) .find() per frame.
-        const _activeIds = new Set(st.activeAlerts.map(a => a.id));
+        // Remove beams whose alerts are no longer active
         for (const [alertId, entry] of st.beamMap) {
-          if (!_activeIds.has(alertId)) {
+          if (!st.activeAlerts.find(a => a.id === alertId)) {
             disposeBeamEntry(entry, scene);
             st.beamMap.delete(alertId);
           }
@@ -1672,7 +1569,7 @@ export default function AirspaceView3D({
           arr[0] = posA.x; arr[1] = posA.y; arr[2] = posA.z;
           arr[3] = posB.x; arr[4] = posB.y; arr[5] = posB.z;
           posAttr.needsUpdate = true;
-          // No computeBoundingSphere: beam line is frustumCulled = false.
+          entry.line.geometry.computeBoundingSphere();
 
           // Update midpoint sphere position
           entry.midSphere.position.set(
@@ -1695,10 +1592,9 @@ export default function AirspaceView3D({
       // critical alert.  Position updates every frame; texture only when
       // the alert message text changes (~every 8 s with a new ADS-B poll).
       {
-        // Remove labels for cleared / dismissed alerts (Set lookup, not .find())
-        const _activeIds = new Set(st.activeAlerts.map(a => a.id));
+        // Remove labels for cleared / dismissed alerts
         for (const [alertId, entry] of st.labelMap) {
-          if (!_activeIds.has(alertId)) {
+          if (!st.activeAlerts.find(a => a.id === alertId)) {
             disposeAlertLabel(entry, scene);
             st.labelMap.delete(alertId);
           }
@@ -1756,10 +1652,9 @@ export default function AirspaceView3D({
       // Expanding concentric rings on the ground plane (y=1) pulsing outward
       // from the ground projection of each active conflict midpoint.
       {
-        // Remove ring clusters for cleared alerts (Set lookup, not .find())
-        const _activeIds = new Set(st.activeAlerts.map(a => a.id));
+        // Remove ring clusters for cleared alerts
         for (const [alertId, entry] of st.pulseRingMap) {
-          if (!_activeIds.has(alertId)) {
+          if (!st.activeAlerts.find(a => a.id === alertId)) {
             disposePulseRingEntry(entry, scene);
             st.pulseRingMap.delete(alertId);
           }
@@ -1835,18 +1730,35 @@ export default function AirspaceView3D({
           arr[0] = rx; arr[1] = ry; arr[2] = rz;
           arr[3] = rx; arr[4] = top; arr[5] = rz;
           posAttr.needsUpdate = true;
-          // No computeBoundingSphere: takeoff line is frustumCulled = false.
+          entry.line.geometry.computeBoundingSphere();
         }
       }
 
       // ── Approach / landing indicator update ───────────────────────────────
       // Diagonal line forward-and-down along the aircraft's heading, evoking
+      // a glide slope descent.
+      {
+        for (const [acId, entry] of st.approachMap) {
+          const b = st.acMap.get(acId);
+          if (!b) continue;
+          const rx = b.renderPos.x, ry = b.renderPos.y, rz = b.renderPos.z;
+          // Forward direction in scene space (heading 0=north=-Z, 90=east=+X)
+          const hRad = b.headingDeg * Math.PI / 180;
+          const endX = rx + Math.sin(hRad) * APPROACH_LINE_FORWARD;
+          const endY = Math.max(0, ry - APPROACH_LINE_DROP);
+          const endZ = rz - Math.cos(hRad) * APPROACH_LINE_FORWARD;
+          const posAttr = entry.line.geometry.attributes.position as THREE.BufferAttribute;
+          const arr = posAttr.array as Float32Array;
+          arr[0] = rx;  arr[1] = ry;  arr[2] = rz;
+          arr[3] = endX; arr[4] = endY; arr[5] = endZ;
+          posAttr.needsUpdate = true;
+          entry.line.geometry.computeBoundingSphere();
+        }
+      }
 
-      // ── Glide slope projected path line + ETA label (Tasks #26 / #29) ──────
+      // ── Glide slope projected path line (Task #26) ───────────────────────
       // Approach-only: thin line from aircraft renderPos to nearest runway
       // threshold.  Opacity fades from GLIDE_PEAK_OPACITY (far) → 0 (on threshold).
-      // A canvas-sprite at the line midpoint shows remaining distance (NM) and
-      // estimated seconds to touchdown derived from the aircraft's ground speed.
       {
         for (const [acId, entry] of st.glideSlopeMap) {
           const b = st.acMap.get(acId);
@@ -1872,129 +1784,12 @@ export default function AirspaceView3D({
           arr[0] = b.renderPos.x; arr[1] = b.renderPos.y; arr[2] = b.renderPos.z;
           arr[3] = nearestX;      arr[4] = 0;              arr[5] = nearestZ;
           posAttr.needsUpdate = true;
-          // No computeBoundingSphere: glide slope line is frustumCulled = false.
-
-          // ── ETA label at the line midpoint ──────────────────────────────────
-          const midX = (b.renderPos.x + nearestX) * 0.5;
-          const midY = b.renderPos.y * 0.5 + 120; // halfway up, slightly lifted
-          const midZ = (b.renderPos.z + nearestZ) * 0.5;
-          entry.etaSprite.position.set(midX, midY, midZ);
-
-          // Keep sprite opacity in sync with the line so it fades together
-          entry.etaMat.opacity = Math.max(0, distFrac * 1.4 - 0.2); // slightly faster reveal
-
-          // ETA computation: distance in metres / ground speed in m/s
-          const distNm   = nearestDist / METRES_PER_NM;
-          const etaSec   = b.gsMps > 0.5 ? nearestDist / b.gsMps : null;
-
-          // Rebuild texture only when the display values change (rounds to 1 s)
-          const etaRounded = etaSec !== null ? Math.round(etaSec) : -1;
-          const etaKey = `${distNm.toFixed(1)}_${etaRounded}`;
-          if (etaKey !== entry.lastEtaKey) {
-            entry.lastEtaKey = etaKey;
-            drawGlideSlopeEta(entry.etaCtx, distNm, etaSec !== null ? etaRounded : null);
-            entry.etaTex.needsUpdate = true; // re-upload the SAME texture in place
-          }
+          entry.line.geometry.computeBoundingSphere();
         }
       }
 
-      // ── Screen-space label deconfliction ─────────────────────────────────
-      // Projects every aircraft label to screen space, detects overlapping
-      // boxes, then pushes overlapping labels down (toward the horizon in
-      // screen space, = away from camera-up in world space) so they stack
-      // like a column rather than drawing on top of each other.
-      //
-      // This runs every frame so the stack adapts continuously as the camera
-      // orbits or follows an aircraft.  The math cost is O(N²) but N ≤ ~30
-      // for any realistic ATC sector so it is negligible.
-      {
-        // Sprite half-extents in world units (must match sp.scale.set in makeAcLabel)
-        const SP_HW = 270;   // 540 / 2
-        const SP_HH = 75;    // 150 / 2
-
-        const domEl      = renderer.domElement;
-        const vpW        = domEl.clientWidth  || domEl.width;
-        const vpH        = domEl.clientHeight || domEl.height;
-        const fovTanHalf = Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5));
-
-        // Camera world-space "up" unit vector — stacking pushes in this direction.
-        const camUp = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
-
-        // Collect visible labels: project base position → screen (sx, sy in logical px).
-        // sx/sy are the CURRENT test position (modified during placement).
-        type LEntry = {
-          b:      AcBundle;
-          sx:     number;
-          sy:     number;
-          hwPx:   number;   // screen half-width
-          hhPx:   number;   // screen half-height
-          dist:   number;   // camera distance (for world re-projection)
-        };
-        const lbls: LEntry[] = [];
-        const _vp = new THREE.Vector3();
-
-        for (const [, b] of st.acMap) {
-          _vp.copy(b.label.position).project(camera);
-          if (_vp.z > 1) continue;  // behind far plane / behind camera
-
-          const sx  = (_vp.x + 1) * 0.5 * vpW;
-          const sy  = (1 - _vp.y) * 0.5 * vpH;
-          const dist = camera.position.distanceTo(b.label.position);
-          // Perspective scale factor: world → screen pixels
-          const scale = (vpH * 0.5) / (dist * fovTanHalf);
-          lbls.push({ b, sx, sy, hwPx: SP_HW * scale, hhPx: SP_HH * scale, dist });
-        }
-
-        // Sort top → bottom in screen space.
-        // The topmost (smallest sy) label wins its natural position; others
-        // get stacked below it if they overlap.
-        lbls.sort((a, b) => a.sy - b.sy);
-
-        // Greedy placement: for each label, push its test-sy downward until
-        // it no longer overlaps any already-committed label.
-        const placed: LEntry[] = [];
-        for (const e of lbls) {
-          let testSy = e.sy;
-          let changed = true;
-          while (changed) {
-            changed = false;
-            for (const p of placed) {
-              const overlapX = Math.abs(e.sx - p.sx) < (e.hwPx + p.hwPx);
-              const overlapY = Math.abs(testSy - p.sy) < (e.hhPx + p.hhPx) + 4;
-              if (overlapX && overlapY) {
-                // Push e below p — one label-height gap (+ 4 px breathing room)
-                testSy = p.sy + p.hhPx + e.hhPx + 4;
-                changed = true;
-              }
-            }
-          }
-
-          const screenDeltaY = testSy - e.sy; // positive = moved downward on screen
-          e.sy = testSy;
-          placed.push(e);
-
-          if (screenDeltaY > 0.5) {
-            // Convert screen-Y shift back to world space along the camera-up direction.
-            // Moving a label DOWN on screen ≡ moving it OPPOSITE to camera-up in world.
-            // World units per screen pixel (depth-correct): dist * tanFovHalf / (vpH/2)
-            const worldUnitsPerPx = e.dist * fovTanHalf / (vpH * 0.5);
-            const worldShift      = -screenDeltaY * worldUnitsPerPx;
-            e.b.label.position.addScaledVector(camUp, worldShift);
-          }
-        }
-      }
-
-      const _preRender = performance.now();
       renderer.render(scene, camera);
-      const _frameEnd = performance.now();
-      // Diagnostic: report the first 5 frames and any frame that blocked > 250 ms
-      const _frameMs = _frameEnd - _frameStart;
-      if (_frameNo <= 5 || _frameMs > 250) {
-        span(`frame#${_frameNo} total=${Math.round(_frameMs)}ms render=${Math.round(_frameEnd - _preRender)}ms ac=${st.acMap.size} alerts=${st.activeAlerts.length}`, _frameMs);
-      }
     };
-    let _frameNo = 0;
-    mark('3d-setup-done, starting tick');
     tick();
 
     // ── Resize observer ──────────────────────────────────────────────────────
@@ -2270,7 +2065,7 @@ export default function AirspaceView3D({
       canvas.removeEventListener('pointermove',  onPointerMove);
       canvas.removeEventListener('pointerup',    onPointerUp);
       window.removeEventListener('keydown', onKey);
-      st.acMap.forEach(b => { scene.remove(b.cone, b.stem, b.trail, b.label, b.halo); disposeBundle(b); });
+      st.acMap.forEach(b => { scene.remove(b.cone, b.stem, b.trail, b.label); disposeBundle(b); });
       st.acMap.clear();
       st.coneToId.clear();
       st.beamMap.forEach(entry => disposeBeamEntry(entry, scene));
@@ -2281,13 +2076,13 @@ export default function AirspaceView3D({
       st.labelMap.clear();
       st.takeoffMap.forEach(entry => disposeTakeoffIndicator(entry, scene));
       st.takeoffMap.clear();
-
+      st.approachMap.forEach(entry => disposeApproachIndicator(entry, scene));
+      st.approachMap.clear();
       st.glideSlopeMap.forEach(entry => disposeGlideSlopeLine(entry, scene));
       st.glideSlopeMap.clear();
       renderer.dispose();
       if (renderer.domElement.parentNode === el) el.removeChild(renderer.domElement);
       sceneRef.current = null;
-      mark(`3d-setup-cleanup icao=${profileRef.current.icao}`);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2295,8 +2090,6 @@ export default function AirspaceView3D({
   useEffect(() => {
     const st = sceneRef.current;
     if (!st) return;
-    const _syncStart = performance.now();
-    mark(`sync-start ac=${aircraft.length} existing=${st.acMap.size}`);
     const { scene, acMap, coneToId } = st;
 
     // Measure the actual wall-clock interval between this poll and the previous one.
@@ -2312,7 +2105,6 @@ export default function AirspaceView3D({
     for (const ac of aircraft) st.latestAircraftMap.set(ac.id, ac);
 
     const seen = new Set<string>();
-    let _spawnCount = 0;
 
     for (const ac of aircraft) {
       seen.add(ac.id);
@@ -2323,15 +2115,13 @@ export default function AirspaceView3D({
 
       if (!acMap.has(ac.id)) {
         // ── Spawn ──────────────────────────────────────────────────────────
-        // Shared geometries (CONE_GEO, HALO_GEO) are never disposed per-aircraft.
-        // Trail material is cloned from TRAIL_MAT_TEMPLATE — shares the compiled
-        // GL program, only uniforms (color) differ per aircraft.
-        _spawnCount++;
 
+        const coneGeo = new THREE.ConeGeometry(27.5, 85, 4, 1);
+        coneGeo.rotateX(-Math.PI / 2); // apex faces −Z (north)
         const coneMat = new THREE.MeshLambertMaterial({
           color: hex, emissive: hex, emissiveIntensity: 0.30,
         });
-        const cone = new THREE.Mesh(CONE_GEO, coneMat);
+        const cone = new THREE.Mesh(coneGeo, coneMat);
         cone.position.copy(pos);
         cone.rotation.y = headY;
         // renderOrder=1 ensures the opaque cone renders AFTER the transparent
@@ -2342,21 +2132,20 @@ export default function AirspaceView3D({
         coneToId.set(cone, ac.id); // register for raycasting
 
         // Purple selection halo — flat torus ring, hidden until director selects
+        const haloGeo = new THREE.TorusGeometry(70, 7, 8, 64);
         const haloMat = new THREE.MeshBasicMaterial({
           color: 0xa855f7, transparent: true, opacity: 0.50, depthWrite: false,
         });
-        const halo = new THREE.Mesh(HALO_GEO, haloMat);
+        const halo = new THREE.Mesh(haloGeo, haloMat);
         halo.rotation.x = Math.PI / 2; // lay flat (horizontal ring)
         halo.renderOrder = 3;
         halo.visible = false;
         scene.add(halo);
 
-        // Stem: pre-allocated Float32Array so rAF can update in-place without
-        // allocating new Vector3s or calling setFromPoints every frame.
-        const stemPosArr = new Float32Array([pos.x, 0, pos.z, pos.x, pos.y, pos.z]);
-        const stemGeo    = new THREE.BufferGeometry();
-        stemGeo.setAttribute('position', new THREE.BufferAttribute(stemPosArr, 3));
-        stemGeo.setDrawRange(0, 2);
+        const stemGeo = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(pos.x, 0, pos.z),
+          new THREE.Vector3(pos.x, pos.y, pos.z),
+        ]);
         const stem = new THREE.Line(stemGeo, STEM_MAT);
         scene.add(stem);
 
@@ -2373,15 +2162,28 @@ export default function AirspaceView3D({
         trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPosArr, 3));
         trailGeo.setAttribute('alpha',    new THREE.BufferAttribute(trailAlphaArr, 1));
         trailGeo.setDrawRange(0, 2);
-        // Clone the shared template — reuses the already-compiled GL program.
-        // Only the color uniform is per-aircraft; all other shader state is shared.
-        const trailMat = TRAIL_MAT_TEMPLATE.clone();
-        trailMat.uniforms.color.value = new THREE.Color(hex);
+        // ShaderMaterial: per-vertex alpha encodes fade along the trail length.
+        const trailMat = new THREE.ShaderMaterial({
+          uniforms: { color: { value: new THREE.Color(hex) } },
+          vertexShader: `
+            attribute float alpha;
+            varying   float vAlpha;
+            void main() {
+              vAlpha      = alpha;
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+          `,
+          fragmentShader: `
+            uniform vec3  color;
+            varying float vAlpha;
+            void main() {
+              gl_FragColor = vec4(color, vAlpha);
+            }
+          `,
+          transparent: true,
+          depthWrite:  false,
+        });
         const trail = new THREE.Line(trailGeo, trailMat);
-        // Never frustum-culled → no per-frame computeBoundingSphere needed.
-        // Recomputing the bounding sphere of a 600-vertex trail for every
-        // aircraft every frame was a measurable rAF cost at high traffic.
-        trail.frustumCulled = false;
         scene.add(trail);
 
         const label = makeAcLabel(ac.callsign, ac.heading, ac.phase);
@@ -2411,7 +2213,7 @@ export default function AirspaceView3D({
             })()
           : pos.clone();
         acMap.set(ac.id, {
-          cone, stem, trail, label, trailBuf, halo, stemPosArr,
+          cone, stem, trail, label, trailBuf, halo,
           renderPos:       spawnPos.clone(),
           lastKnownPos:    spawnPos.clone(),
           lastKnownTimeMs: nowMs,
@@ -2577,6 +2379,29 @@ export default function AirspaceView3D({
       }
     }
 
+    // ── Sync approach / landing indicators ────────────────────────────────────
+    // Create an indicator when phase enters 'approach' or 'landing'; dispose
+    // and recreate when phase transitions between the two (sign text/colour
+    // differs); dispose the moment the phase leaves both inbound phases.
+    for (const ac of aircraft) {
+      if (ac.phase === 'approach' || ac.phase === 'landing') {
+        const existing = st.approachMap.get(ac.id);
+        if (existing && existing.phase !== ac.phase) {
+          // Phase flipped between approach ↔ landing — recreate for correct sign.
+          disposeApproachIndicator(existing, scene);
+          st.approachMap.delete(ac.id);
+        }
+        if (!st.approachMap.has(ac.id)) {
+          st.approachMap.set(ac.id, createApproachIndicator(scene, ac.phase));
+        }
+      } else {
+        const entry = st.approachMap.get(ac.id);
+        if (entry) {
+          disposeApproachIndicator(entry, scene);
+          st.approachMap.delete(ac.id);
+        }
+      }
+    }
 
     // ── Sync glide slope projected path lines ────────────────────────────────
     // Only the SINGLE approach-phase aircraft nearest to any runway threshold
@@ -2625,16 +2450,14 @@ export default function AirspaceView3D({
         // Clean up any takeoff indicator for the despawned aircraft
         const ti = st.takeoffMap.get(id);
         if (ti) { disposeTakeoffIndicator(ti, scene); st.takeoffMap.delete(id); }
-
+        // Clean up any approach/landing indicator for the despawned aircraft
+        const ai = st.approachMap.get(id);
+        if (ai) { disposeApproachIndicator(ai, scene); st.approachMap.delete(id); }
         // Clean up any glide slope line for the despawned aircraft
         const gs = st.glideSlopeMap.get(id);
         if (gs) { disposeGlideSlopeLine(gs, scene); st.glideSlopeMap.delete(id); }
       }
     }
-
-    // Diagnostic: always report sync pass — captures switch-path timing.
-    const _syncMs = performance.now() - _syncStart;
-    span(`sync-done ac=${aircraft.length} spawned=${_spawnCount} ms=${Math.round(_syncMs)}`, _syncMs);
   }, [aircraft]);
 
   // ── Render ────────────────────────────────────────────────────────────────
