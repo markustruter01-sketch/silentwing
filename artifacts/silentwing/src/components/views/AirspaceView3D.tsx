@@ -236,13 +236,7 @@ function makeRunwayLabel(text: string): THREE.Sprite {
   const cv  = document.createElement('canvas');
   cv.width  = 320; cv.height = 80;
   const ctx = cv.getContext('2d')!;
-  ctx.beginPath();
-  ctx.roundRect(4, 4, 312, 72, 14);
-  ctx.fillStyle   = 'rgba(6, 14, 28, 0.90)';
-  ctx.fill();
-  ctx.strokeStyle = '#38bdf8';
-  ctx.lineWidth   = 2.5;
-  ctx.stroke();
+  ctx.clearRect(0, 0, 320, 80);
   ctx.font         = 'bold 30px "Courier New", monospace';
   ctx.fillStyle    = '#7dd3fc';
   ctx.textAlign    = 'center';
