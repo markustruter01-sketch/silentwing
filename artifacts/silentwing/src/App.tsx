@@ -663,7 +663,7 @@ export default function App() {
         />
         {/* ── Airport title + switcher — 3D airspace only ── */}
         {view === 'airspace' && (
-          <div className="absolute inset-x-0 top-3 flex flex-col items-center z-10 pointer-events-none select-none">
+          <div className="absolute inset-x-0 top-3 flex flex-col items-center z-[520] pointer-events-none select-none">
             <div className="flex items-baseline gap-3">
               <span className="text-[10px] font-mono tracking-[0.25em] text-sky-600/70 uppercase">{activeProfile.icao}</span>
               <h1 className="text-2xl font-bold tracking-[0.12em] text-sky-100/90 uppercase"
