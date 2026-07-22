@@ -650,41 +650,6 @@ function buildWindIndicator(windDir: number, windSpeed: number): THREE.Group {
   return g;
 }
 
-// ── Approach / landing indicator (diagonal line + sign) ──────────────────────
-// One indicator per aircraft in the 'approach' or 'landing' phase.
-// The line descends forward along the aircraft's heading, evoking a glide
-// slope; the sprite sign at the lower end always faces the camera.
-
-const APPROACH_LINE_DROP    = 300; // scene units below the aircraft
-const APPROACH_LINE_FORWARD = 450; // scene units ahead along heading
-
-interface ApproachIndicatorEntry {
-  line:    THREE.Line;
-  lineMat: THREE.LineBasicMaterial;
-  /** Phase this entry was created for — used to detect approach↔landing transitions. */
-  phase:   'approach' | 'landing';
-}
-
-function createApproachIndicator(scene: THREE.Scene, phase: 'approach' | 'landing'): ApproachIndicatorEntry {
-  const posArr = new Float32Array(6);
-  const lineGeo = new THREE.BufferGeometry();
-  lineGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
-  const lineColor = phase === 'approach' ? 0x38BDF8 : 0x60A5FA;
-  const lineMat = new THREE.LineBasicMaterial({
-    color: lineColor, transparent: true, opacity: 0.65, depthWrite: false,
-  });
-  const line = new THREE.Line(lineGeo, lineMat);
-  line.frustumCulled = false;
-  scene.add(line);
-
-  return { line, lineMat, phase };
-}
-
-function disposeApproachIndicator(entry: ApproachIndicatorEntry, scene: THREE.Scene): void {
-  scene.remove(entry.line);
-  entry.line.geometry.dispose();
-  entry.lineMat.dispose();
-}
 
 // ── Glide slope projected path line (Task #26) ──────────────────────────────
 // For 'approach' aircraft only: a thin line from the aircraft's renderPos to
@@ -931,8 +896,6 @@ interface SceneState {
   labelMap: Map<string, AlertLabelEntry>;
   /** Aircraft ID → takeoff vertical-line + sign indicator. */
   takeoffMap: Map<string, TakeoffIndicatorEntry>;
-  /** Aircraft ID → approach/landing diagonal-line + sign indicator. */
-  approachMap: Map<string, ApproachIndicatorEntry>;
   /** Aircraft ID → glide slope projected path line (approach phase only). */
   glideSlopeMap: Map<string, GlideSlopeEntry>;
   /** All runway threshold positions [designator, x, z] in Three.js scene coords.
@@ -1288,7 +1251,7 @@ export default function AirspaceView3D({
       alertFocusDone:       null,
       alertInterrupt:       null,
       takeoffMap:           new Map(),
-      approachMap:          new Map(),
+
       glideSlopeMap:        new Map(),
       allThresholds:        computeRunwayThresholds(prof.runways, prof.geometry.runways),
     };
@@ -1798,25 +1761,6 @@ export default function AirspaceView3D({
 
       // ── Approach / landing indicator update ───────────────────────────────
       // Diagonal line forward-and-down along the aircraft's heading, evoking
-      // a glide slope descent.
-      {
-        for (const [acId, entry] of st.approachMap) {
-          const b = st.acMap.get(acId);
-          if (!b) continue;
-          const rx = b.renderPos.x, ry = b.renderPos.y, rz = b.renderPos.z;
-          // Forward direction in scene space (heading 0=north=-Z, 90=east=+X)
-          const hRad = b.headingDeg * Math.PI / 180;
-          const endX = rx + Math.sin(hRad) * APPROACH_LINE_FORWARD;
-          const endY = Math.max(0, ry - APPROACH_LINE_DROP);
-          const endZ = rz - Math.cos(hRad) * APPROACH_LINE_FORWARD;
-          const posAttr = entry.line.geometry.attributes.position as THREE.BufferAttribute;
-          const arr = posAttr.array as Float32Array;
-          arr[0] = rx;  arr[1] = ry;  arr[2] = rz;
-          arr[3] = endX; arr[4] = endY; arr[5] = endZ;
-          posAttr.needsUpdate = true;
-          entry.line.geometry.computeBoundingSphere();
-        }
-      }
 
       // ── Glide slope projected path line + ETA label (Tasks #26 / #29) ──────
       // Approach-only: thin line from aircraft renderPos to nearest runway
@@ -2250,8 +2194,7 @@ export default function AirspaceView3D({
       st.labelMap.clear();
       st.takeoffMap.forEach(entry => disposeTakeoffIndicator(entry, scene));
       st.takeoffMap.clear();
-      st.approachMap.forEach(entry => disposeApproachIndicator(entry, scene));
-      st.approachMap.clear();
+
       st.glideSlopeMap.forEach(entry => disposeGlideSlopeLine(entry, scene));
       st.glideSlopeMap.clear();
       renderer.dispose();
@@ -2553,29 +2496,6 @@ export default function AirspaceView3D({
       }
     }
 
-    // ── Sync approach / landing indicators ────────────────────────────────────
-    // Create an indicator when phase enters 'approach' or 'landing'; dispose
-    // and recreate when phase transitions between the two (sign text/colour
-    // differs); dispose the moment the phase leaves both inbound phases.
-    for (const ac of aircraft) {
-      if (ac.phase === 'approach' || ac.phase === 'landing') {
-        const existing = st.approachMap.get(ac.id);
-        if (existing && existing.phase !== ac.phase) {
-          // Phase flipped between approach ↔ landing — recreate for correct sign.
-          disposeApproachIndicator(existing, scene);
-          st.approachMap.delete(ac.id);
-        }
-        if (!st.approachMap.has(ac.id)) {
-          st.approachMap.set(ac.id, createApproachIndicator(scene, ac.phase));
-        }
-      } else {
-        const entry = st.approachMap.get(ac.id);
-        if (entry) {
-          disposeApproachIndicator(entry, scene);
-          st.approachMap.delete(ac.id);
-        }
-      }
-    }
 
     // ── Sync glide slope projected path lines ────────────────────────────────
     // Only the SINGLE approach-phase aircraft nearest to any runway threshold
@@ -2624,9 +2544,7 @@ export default function AirspaceView3D({
         // Clean up any takeoff indicator for the despawned aircraft
         const ti = st.takeoffMap.get(id);
         if (ti) { disposeTakeoffIndicator(ti, scene); st.takeoffMap.delete(id); }
-        // Clean up any approach/landing indicator for the despawned aircraft
-        const ai = st.approachMap.get(id);
-        if (ai) { disposeApproachIndicator(ai, scene); st.approachMap.delete(id); }
+
         // Clean up any glide slope line for the despawned aircraft
         const gs = st.glideSlopeMap.get(id);
         if (gs) { disposeGlideSlopeLine(gs, scene); st.glideSlopeMap.delete(id); }
