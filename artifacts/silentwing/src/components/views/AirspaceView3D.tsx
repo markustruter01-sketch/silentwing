@@ -1185,18 +1185,25 @@ export default function AirspaceView3D({
     console.log(`[3D CAM] prop→scene sync: ${st.cameraMode} → ${cameraMode}`);
     if (cameraMode === 'follow' && st.selectedAcId) {
       if (st.directorMode) {
-        // Director: seed the smooth look-at from the camera's current forward
-        // direction so the first frame doesn't jump to scene origin.
-        const dir = new THREE.Vector3();
-        st.camera.getWorldDirection(dir);
-        st.directorLookAt.copy(st.camera.position).addScaledVector(dir, 500);
+        // Director: seed directorLookAt directly to the aircraft's current
+        // renderPos so the camera points at the plane on frame 1 rather than
+        // drifting from wherever the camera was previously aimed.
+        const b = st.acMap.get(st.selectedAcId);
+        if (b) {
+          st.directorLookAt.copy(b.renderPos);
+        } else {
+          const dir = new THREE.Vector3();
+          st.camera.getWorldDirection(dir);
+          st.directorLookAt.copy(st.camera.position).addScaledVector(dir, 500);
+        }
         // First-ever director follow entry → start the 15 s page-load intro glide.
         if (!st.directorIntroStarted) {
           st.directorIntroStarted = true;
           st.directorIntroEnd     = performance.now() + 15_000;
         }
       }
-      // Non-director fly-to setup (used when entering follow manually).
+      // Fly-to setup — applies to both director and non-director so the camera
+      // arrives at the aircraft quickly rather than gliding from a distant position.
       st.flyFrom.copy(st.camera.position);
       st.flyProgress = 0;
       st.cameraMode  = 'follow';
@@ -1433,12 +1440,24 @@ export default function AirspaceView3D({
               const liveTarget = b.renderPos.clone().add(offset);
 
               if (st.directorMode) {
-                // ── Director: one continuous gliding shot ──────────────────
-                // On first page-load use the slower intro lerp (15 s), then
-                // switch to the normal 8 s rate once the intro window closes.
-                const isIntro  = st.directorIntroStarted && performance.now() < st.directorIntroEnd;
-                const posLerp  = isIntro ? DIRECTOR_POS_LERP_INTRO : DIRECTOR_POS_LERP;
-                camera.position.lerp(liveTarget, posLerp);
+                // ── Director: fly-to then cinematic glide ──────────────────
+                // Phase 1 (intro only): on first page-load glide slowly from
+                //   orbit into director position (15 s, lerp 0.003/frame).
+                // Phase 2 (aircraft cut): fast fly-to (same 5 s as manual
+                //   follow) so the camera arrives near the aircraft immediately
+                //   rather than drifting across empty space for 8+ s.
+                // Phase 3 (arrived): slow cinematic lerp (0.006/frame ≈ 8 s
+                //   95%) to track the aircraft as it moves.
+                const isIntro = st.directorIntroStarted && performance.now() < st.directorIntroEnd;
+                if (isIntro) {
+                  camera.position.lerp(liveTarget, DIRECTOR_POS_LERP_INTRO);
+                } else if (st.flyProgress < 1) {
+                  st.flyProgress = Math.min(st.flyProgress + FLY_SPEED_NORMAL, 1);
+                  const t = easeInOut(st.flyProgress);
+                  camera.position.lerpVectors(st.flyFrom, liveTarget, t);
+                } else {
+                  camera.position.lerp(liveTarget, DIRECTOR_POS_LERP);
+                }
                 st.directorLookAt.lerp(b.renderPos, DIRECTOR_LOOK_LERP);
                 camera.lookAt(st.directorLookAt);
               } else {

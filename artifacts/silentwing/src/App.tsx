@@ -266,18 +266,17 @@ export default function App() {
   /** Blocks the director dwell-timer tick while the camera interrupt is active. */
   const alertInterruptActiveRef = useRef(false);
 
-  // Detect newly-fired CRITICAL alerts and kick off the 3D camera interrupt.
+  // Detect newly-fired alerts (all severities) and kick off the 3D camera interrupt.
   useEffect(() => {
-    const currentCriticalIds = new Set(
-      activeAlerts.filter(a => a.severity === 'critical').map(a => a.id),
-    );
+    const currentAlertIds = new Set(activeAlerts.map(a => a.id));
     let newId: string | null = null;
-    for (const id of currentCriticalIds) {
+    for (const id of currentAlertIds) {
       if (!prevCriticalIdsRef.current.has(id)) { newId = id; break; }
     }
-    prevCriticalIdsRef.current = currentCriticalIds;
+    prevCriticalIdsRef.current = currentAlertIds;
     if (newId) {
-      console.log(`[APP] new CRITICAL alert ${newId} — camera interrupt`);
+      const sev = activeAlerts.find(a => a.id === newId)?.severity ?? 'unknown';
+      console.log(`[APP] new ${sev} alert ${newId} — camera interrupt`);
       alertInterruptActiveRef.current = true;
       setAlertFocusId(newId);
     }
