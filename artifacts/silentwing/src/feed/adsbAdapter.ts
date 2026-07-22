@@ -19,24 +19,9 @@ import type {
   FlightPhase,
   Unsubscribe,
 } from '../types';
-import { REAL_GATES } from '../data/ybbn_real';
-
-// ── Coordinate origin — YBBN centre ──────────────────────────────────────────
-// All sim coordinates are in metres, origin = YBBN centre, +x east, +y south
-// (SVG convention: +y points downward/south on screen).
-const LAT0     = -27.384;
-const LON0     = 153.117;
-const LAT0_RAD = LAT0 * (Math.PI / 180);
-
-/**
- * Equirectangular projection: WGS-84 lat/lon → scene metres.
- * Centred on YBBN.  Same +x = east, +y = south frame the sim uses.
- */
-function project(lat: number, lon: number): { x: number; y: number } {
-  const x =  (lon - LON0) * 111_320 * Math.cos(LAT0_RAD); // east → +x
-  const y = -(lat - LAT0) * 110_540;                       // north = −y (SVG south = +y)
-  return { x, y };
-}
+import type { GatePos } from '../data/ybbn_real';
+import type { AirportProfile } from '../airports/types';
+import { deriveActiveRunwayDirection } from '../airports/helpers';
 
 // ── Phase heuristic ───────────────────────────────────────────────────────────
 // Real ADS-B carries no flight-phase field.  We derive a best-effort phase
@@ -45,7 +30,7 @@ function project(lat: number, lon: number): { x: number; y: number } {
 // Gate proximity:  gs < AT_GATE_GS_KT  AND  within AT_GATE_DIST_M of any gate
 //                  → 'at-gate'.  Otherwise ground aircraft are 'taxi-in'.
 //
-// Coordinate note: REAL_GATES use ybbn_real.ts native frame (+y = north).
+// Coordinate note: geometry gates use ybbn_real.ts native frame (+y = north).
 // The adapter uses +y = south (SVG convention), so the gate y must be negated
 // when computing the distance: dy = acY − (−gateY) = acY + gateY.
 
@@ -58,12 +43,13 @@ function derivePhase(
   baroRate: number | undefined,
   acX: number,
   acY: number,
+  gates: GatePos[],
 ): FlightPhase {
   if (altFt < 50) {
     // On the ground — distinguish at-gate from taxiing
     if (gs < AT_GATE_GS_KT) {
       const d2 = AT_GATE_DIST_M * AT_GATE_DIST_M;
-      for (const gate of REAL_GATES) {
+      for (const gate of gates) {
         const dx = acX - gate.pos[0];
         const dy = acY + gate.pos[1]; // y-axis flip: ybbn_real +y=north ↔ adapter +y=south
         if (dx * dx + dy * dy <= d2) return 'at-gate';
@@ -117,7 +103,12 @@ interface RawAc {
 
 
 // ── Normalise one raw entry → Aircraft (or null if invalid) ──────────────────
-function normalise(raw: RawAc): (Aircraft & { isGroundVehicle: boolean }) | null {
+function normalise(
+  raw: RawAc,
+  projectFn: (lat: number, lon: number) => { x: number; y: number },
+  gates: GatePos[],
+  destinationIcao: string,
+): (Aircraft & { isGroundVehicle: boolean }) | null {
   // Rule 3: skip entries with no position
   if (raw.lat == null || raw.lon == null) return null;
 
@@ -144,20 +135,20 @@ function normalise(raw: RawAc): (Aircraft & { isGroundVehicle: boolean }) | null
   // Heading fallback chain
   const heading = raw.track ?? raw.true_heading ?? raw.mag_heading ?? 0;
 
-  const { x, y } = project(raw.lat, raw.lon);
+  const { x, y } = projectFn(raw.lat, raw.lon);
 
   return {
     id:             raw.hex,
     callsign,
     type:           raw.t ?? 'UNKN',
-    phase:          isGroundVehicle ? 'taxi-in' : derivePhase(altFt, Math.round(raw.gs ?? 0), raw.baro_rate, x, y),
+    phase:          isGroundVehicle ? 'taxi-in' : derivePhase(altFt, Math.round(raw.gs ?? 0), raw.baro_rate, x, y, gates),
     position:       { x, y, alt: altFt },
     heading,
     groundSpeed:    Math.round(raw.gs ?? 0),
     assignedRunway: undefined,
     assignedGate:   undefined,
     origin:         undefined,
-    destination:    'YBBN',
+    destination:    destinationIcao,
     confidence:     1.0,
     // FIX B: pass seen_pos through so the 3D view can flag stale tracks
     seenPos:        raw.seen_pos ?? 0,
@@ -192,7 +183,27 @@ export class AdsbAdapter implements DataFeedAdapter {
   // FIX 1: in-flight guard — prevents concurrent overlapping requests
   private inFlight  = false;
 
-  constructor() {
+  private readonly profile: AirportProfile;
+  /** Equirectangular project function bound to the profile's origin. */
+  private readonly projectFn: (lat: number, lon: number) => { x: number; y: number };
+  /** API endpoint URL built from profile.origin + fetchRadiusNm. */
+  private readonly apiUrl: string;
+
+  constructor(profile: AirportProfile) {
+    this.profile = profile;
+
+    // Build projection closure from profile origin once
+    const { lat: lat0, lon: lon0 } = profile.origin;
+    const lat0Rad = lat0 * (Math.PI / 180);
+    this.projectFn = (lat: number, lon: number) => ({
+      x:  (lon - lon0) * 111_320 * Math.cos(lat0Rad),
+      y: -(lat - lat0) * 110_540,
+    });
+
+    // Build API URL with query params so the server-side proxy can forward
+    // requests to any airport without hardcoded YBBN coordinates.
+    this.apiUrl = `/api/adsb?lat=${lat0}&lon=${lon0}&dist=${profile.fetchRadiusNm}`;
+
     this.latest = this._empty(Date.now());
     this._start();
   }
@@ -287,7 +298,7 @@ export class AdsbAdapter implements DataFeedAdapter {
     if (this.inFlight) return;
     this.inFlight = true;
     try {
-      const res = await fetch('/api/adsb');
+      const res = await fetch(this.apiUrl);
 
       if (!res.ok) {
         this.lastError = `HTTP ${res.status}`;
@@ -310,12 +321,14 @@ export class AdsbAdapter implements DataFeedAdapter {
       this.lastPoll  = Date.now();
 
       const rawList: RawAc[] = data.ac ?? [];
+      const gates = this.profile.geometry.gates;
+      const icao  = this.profile.icao;
 
       const aircraft: Aircraft[] = [];
       let gvCount = 0, anonCount = 0, atGateCount = 0;
 
       for (const raw of rawList) {
-        const norm = normalise(raw);
+        const norm = normalise(raw, this.projectFn, gates, icao);
         if (!norm) continue;
         if (norm.isGroundVehicle)    gvCount++;
         if (norm.callsign === norm.id) anonCount++;  // callsign fell back to hex
@@ -331,14 +344,19 @@ export class AdsbAdapter implements DataFeedAdapter {
         ` anonymous=${anonCount} at-gate=${atGateCount}`,
       );
 
+      const sim = this.profile.sim;
+      const windDir   = sim?.defaultWindDir   ?? 190;
+      const windSpeed = sim?.defaultWindSpeed ?? 12;
+      const activeDir = deriveActiveRunwayDirection(this.profile, windDir, windSpeed);
+
       this.latest = {
         t:       data.now ?? Date.now(),
         aircraft,
         alerts:  [],
         weather: {
-          windDir:               190,
-          windSpeed:             12,
-          activeRunwayDirection: '01',
+          windDir,
+          windSpeed,
+          activeRunwayDirection: activeDir,
           precipitationCells:    [],
         },
       };
@@ -354,14 +372,17 @@ export class AdsbAdapter implements DataFeedAdapter {
   }
 
   private _empty(t: number): WorldSnapshot {
+    const sim     = this.profile.sim;
+    const windDir = sim?.defaultWindDir   ?? 190;
+    const windSpd = sim?.defaultWindSpeed ?? 12;
     return {
       t,
       aircraft: [],
       alerts:   [],
       weather:  {
-        windDir:               190,
-        windSpeed:             12,
-        activeRunwayDirection: '01',
+        windDir,
+        windSpeed:             windSpd,
+        activeRunwayDirection: deriveActiveRunwayDirection(this.profile, windDir, windSpd),
         precipitationCells:    [],
       },
     };

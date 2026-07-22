@@ -3,7 +3,7 @@
 // SimEngine owns the full simulation: spawning aircraft, ticking the state
 // machine at 10 Hz, and notifying subscribers.
 //
-// getSimAdapter() is the ONLY symbol exported for use outside /src/sim/.
+// getSimAdapter(profile) is the ONLY symbol exported for use outside /src/sim/.
 // It returns a DataFeedAdapter — the typed boundary the UI may cross.
 // Nothing else in this file is reachable by UI components.
 
@@ -21,22 +21,14 @@ import {
   routeIntlArrival,
   routeIntlDeparture,
 } from './routes';
-import {
-  TICK_MS,
-  DOM_GATE_Y,
-  INTL_GATE_Y,
-  domGateX,
-  intlGateX,
-} from './constants';
+import { TICK_MS } from './constants';
+import type { AirportProfile } from '../airports/types';
+import { deriveActiveRunwayDirection } from '../airports/helpers';
 
 // ── Static data pools ─────────────────────────────────────────────────────────
 const CALLSIGN_PFX = ['QFA', 'VOZ', 'JST', 'TGW', 'NZX', 'SIA', 'UAL', 'BAW', 'CPA', 'MAS'];
 const AC_TYPES     = ['B738', 'A320', 'B77W', 'A333', 'B789', 'A220', 'E190', 'B763'];
 const AIRPORTS     = ['YSSY', 'YMML', 'YPPH', 'YBCS', 'YPAD', 'NZAA', 'WSSS', 'VHHH', 'KLAX', 'EGLL'];
-
-// Gate descriptors (must match ybbn.ts generators)
-const DOM_GATES  = Array.from({ length: 12 }, (_, i) => ({ id: `D${i + 1}`, x: domGateX(i),  y: DOM_GATE_Y  }));
-const INTL_GATES = Array.from({ length:  8 }, (_, i) => ({ id: `I${i + 1}`, x: intlGateX(i), y: INTL_GATE_Y }));
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 let _uid = 0;
@@ -52,6 +44,11 @@ class SimEngine {
   private timer: ReturnType<typeof setInterval> | null = null;
   private usedGates = new Set<string>();
   private nextSpawn = 0;
+  private profile: AirportProfile;
+
+  constructor(profile: AirportProfile) {
+    this.profile = profile;
+  }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
@@ -123,8 +120,11 @@ class SimEngine {
   // ── Spawning ─────────────────────────────────────────────────────────────────
 
   private _spawnOne(): SimAircraft | null {
+    const sim    = this.profile.sim;
+    if (!sim) return null;
+
     const isDom  = Math.random() < 0.6;
-    const pool   = isDom ? DOM_GATES : INTL_GATES;
+    const pool   = isDom ? sim.domGates : sim.intlGates;
     const free   = pool.filter(g => !this.usedGates.has(g.id));
     if (!free.length) return null;
 
@@ -143,7 +143,7 @@ class SimEngine {
       ? routeDomesticDeparture(gate.x, gate.y)
       : routeIntlDeparture(gate.x, gate.y);
 
-    const ac = new SimAircraft(id, cs, type, org, 'YBBN', gate.id, arr, dep);
+    const ac = new SimAircraft(id, cs, type, org, this.profile.icao, gate.id, arr, dep);
     this.fleet.set(id, ac);
     return ac;
   }
@@ -151,6 +151,11 @@ class SimEngine {
   // ── Snapshot builder ─────────────────────────────────────────────────────────
 
   private _buildSnapshot(t: number): WorldSnapshot {
+    const sim       = this.profile.sim;
+    const windDir   = sim?.defaultWindDir   ?? 190;
+    const windSpeed = sim?.defaultWindSpeed ?? 12;
+    const activeDir = deriveActiveRunwayDirection(this.profile, windDir, windSpeed);
+
     return {
       t,
       aircraft: [...this.fleet.values()]
@@ -158,9 +163,9 @@ class SimEngine {
         .map(a => a.toAircraft()),
       alerts: [...this.alerts],
       weather: {
-        windDir: 190,
-        windSpeed: 12,
-        activeRunwayDirection: '01',
+        windDir,
+        windSpeed,
+        activeRunwayDirection: activeDir,
         precipitationCells: [],
       },
     };
@@ -206,13 +211,17 @@ class SimEngine {
 }
 
 // ── Singleton ─────────────────────────────────────────────────────────────────
-// One engine per browser session; safe to call getSimAdapter() multiple times.
+// One engine per airport per browser session.  Re-created when the airport ICAO
+// changes.  Safe to call getSimAdapter() multiple times for the same airport.
 
 let _instance: SimEngine | null = null;
+let _instanceIcao = '';
 
-export function getSimAdapter(): DataFeedAdapter {
-  if (!_instance) {
-    _instance = new SimEngine();
+export function getSimAdapter(profile: AirportProfile): DataFeedAdapter {
+  if (!_instance || _instanceIcao !== profile.icao) {
+    if (_instance) _instance.stop();
+    _instance     = new SimEngine(profile);
+    _instanceIcao = profile.icao;
     _instance.start();
   }
   return _instance.asAdapter();

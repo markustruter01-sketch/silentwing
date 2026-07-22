@@ -21,14 +21,6 @@ const CRITICAL_TTC_S   = 45;      // < 45 s → critical
 const CAUTION_TTC_S    = 90;      // < 90 s → caution (≥ 45)
                                   // ≥ 90 s → advisory
 
-// ── Terminal-area filter ───────────────────────────────────────────────────────
-// Mirror of the separation detector: only aircraft within 15 nm of YBBN and
-// below 15 000 ft are fed into the predicted-conflict detector.
-const TERMINAL_RADIUS_NM   = 7.5;
-const TERMINAL_RADIUS_M    = TERMINAL_RADIUS_NM * NM;
-const TERMINAL_RADIUS_M2   = TERMINAL_RADIUS_M * TERMINAL_RADIUS_M;
-const TERMINAL_ALT_CEIL_FT = 15_000;
-
 // ── Genuine-airborne guard ────────────────────────────────────────────────────
 // Require meaningful groundspeed so parked/slow GA at elevated aerodromes
 // (Archerfield alt_geom 175–350 ft) cannot enter the airborne pool.
@@ -45,6 +37,12 @@ export interface PredictedConflictFinding {
   ttcSeconds:   number;     // time-to-conflict (seconds)
   predClosestNm: number;    // predicted closest horizontal separation (nm)
   predClosestFt: number;    // predicted closest vertical separation (ft)
+}
+
+// ── Profile shape used by this detector ───────────────────────────────────────
+interface TerminalProfile {
+  terminalRadiusNm:  number;
+  terminalAltCeilFt: number;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -80,15 +78,19 @@ export function detectPredictedConflict(
   aircraft: Aircraft[],
   /** Set of separation-alert pair keys active RIGHT NOW ('separation:idA:idB'). */
   activeSeparationKeys: Set<string>,
+  profile: TerminalProfile,
 ): PredictedConflictFinding[] {
+  const termRadM  = profile.terminalRadiusNm * NM;
+  const termRadM2 = termRadM * termRadM;
+
   // Terminal-area, genuine-airborne, fresh tracks only.
   // Same exclusion logic as the separation detector — see separation.ts for rationale.
   const airborne = aircraft.filter(ac => {
     if (ac.onGround) return false;
     if (ac.position.alt <= 50) return false;
     if (ac.groundSpeed < MIN_AIRBORNE_GS_KT) return false;
-    if (ac.position.alt >= TERMINAL_ALT_CEIL_FT) return false;
-    if (ac.position.x ** 2 + ac.position.y ** 2 > TERMINAL_RADIUS_M2) return false;
+    if (ac.position.alt >= profile.terminalAltCeilFt) return false;
+    if (ac.position.x ** 2 + ac.position.y ** 2 > termRadM2) return false;
     if ((ac.seenPos ?? 0) > STALE_SKIP_S) return false;
     return true;
   });

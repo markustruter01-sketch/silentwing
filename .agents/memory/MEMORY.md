@@ -1,5 +1,6 @@
-- [SilentWing phase log](silentwing-phases.md) — phase completion status, key architectural decisions per phase; 6A COMPLETE
+- [SilentWing phase log](silentwing-phases.md) — phase completion status, key architectural decisions per phase; multi-airport refactor COMPLETE
 - [Phase 6A alert architecture](silentwing-alerts.md) — AlertEngine, SWAlert type, separation detector, AlertShell layout
 - [Three.js camera state machine](silentwing-camera.md) — CameraMode type, Esc chain, prop-sync pattern for rAF loop
 - [Taxi route geometry rules](silentwing-taxi-geometry.md) — why intl gates moved to y=180, INTL_APRON_W waypoint rationale
 - [Trail fade + velocity extrapolation](silentwing-trail-extrap.md) — per-vertex alpha ShaderMaterial for trails; age-compensated lastKnownPos; backwards-snap root cause and fix
+- [Multi-airport refactor](silentwing-airport-refactor.md) — AirportProfile, helpers, wind convention, approach corridor derivation

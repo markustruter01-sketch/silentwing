@@ -1,15 +1,7 @@
-import React, { useCallback, useRef, useState, useEffect } from 'react';
-import {
-  REAL_RUNWAYS,
-  REAL_TAXIWAYS,
-  REAL_APRONS,
-  REAL_GATES,
-} from '@/data/ybbn_real';
-import {
-  GEO_POLYGONS,
-  VIEWBOX_STR,
-  VIEWBOX,
-} from '@/data/ybbn';
+import React, { useCallback, useRef, useState } from 'react';
+import type { Polyline, GatePos } from '@/data/ybbn_real';
+import type { GeoPolygon } from '@/data/ybbn';
+import { useAirport } from '@/airports/context';
 import type { Aircraft } from '@/types';
 
 // ── Y-flip: ybbn_real uses +y=north; this SVG uses +y=south ──────────────────
@@ -43,26 +35,24 @@ const C = {
 function pts(arr: [number, number][]): string {
   return arr.map(([x, y]) => `${x},${y}`).join(' ');
 }
-function d(arr: [number, number][]): string {
-  if (!arr.length) return '';
-  const [first, ...rest] = arr;
-  return `M${first[0]},${first[1]} ` + rest.map(([x, y]) => `L${x},${y}`).join(' ') + ' Z';
-}
 function polyline(arr: [number, number][]): string {
   return arr.map(([x, y]) => `${x},${y}`).join(' ');
 }
 
+// ─── Sub-component prop shapes ────────────────────────────────────────────────
+interface Viewbox { minX: number; minY: number; width: number; height: number }
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-const GeographyLayer: React.FC = () => (
+const GeographyLayer: React.FC<{ viewbox: Viewbox; geoPolygons: GeoPolygon[] }> = ({ viewbox, geoPolygons }) => (
   <g id="geography">
     {/* Background land fill */}
     <rect
-      x={VIEWBOX.minX} y={VIEWBOX.minY}
-      width={VIEWBOX.width} height={VIEWBOX.height}
+      x={viewbox.minX} y={viewbox.minY}
+      width={viewbox.width} height={viewbox.height}
       fill={C.land}
     />
-    {GEO_POLYGONS.map(p => (
+    {geoPolygons.map(p => (
       <polygon
         key={p.id}
         points={pts(p.points)}
@@ -75,9 +65,9 @@ const GeographyLayer: React.FC = () => (
 
 // ── Real airport geometry layers — all Y-flipped via fy() ────────────────────
 
-const ApronsLayer: React.FC = () => (
+const ApronsLayer: React.FC<{ aprons: [number, number][][] }> = ({ aprons }) => (
   <g id="aprons">
-    {REAL_APRONS.map((apron, i) => (
+    {aprons.map((apron, i) => (
       <polygon
         key={i}
         points={pts(fy(apron))}
@@ -89,9 +79,9 @@ const ApronsLayer: React.FC = () => (
   </g>
 );
 
-const GatesLayer: React.FC = () => (
+const GatesLayer: React.FC<{ gates: GatePos[] }> = ({ gates }) => (
   <g id="gates">
-    {REAL_GATES.map((g, i) => {
+    {gates.map((g, i) => {
       const [gx, gy] = [g.pos[0], -g.pos[1]]; // Y-flip
       return (
         <g key={i}>
@@ -111,9 +101,9 @@ const GatesLayer: React.FC = () => (
   </g>
 );
 
-const TaxiwaysLayer: React.FC = () => (
+const TaxiwaysLayer: React.FC<{ taxiways: Polyline[] }> = ({ taxiways }) => (
   <g id="taxiways">
-    {REAL_TAXIWAYS.map((t, i) => {
+    {taxiways.map((t, i) => {
       const ptsStr = polyline(fy(t.coords));
       return (
         <g key={i}>
@@ -142,9 +132,9 @@ const TaxiwaysLayer: React.FC = () => (
   </g>
 );
 
-const RunwaysLayer: React.FC = () => (
+const RunwaysLayer: React.FC<{ runways: Polyline[] }> = ({ runways }) => (
   <g id="runways">
-    {REAL_RUNWAYS.map((rw, i) => {
+    {runways.map((rw, i) => {
       const coords  = fy(rw.coords);
       const ptsStr  = polyline(coords);
       const firstPt = coords[0];
@@ -199,29 +189,29 @@ const RunwaysLayer: React.FC = () => (
   </g>
 );
 
-const OverlayLayer: React.FC = () => {
+const OverlayLayer: React.FC<{ viewbox: Viewbox; icao: string; nameShort: string }> = ({ viewbox, icao, nameShort }) => {
   // North arrow & scale bar (in SVG coordinate space, placed at top-left of viewbox)
-  const NAX = VIEWBOX.minX + 160;
-  const NAY = VIEWBOX.minY + 250;
+  const NAX = viewbox.minX + 160;
+  const NAY = viewbox.minY + 250;
 
   return (
     <g id="overlay">
       {/* ICAO ident */}
       <text
-        x={VIEWBOX.minX + 120} y={VIEWBOX.minY + 120}
+        x={viewbox.minX + 120} y={viewbox.minY + 120}
         fill={C.labelBright} fontSize={72} fontFamily="Inter, system-ui, sans-serif"
         fontWeight={700} letterSpacing={6}
         opacity={0.5}
       >
-        YBBN
+        {icao}
       </text>
       <text
-        x={VIEWBOX.minX + 120} y={VIEWBOX.minY + 190}
+        x={viewbox.minX + 120} y={viewbox.minY + 190}
         fill={C.label} fontSize={40} fontFamily="Inter, system-ui, sans-serif"
         fontWeight={400} letterSpacing={3}
         opacity={0.4}
       >
-        BRISBANE INTL
+        {nameShort}
       </text>
 
       {/* North arrow */}
@@ -238,7 +228,7 @@ const OverlayLayer: React.FC = () => {
       </g>
 
       {/* Scale bar: 1000m */}
-      <g transform={`translate(${VIEWBOX.minX + 120}, ${VIEWBOX.minY + 500})`}>
+      <g transform={`translate(${viewbox.minX + 120}, ${viewbox.minY + 500})`}>
         <line x1={0} y1={0} x2={1000} y2={0} stroke={C.northArrow} strokeWidth={4} />
         <line x1={0} y1={-20} x2={0} y2={20} stroke={C.northArrow} strokeWidth={4} />
         <line x1={1000} y1={-20} x2={1000} y2={20} stroke={C.northArrow} strokeWidth={4} />
@@ -363,6 +353,10 @@ const AirfieldView2D: React.FC<AirfieldView2DProps> = ({
   onAircraftClick,
   selectedAircraftId,
 }) => {
+  const profile = useAirport();
+  const { geometry, viewbox, icao, nameShort } = profile;
+  const viewBoxStr = `${viewbox.minX} ${viewbox.minY} ${viewbox.width} ${viewbox.height}`;
+
   const svgRef = useRef<SVGSVGElement>(null);
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
   const dragRef = useRef<{ startX: number; startY: number; startTx: number; startTy: number } | null>(null);
@@ -416,7 +410,7 @@ const AirfieldView2D: React.FC<AirfieldView2DProps> = ({
         ref={svgRef}
         width="100%"
         height="100%"
-        viewBox={VIEWBOX_STR}
+        viewBox={viewBoxStr}
         preserveAspectRatio="xMidYMid meet"
         style={{
           transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
@@ -424,17 +418,17 @@ const AirfieldView2D: React.FC<AirfieldView2DProps> = ({
           transition: dragRef.current ? 'none' : 'transform 0.05s ease-out',
         }}
       >
-        <GeographyLayer />
-        <ApronsLayer />
-        <TaxiwaysLayer />
-        <GatesLayer />
-        <RunwaysLayer />
+        <GeographyLayer viewbox={viewbox} geoPolygons={geometry.geoPolygons} />
+        <ApronsLayer    aprons={geometry.aprons} />
+        <TaxiwaysLayer  taxiways={geometry.taxiways} />
+        <GatesLayer     gates={geometry.gates} />
+        <RunwaysLayer   runways={geometry.runways} />
         <AircraftLayer
           aircraft={aircraft}
           onAircraftClick={onAircraftClick}
           selectedId={selectedAircraftId}
         />
-        <OverlayLayer />
+        <OverlayLayer viewbox={viewbox} icao={icao} nameShort={nameShort} />
       </svg>
 
       {/* Zoom controls */}

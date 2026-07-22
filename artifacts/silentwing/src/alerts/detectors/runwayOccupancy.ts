@@ -1,11 +1,12 @@
 // ── Runway-occupancy detector (Phase 6B) ─────────────────────────────────────
 //
-// Flags when 2+ aircraft occupy the same YBBN runway corridor simultaneously.
-// Uses real YBBN runway polylines from ybbn_real.ts.
+// Flags when 2+ aircraft occupy the same runway corridor simultaneously.
 // Applies to ground + low-altitude aircraft only (alt < ALT_CUTOFF_FT).
+// Runway geometry comes from the AirportProfile so no YBBN-specific imports
+// are needed in this file.
 
 import type { Aircraft } from '../../types';
-import { REAL_RUNWAYS }  from '../../data/ybbn_real';
+import type { Polyline }  from '../../data/ybbn_real';
 import type { SWAlertSeverity } from '../types';
 
 // ── Tunable constants ─────────────────────────────────────────────────────────
@@ -15,13 +16,13 @@ const ALT_CUTOFF_FT       = 500;  // max altitude to be "on/near" runway
 const MOVING_SPD_KTS      = 5;    // ground speed above which aircraft is "moving"
 
 // ── Terminal-area filter ───────────────────────────────────────────────────────
-// Runway-occupancy intentionally includes ground aircraft (that is its job), but
-// only for aircraft within the YBBN terminal area.  This prevents Archerfield
-// runway pairings from generating spurious occupancy alerts.
 const NM                  = 1852;
-const TERMINAL_RADIUS_NM  = 7.5;
-const TERMINAL_RADIUS_M   = TERMINAL_RADIUS_NM * NM;
-const TERMINAL_RADIUS_M2  = TERMINAL_RADIUS_M * TERMINAL_RADIUS_M;
+
+// ── Profile shape used by this detector ───────────────────────────────────────
+interface RunwayProfile {
+  geometry:         { runways: Polyline[] };
+  terminalRadiusNm: number;
+}
 
 // ── Output shape ──────────────────────────────────────────────────────────────
 export interface RunwayOccupancyFinding {
@@ -112,37 +113,40 @@ function isInCorridor(
 }
 
 /**
- * REAL_RUNWAYS from ybbn_real.ts are in the native OSM/geo frame where +y = north.
- * Aircraft positions from the ADS-B adapter use +y = south (SVG convention).
+ * Geometry polylines use +y=north; aircraft positions use +y=south (SVG).
  * Apply the same Y-flip the 3D view uses so geometry and aircraft share one frame.
  */
 function flipY(coords: [number, number][]): [number, number][] {
   return coords.map(([x, y]) => [x, -y] as [number, number]);
 }
 
-// Pre-compute extended runway polylines once (module-level, not per-call).
-// Flip Y first so coords match the aircraft position frame (+y = south).
-const EXTENDED_RUNWAYS = REAL_RUNWAYS.map(rwy => ({
-  ref:    rwy.ref,
-  coords: extendPolyline(flipY(rwy.coords), END_EXTENSION_M),
-}));
-
 // ── Detector ──────────────────────────────────────────────────────────────────
-export function detectRunwayOccupancy(aircraft: Aircraft[]): RunwayOccupancyFinding[] {
-  // Ground + low-altitude aircraft within the YBBN terminal area.
+export function detectRunwayOccupancy(
+  aircraft: Aircraft[],
+  profile: RunwayProfile,
+): RunwayOccupancyFinding[] {
+  const termRadM  = profile.terminalRadiusNm * NM;
+  const termRadM2 = termRadM * termRadM;
+
+  // Extended runway corridors — computed per call from profile geometry.
+  // Flip Y first so coords match the aircraft position frame (+y = south).
+  const extendedRunways = profile.geometry.runways.map(rwy => ({
+    ref:    rwy.ref,
+    coords: extendPolyline(flipY(rwy.coords), END_EXTENSION_M),
+  }));
+
+  // Ground + low-altitude aircraft within the terminal area.
   // seenPos check is intentionally relaxed (≤ 60 s) because ground radar may
   // update more slowly, but truly ancient tracks are still skipped.
-  // The terminal-area radius filter prevents Archerfield runway pairings from
-  // generating spurious occupancy alerts.
   const nearGround = aircraft.filter(ac =>
     ac.position.alt < ALT_CUTOFF_FT &&
-    ac.position.x ** 2 + ac.position.y ** 2 <= TERMINAL_RADIUS_M2 &&
+    ac.position.x ** 2 + ac.position.y ** 2 <= termRadM2 &&
     (ac.seenPos ?? 0) <= 60,
   );
 
   const findings: RunwayOccupancyFinding[] = [];
 
-  for (const rwy of EXTENDED_RUNWAYS) {
+  for (const rwy of extendedRunways) {
     // Skip unnamed stubs
     if (!rwy.ref) continue;
 

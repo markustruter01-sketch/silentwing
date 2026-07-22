@@ -14,8 +14,10 @@ import * as THREE from 'three';
 import { useEffect, useRef } from 'react';
 import type { Aircraft, WorldSnapshot } from '@/types';
 import { isAirborne } from '@/types';
-import { REAL_RUNWAYS, REAL_TAXIWAYS, REAL_APRONS } from '@/data/ybbn_real';
+import type { Polyline } from '@/data/ybbn_real';
 import type { SWAlert, SWAlertSeverity } from '@/alerts/types';
+import { useAirport } from '@/airports/context';
+import { computeRunwayThresholds, computeApproachCorridors } from '@/airports/helpers';
 
 // ── Camera mode — exported so App can type-check ──────────────────────────────
 export type CameraMode = 'orbit' | 'manual' | 'inspect' | 'follow' | 'returning';
@@ -420,13 +422,17 @@ function flipRealY(coords: [number, number][]): [number, number][] {
   return coords.map(([x, y]) => [x, -y] as [number, number]);
 }
 
-function buildGroundGeometry(): THREE.Group {
+function buildGroundGeometry(
+  runways:  Polyline[],
+  taxiways: Polyline[],
+  aprons:   [number, number][][],
+): THREE.Group {
   const g = new THREE.Group();
 
   // Runways — 3 parallel lines (centre ± 20 m) so they read ~3× wider than taxiways
   const rwMat = new THREE.LineBasicMaterial({ color: 0xC8CDD4, transparent: true, opacity: 0.60 });
   const RW_HALF_WIDTH = 20; // metres offset each side of centreline
-  for (const rw of REAL_RUNWAYS) {
+  for (const rw of runways) {
     const base = flipRealY(rw.coords);
     // Perpendicular direction derived from overall runway axis
     const [x0, z0] = base[0], [xN, zN] = base[base.length - 1];
@@ -441,7 +447,7 @@ function buildGroundGeometry(): THREE.Group {
 
   // Taxiways — 326 segments merged into one LineSegments draw call
   const twPos: number[] = [];
-  for (const tw of REAL_TAXIWAYS) {
+  for (const tw of taxiways) {
     const coords = flipRealY(tw.coords);
     for (let i = 0; i < coords.length - 1; i++) {
       const [ax, ay] = coords[i], [bx, by] = coords[i + 1];
@@ -457,7 +463,7 @@ function buildGroundGeometry(): THREE.Group {
 
   // Apron polygon outline
   const apronMat = new THREE.LineBasicMaterial({ color: 0x334155, transparent: true, opacity: 0.60 });
-  for (const apron of REAL_APRONS) {
+  for (const apron of aprons) {
     const coords = flipRealY(apron);
     const pts = [...coords, coords[0]].map(([x, y]) => new THREE.Vector3(x, 0, y));
     g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), apronMat));
@@ -486,28 +492,22 @@ function makeRunwayLabel(text: string): THREE.Sprite {
   return sp;
 }
 
-// Runway threshold positions in Three.js scene coords (after flipRealY applied).
-// Derived from REAL_RUNWAYS first/last coords: [label, x, z].
-const RUNWAY_THRESHOLDS: [string, number, number][] = [
-  ['19R',      490.6,   -3032.4],
-  ['01L',     -1007.7,   -102.8],
-  ['01R',      120.3,   2079.9 ],
-  ['19L',     1710.8,  -1030.6 ],
-];
-
-function buildAirportAnnotations(): THREE.Group {
+function buildAirportAnnotations(
+  thresholds:       Array<[string, number, number]>,
+  terminalLabelPos: { x: number; z: number },
+): THREE.Group {
   const g = new THREE.Group();
   const H = 90; // hover height (scene units ≈ 600 ft)
 
-  for (const [text, x, z] of RUNWAY_THRESHOLDS) {
+  for (const [text, x, z] of thresholds) {
     const sp = makeRunwayLabel(text);
     sp.position.set(x, H, z);
     g.add(sp);
   }
 
-  // Terminal label — gates cluster around (420, -250) in scene coords
+  // Terminal label — position from profile (domestic gate cluster centroid)
   const term = makeRunwayLabel('TERMINAL');
-  term.position.set(420, H, -250);
+  term.position.set(terminalLabelPos.x, H, terminalLabelPos.z);
   g.add(term);
 
   return g;
@@ -515,24 +515,15 @@ function buildAirportAnnotations(): THREE.Group {
 
 // ── ILS approach corridor ──────────────────────────────────────────────────────
 // A translucent wedge descending from approach-fix altitude to runway threshold.
-function buildApproachCone(activeDir: '01' | '19'): THREE.Group {
+function buildApproachCone(corr: { cx: number; cz: number; dz: 1 | -1 }): THREE.Group {
   const g = new THREE.Group();
   const RANGE_M  = 9_000;
   const WIDTH_M  = 1_400;
   // Height at far end of corridor following a 3° glide slope
   const farY = RANGE_M * Math.tan((3 * Math.PI) / 180) * ALT_SCALE; // ≈ 71 units
 
-  // Average the two active-direction thresholds for corridor centre
-  let cx: number, cz: number, dz: number;
-  if (activeDir === '01') {
-    cx = (-1007.7 + 120.3) / 2;            // ≈ -444
-    cz = (-102.8  + 2079.9) / 2;           // ≈  989
-    dz = 1;                                 // approach from +Z (south)
-  } else {
-    cx = (490.6 + 1710.8) / 2;             // ≈ 1101
-    cz = (-3032.4 + (-1030.6)) / 2;        // ≈ -2032
-    dz = -1;                                // approach from -Z (north)
-  }
+  // Corridor centre and approach direction — derived from profile geometry
+  const { cx, cz, dz } = corr;
   const w  = WIDTH_M / 2;
   const fz = cz + dz * RANGE_M;
 
@@ -803,6 +794,12 @@ export default function AirspaceView3D({
   // directly after mount.  These refs are written on EVERY render (no useEffect),
   // so the scene-setup effect can always read the latest values — needed for
   // remount recovery when alertFocusId was already set in App's state.
+  // Airport profile — updated every render so the scene-setup effect ([] deps)
+  // can read the latest geometry via profileRef.current.
+  const profile    = useAirport();
+  const profileRef = useRef(profile);
+  profileRef.current = profile;
+
   const alertFocusIdRef     = useRef<string | null>(alertFocusId ?? null);
   const onAlertFocusDoneRef = useRef<(() => void) | null>(onAlertFocusDone ?? null);
   alertFocusIdRef.current     = alertFocusId ?? null;
@@ -934,8 +931,13 @@ export default function AirspaceView3D({
     // Remove previous weather group
     if (weatherGrpRef.current) { st.scene.remove(weatherGrpRef.current); weatherGrpRef.current = null; }
     if (!weather) return;
-    const wg = new THREE.Group();
-    wg.add(buildApproachCone(weather.activeRunwayDirection));
+    const wg   = new THREE.Group();
+    const corr = computeApproachCorridors(
+      profileRef.current.runways,
+      profileRef.current.geometry.runways,
+      weather.activeRunwayDirection,
+    );
+    wg.add(buildApproachCone(corr));
     wg.add(buildWindIndicator(weather.windDir, weather.windSpeed));
     st.scene.add(wg);
     weatherGrpRef.current = wg;
@@ -995,9 +997,11 @@ export default function AirspaceView3D({
     discGeo.rotateX(-Math.PI / 2);
     scene.add(new THREE.Mesh(discGeo, new THREE.MeshBasicMaterial({ color: 0x0A0F18 })));
 
-    scene.add(buildGroundGeometry());
+    const prof       = profileRef.current;
+    const thresholds = computeRunwayThresholds(prof.runways, prof.geometry.runways);
+    scene.add(buildGroundGeometry(prof.geometry.runways, prof.geometry.taxiways, prof.geometry.aprons));
     scene.add(buildAltRings());
-    scene.add(buildAirportAnnotations());
+    scene.add(buildAirportAnnotations(thresholds, prof.terminalLabelPos));
 
     // Initialise mutable state
     const st: SceneState = {

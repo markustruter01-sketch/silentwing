@@ -9,6 +9,8 @@ import ControlsHUD from '@/components/ui/ControlsHUD';
 import { getSimAdapter } from '@/sim/engine';
 import { AdsbAdapter, HEALTH_LAGGING_MS, HEALTH_STALLED_MS } from '@/feed/adsbAdapter';
 import { AlertEngine }  from '@/alerts/engine';
+import { YBBN }         from '@/airports/ybbn';
+import { AirportProvider } from '@/airports/context';
 import type { SWAlert, SWAlertSeverity } from '@/alerts/types';
 import { severityRank } from '@/alerts/types';
 import type { DataFeedAdapter, WorldSnapshot, FlightPhase, Aircraft } from '@/types';
@@ -20,7 +22,7 @@ export type DataSource = 'sim' | 'live';
 // Derive a rough sector-load from aircraft count (≤ 99 %)
 // NOTE: placeholder — will be replaced with a real demand metric in Phase 7.
 function sectorLoad(count: number) {
-  return Math.min(99, count * 11);
+  return Math.min(99, Math.round(count / YBBN.sectorCapacity * 100));
 }
 
 // ── Dev-only test-conflict aircraft ──────────────────────────────────────────
@@ -92,7 +94,7 @@ export default function App() {
   // Adapter is (re-)created whenever dataSource changes.
   // useMemo keeps the same instance as long as dataSource is stable.
   const adapter = useMemo<DataFeedAdapter>(() => {
-    return dataSource === 'live' ? new AdsbAdapter() : getSimAdapter();
+    return dataSource === 'live' ? new AdsbAdapter(YBBN) : getSimAdapter(YBBN);
   }, [dataSource]);
 
   // Destroy the ADS-B adapter instance when it's replaced (dataSource change
@@ -180,7 +182,7 @@ export default function App() {
   const visibleAircraftRef = useRef<Aircraft[]>([]);
 
   // ── Alert engine (Phase 6A) ──────────────────────────────────────────────
-  const alertEngineRef  = useRef(new AlertEngine());
+  const alertEngineRef  = useRef(new AlertEngine(YBBN));
   const [swAlerts,       setSWAlerts]       = useState<SWAlert[]>([]);
   const [injectConflict, setInjectConflict] = useState(false);
 
@@ -624,16 +626,17 @@ export default function App() {
         {view === 'airspace' && (
           <div className="absolute inset-x-0 top-3 flex flex-col items-center z-10 pointer-events-none select-none">
             <div className="flex items-baseline gap-3">
-              <span className="text-[10px] font-mono tracking-[0.25em] text-sky-600/70 uppercase">YBBN</span>
+              <span className="text-[10px] font-mono tracking-[0.25em] text-sky-600/70 uppercase">{YBBN.icao}</span>
               <h1 className="text-2xl font-bold tracking-[0.12em] text-sky-100/90 uppercase"
                   style={{ fontFamily: '"Courier New", monospace', textShadow: '0 0 24px rgba(14,165,233,0.45)' }}>
-                Brisbane Airport
+                {YBBN.name}
               </h1>
               <span className="text-[10px] font-mono tracking-[0.25em] text-sky-600/70 uppercase">ICAO</span>
             </div>
             <div className="mt-0.5 h-px w-64 bg-gradient-to-r from-transparent via-sky-700/50 to-transparent" />
           </div>
         )}
+        <AirportProvider>
         {view === 'airfield' ? (
           <AirfieldView2D
             aircraft={visibleAircraft}
@@ -664,6 +667,7 @@ export default function App() {
             }}
           />
         )}
+        </AirportProvider>
 
         {/* ── Director flight info panel — bottom-right when following an aircraft ── */}
         {directorMode && cameraMode === 'follow' && selectedAc && (() => {
@@ -673,7 +677,7 @@ export default function App() {
           const hasDG      = rng() < 0.15;
           const hasAnimals = rng() < 0.10;
           const orig       = selectedAc.origin      ?? '—';
-          const dest       = selectedAc.destination ?? 'YBBN';
+          const dest       = selectedAc.destination ?? YBBN.icao;
           return (
             <div className="fixed bottom-24 right-4 z-[150] w-64 pointer-events-none select-none
                             rounded-lg overflow-hidden shadow-2xl shadow-black/60"

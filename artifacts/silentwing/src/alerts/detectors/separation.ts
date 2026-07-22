@@ -27,15 +27,6 @@ const CRITICAL_V_FT = 700;
 /** Aircraft whose seen_pos exceeds this are skipped (stale track). */
 const STALE_SKIP_S = 30;
 
-// ── Terminal-area filter ───────────────────────────────────────────────────────
-// Only aircraft within this radius of the YBBN scene origin (0, 0) and below
-// the altitude ceiling are fed into the separation detector.  Out-of-area
-// aircraft (Archerfield, Caboolture, etc.) still render but generate no alerts.
-const TERMINAL_RADIUS_NM  = 7.5;
-const TERMINAL_RADIUS_M   = TERMINAL_RADIUS_NM * NM; // 27 780 m
-const TERMINAL_RADIUS_M2  = TERMINAL_RADIUS_M * TERMINAL_RADIUS_M;
-const TERMINAL_ALT_CEIL_FT = 15_000;
-
 // ── Genuine-airborne guard ────────────────────────────────────────────────────
 // An aircraft must have both positive altitude AND meaningful groundspeed to be
 // treated as airborne.  This prevents on-ground GA aircraft whose alt_geom
@@ -52,22 +43,34 @@ export interface SeparationFinding {
   message:      string;
 }
 
+// ── Profile shape used by this detector ───────────────────────────────────────
+interface TerminalProfile {
+  terminalRadiusNm:  number;
+  terminalAltCeilFt: number;
+}
+
 // ── Detector ──────────────────────────────────────────────────────────────────
-export function detectSeparation(aircraft: Aircraft[]): SeparationFinding[] {
+export function detectSeparation(
+  aircraft: Aircraft[],
+  profile: TerminalProfile,
+): SeparationFinding[] {
+  const termRadM  = profile.terminalRadiusNm * NM;
+  const termRadM2 = termRadM * termRadM;
+
   // Filter to terminal-area, genuine-airborne, fresh tracks only.
   // Exclusions (in order):
   //   1. onGround = true  → alt_baro was the string "ground"; never airborne
   //   2. alt ≤ 50 ft      → existing altitude floor
   //   3. gs < 40 kt       → parked/slow GA whose alt_geom reads elevated
-  //   4. alt ≥ 15 000 ft  → above terminal area ceiling
-  //   5. distance > 15 nm → Archerfield, Caboolture, and other out-of-area traffic
+  //   4. alt ≥ ceiling    → above terminal area ceiling
+  //   5. distance > radius → Archerfield, Caboolture, and other out-of-area traffic
   //   6. seenPos > 30 s   → stale track
   const airborne = aircraft.filter(ac => {
     if (ac.onGround) return false;
     if (ac.position.alt <= 50) return false;
     if (ac.groundSpeed < MIN_AIRBORNE_GS_KT) return false;
-    if (ac.position.alt >= TERMINAL_ALT_CEIL_FT) return false;
-    if (ac.position.x ** 2 + ac.position.y ** 2 > TERMINAL_RADIUS_M2) return false;
+    if (ac.position.alt >= profile.terminalAltCeilFt) return false;
+    if (ac.position.x ** 2 + ac.position.y ** 2 > termRadM2) return false;
     if ((ac.seenPos ?? 0) > STALE_SKIP_S) return false;
     return true;
   });

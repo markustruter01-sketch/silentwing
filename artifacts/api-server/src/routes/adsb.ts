@@ -1,8 +1,9 @@
 // ─── ADS-B Exchange proxy route ───────────────────────────────────────────────
 //
-// GET /api/adsb
+// GET /api/adsb[?lat=&lon=&dist=]
 //   Reads ADSBX_API_KEY from process.env (set as a Replit Secret).
-//   Fetches the Brisbane 50 nm radius endpoint on ADS-B Exchange.
+//   Fetches the requested lat/lon/radius from ADS-B Exchange.
+//   Falls back to YBBN coordinates if query params are absent (backwards compat).
 //   Returns the raw JSON to the client unchanged.
 //   On upstream error, returns { error, status } with the real status code.
 //
@@ -13,14 +14,21 @@ import { Router, type IRouter } from "express";
 
 const router: IRouter = Router();
 
-const BRISBANE_LAT = -27.384;
-const BRISBANE_LON = 153.117;
-const RADIUS_NM    = 50;
+// ── YBBN fallback values ───────────────────────────────────────────────────────
+const YBBN_LAT = -27.384;
+const YBBN_LON = 153.117;
+const YBBN_DIST_NM = 50;
 
-const UPSTREAM_URL =
-  `https://adsbexchange-com1.p.rapidapi.com/v2/lat/${BRISBANE_LAT}/lon/${BRISBANE_LON}/dist/${RADIUS_NM}/`;
+router.get("/adsb", async (req, res) => {
+  // Accept optional ?lat=&lon=&dist= query params so multi-airport support
+  // can request any airport from the same proxy endpoint.  Fall back to YBBN.
+  const lat  = parseFloat(req.query["lat"]  as string) || YBBN_LAT;
+  const lon  = parseFloat(req.query["lon"]  as string) || YBBN_LON;
+  const dist = parseFloat(req.query["dist"] as string) || YBBN_DIST_NM;
 
-router.get("/adsb", async (_req, res) => {
+  const upstreamUrl =
+    `https://adsbexchange-com1.p.rapidapi.com/v2/lat/${lat}/lon/${lon}/dist/${dist}/`;
+
   // Read the key at request time — avoids caching issues if the secret is set
   // after the process starts (common in Replit dev sessions).
   const apiKey = process.env["ADSBX_API_KEY"];
@@ -33,7 +41,7 @@ router.get("/adsb", async (_req, res) => {
   }
 
   try {
-    const upstream = await fetch(UPSTREAM_URL, {
+    const upstream = await fetch(upstreamUrl, {
       headers: {
         "x-rapidapi-host": "adsbexchange-com1.p.rapidapi.com",
         "x-rapidapi-key":  apiKey,   // stays server-side

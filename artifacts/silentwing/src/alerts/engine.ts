@@ -18,6 +18,7 @@ import { detectRunwayOccupancy }         from './detectors/runwayOccupancy';
 import { detectStaleTracks }             from './detectors/staleTrack';
 import type { SWAlert, SWAlertSeverity, SWAlertKind } from './types';
 import { severityRank }                  from './types';
+import type { AirportProfile }           from '../airports/types';
 
 let _nextId = 1;
 function newId() { return `sw-${_nextId++}`; }
@@ -40,6 +41,12 @@ export class AlertEngine {
   private activeMap = new Map<string, SWAlert>();
   /** Complete append-only log — alerts are never deleted. */
   private log: SWAlert[] = [];
+  /** Active airport profile — passed to all detectors. */
+  private profile: AirportProfile;
+
+  constructor(profile: AirportProfile) {
+    this.profile = profile;
+  }
 
   /**
    * Process a snapshot.  Accepts optional extra Aircraft[] for test injection.
@@ -50,7 +57,7 @@ export class AlertEngine {
     const now = snapshot.t;
 
     // ── 1. Separation (Phase 6A) ──────────────────────────────────────────────
-    const sepFindings = detectSeparation(allAircraft).map(f => ({
+    const sepFindings = detectSeparation(allAircraft, this.profile).map(f => ({
       ...f,
       kind: 'separation' as SWAlertKind,
     }));
@@ -68,7 +75,7 @@ export class AlertEngine {
     for (const f of sepFindings) activeSepKeys.add(f.key);
 
     // ── 2. Predicted conflict (Phase 6B) ──────────────────────────────────────
-    const predFindings = detectPredictedConflict(allAircraft, activeSepKeys).map(f => ({
+    const predFindings = detectPredictedConflict(allAircraft, activeSepKeys, this.profile).map(f => ({
       key:         f.key,
       kind:        'predicted_conflict' as SWAlertKind,
       severity:    f.severity,
@@ -83,7 +90,7 @@ export class AlertEngine {
     }));
 
     // ── 3. Runway occupancy (Phase 6B) ────────────────────────────────────────
-    const rwyFindings = detectRunwayOccupancy(allAircraft).map(f => ({
+    const rwyFindings = detectRunwayOccupancy(allAircraft, this.profile).map(f => ({
       ...f,
       kind: 'runway_occupancy' as SWAlertKind,
     }));

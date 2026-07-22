@@ -80,7 +80,7 @@ export interface WorldSnapshot {
   weather: {
     windDir: number; // degrees
     windSpeed: number; // knots
-    activeRunwayDirection: '01' | '19';
+    activeRunwayDirection: string;
     precipitationCells: WeatherCell[];
   };
 }
