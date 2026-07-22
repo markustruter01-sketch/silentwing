@@ -1,0 +1,35 @@
+SilentWing dev project. Make ONE change to the aircraft-spawn path in
+AirspaceView3D. Do NOT add Sydney. Do NOT touch the airport switch. Do NOT batch
+other changes. This fixes the synchronous-spawn freeze on Brisbane first, before
+anything else.
+
+Two related fixes to the same spawn code path:
+
+FIX A — Share the trail shader material (stop per-aircraft GLSL compiles):
+Currently each aircraft does `new THREE.ShaderMaterial({...TRAIL shaders...})`,
+compiling GLSL per aircraft. Create ONE module-level template ShaderMaterial at
+load time, and per aircraft use `template.clone()` (clone reuses the compiled GL
+program — no recompile). Set the per-aircraft color on the cloned material's
+uniform. Do the same for the wake ribbon materials (wakeLMat/wakeRMat): one
+template each, cloned per aircraft. Also share ConeGeometry and any halo/ring
+geometry at module level (one geometry, many meshes reference it) — but NEVER
+dispose a shared geometry/material in the per-aircraft teardown (only dispose
+per-aircraft clones).
+
+FIX B — Spread batch spawns across frames (stop the synchronous block):
+The data-sync effect currently creates cone+stem+trail+label+leader+ring for
+EVERY new aircraft synchronously in one loop. When many aircraft arrive at once
+(page load, or later an airport switch), this blocks the main thread and freezes
+the page. Change it to a QUEUE: when new aircraft need spawning, push them to a
+queue, and process at most N per animation frame (start with N=4) inside the
+existing rAF loop, until the queue drains. Aircraft appear over a few frames
+instead of all at once. Removal/despawn can stay immediate. Existing aircraft
+already in the scene are unaffected.
+
+After the change, report RAW:
+  a. Confirm ONE shared trail material template exists and aircraft use .clone().
+  b. Confirm the spawn queue processes <=4 aircraft per frame.
+  c. Reload Brisbane and confirm: aircraft still appear, live polls still work,
+     NO freeze on load even with a full batch (40+ aircraft) arriving.
+  d. Confirm no shared geometry/material is disposed in per-aircraft teardown.
+Do not proceed to any other change.

@@ -122,6 +122,12 @@ const FLY_SPEED_NORMAL = 0.0033; // ~300 frames ≈ 5 s
 // the full approach/departure path context is visible.
 const DIRECTOR_CAM_OFFSET = new THREE.Vector3(0, 1_200, 2_400);
 
+// Maximum horizontal distance (world units ≈ metres) from the airport centre
+// at which the director will pick up an aircraft.  Keeps the camera focused on
+// the immediate airspace rather than following traffic 100 NM away.
+// 5 000 m ≈ 2.7 NM — roughly the outer edge of the circuit / final approach.
+const DIRECTOR_FOCUS_RADIUS = 5_000;
+
 // ── Threat beam constants & shaders (Phase 6A) ───────────────────────────────
 
 const BEAM_VERTEX_SHADER = /* glsl */`
@@ -1288,12 +1294,20 @@ interface DirState {
 /** Pick the highest-priority aircraft for the director.
  *  Approach/landing (closest to threshold first) > takeoff > null. */
 function pickDirectorAircraft(st: SceneState): { id: string; kind: 'approach' | 'takeoff' } | null {
+  const cx = st.orbitTarget.x;
+  const cz = st.orbitTarget.z;
+  const r2 = DIRECTOR_FOCUS_RADIUS * DIRECTOR_FOCUS_RADIUS;
+
   let bestId: string | null = null;
   let lowestY = Infinity;
 
   for (const [id, b] of st.acMap) {
     if (b.isGroundVehicle) continue;
     if (b.phase === 'approach' || b.phase === 'landing') {
+      // Horizontal distance² from airport centre (ignore scaled altitude axis)
+      const dx = b.renderPos.x - cx;
+      const dz = b.renderPos.z - cz;
+      if (dx * dx + dz * dz > r2) continue; // outside focus radius
       if (b.renderPos.y < lowestY) { lowestY = b.renderPos.y; bestId = id; }
     }
   }
@@ -1301,7 +1315,12 @@ function pickDirectorAircraft(st: SceneState): { id: string; kind: 'approach' | 
 
   for (const [id, b] of st.acMap) {
     if (b.isGroundVehicle) continue;
-    if (b.phase === 'takeoff') return { id, kind: 'takeoff' };
+    if (b.phase === 'takeoff') {
+      const dx = b.renderPos.x - cx;
+      const dz = b.renderPos.z - cz;
+      if (dx * dx + dz * dz > r2) continue;
+      return { id, kind: 'takeoff' };
+    }
   }
   return null;
 }
