@@ -109,10 +109,6 @@ const TAXI_RING_MAX_R    = 400;   // final radius (scene units)
 const INSPECT_OFFSET = new THREE.Vector3(0, 700, 1400);
 const FOLLOW_OFFSET  = new THREE.Vector3(0, 700, 1400);
 
-// Director Mode uses a wide, cinematic overview shot — ~10× the normal follow
-// distance so the whole flight path context is visible, not just the aircraft.
-const DIRECTOR_FOLLOW_OFFSET = new THREE.Vector3(0, 4_500, 9_000);
-
 // Minimum world-space Y the camera is ever allowed to look at.
 // Ground aircraft sit at y ≈ 0, so without this the camera aim dips into the
 // tarmac and the 3D view shows nothing but pavement.  50 units (≈ 50 m) keeps
@@ -122,14 +118,9 @@ const MIN_LOOK_Y = 50;
 // Transition speed for fly-to animations (flyProgress increment per frame at 60 fps)
 const FLY_SPEED_NORMAL = 0.0033; // ~300 frames ≈ 5 s
 
-// Director continuous-lerp rates — no discrete fly-to; both position and look-at
-// drift toward their targets every frame so aircraft switches are seamless glides.
-// At 60 fps, lerp(t, 0.006) reaches 95% of target in ~8 s.
-const DIRECTOR_POS_LERP       = 0.006;  // camera position drift speed (ongoing switches)
-const DIRECTOR_LOOK_LERP      = 0.009;  // look-at settles slightly faster so aircraft stays centred
-// Intro lerp: on first page-load the camera glides slowly from orbit into director
-// position over 15 s.  lerp(t, 0.003) → 95% in ~15 s at 60 fps.
-const DIRECTOR_POS_LERP_INTRO = 0.003;
+// Director camera offset from aircraft — wider than the normal inspect shot so
+// the full approach/departure path context is visible.
+const DIRECTOR_CAM_OFFSET = new THREE.Vector3(0, 1_200, 2_400);
 
 // ── Threat beam constants & shaders (Phase 6A) ───────────────────────────────
 
@@ -1234,13 +1225,6 @@ interface SceneState {
   leftDragLastY:    number;
   /** Mirror of the directorMode prop — updated each render via sync effect. */
   directorMode:     boolean;
-  /** Smoothly-lerped look-at point used exclusively in director mode.
-   *  Persists across aircraft switches so the camera pans rather than snaps. */
-  directorLookAt:   THREE.Vector3;
-  /** True once the very first director follow entry has been triggered (page-load intro). */
-  directorIntroStarted: boolean;
-  /** performance.now() timestamp when the 15 s intro lerp ends. */
-  directorIntroEnd:     number;
   /** Aircraft ID → alert severity for the current snapshot (Phase 6A). */
   alertedIds: Map<string, 'advisory' | 'caution' | 'critical'>;
   /** Set of aircraft IDs currently pinned by the controller. */
@@ -1270,29 +1254,223 @@ interface SceneState {
   /** Aircraft ID → expanding ground-plane rings for taxiing aircraft. */
   taxiRingMap: Map<string, TaxiRingEntry>;
 
-  // ── Alert focus interrupt (Task #16) ───────────────────────────────────
-  /** The active critical alert ID being focused on, or null. Synced from prop. */
+  // ── Alert focus + director state ─────────────────────────────────────────
+  /** Alert ID currently being shown by the director, or null. */
   alertFocusId:   string | null;
-  /** Callback to fire when the interrupt completes. Synced from prop. */
+  /** Callback to fire when the director alert hold completes. */
   alertFocusDone: (() => void) | null;
-  /** Running interrupt state — null when no interrupt is active. */
-  alertInterrupt: {
-    elapsedMs:  number;
-    /** performance.now() value from the previous rAF frame, for delta-time. */
-    prevNowMs:  number;
-    /** Camera look-at point at the moment the interrupt started. */
-    startLook:  THREE.Vector3;
-    /** 3D conflict midpoint — updated each frame so it tracks moving aircraft. */
-    targetLook: THREE.Vector3;
-    /** Camera world position at the moment the interrupt started. */
-    startPos:   THREE.Vector3;
-    /**
-     * Normalised direction from the conflict midpoint toward the camera at
-     * interrupt start.  Used each frame to recompute targetPos as aircraft move,
-     * so the camera stays at the correct approach angle during the hold phase.
-     */
-    approachDir: THREE.Vector3;
-  } | null;
+  /** Self-contained director camera state machine. */
+  dir: DirState;
+}
+
+// ── Director camera state machine ─────────────────────────────────────────────
+
+/** Internal state for the director's three-priority camera state machine. */
+interface DirState {
+  /** Current phase. */
+  phase: 'orbit' | 'fly_alert' | 'hold_alert' | 'fly_ac' | 'hold_ac';
+  // Shared fly-animation vectors
+  flyFrom:    THREE.Vector3;
+  flyTo:      THREE.Vector3;
+  lookFrom:   THREE.Vector3;
+  lookTo:     THREE.Vector3;
+  flyStartMs: number;  // performance.now() when fly began
+  flyMs:      number;  // total fly duration (ms)
+  // Alert hold
+  alertId:     string | null;
+  holdUntilMs: number;
+  // Aircraft follow
+  acId:    string | null;
+  // Smooth look target lerped every frame
+  lookAt:  THREE.Vector3;
+}
+
+/** Pick the highest-priority aircraft for the director.
+ *  Approach/landing (closest to threshold first) > takeoff > null. */
+function pickDirectorAircraft(st: SceneState): { id: string; kind: 'approach' | 'takeoff' } | null {
+  let bestId: string | null = null;
+  let lowestY = Infinity;
+
+  for (const [id, b] of st.acMap) {
+    if (b.isGroundVehicle) continue;
+    if (b.phase === 'approach' || b.phase === 'landing') {
+      if (b.renderPos.y < lowestY) { lowestY = b.renderPos.y; bestId = id; }
+    }
+  }
+  if (bestId) return { id: bestId, kind: 'approach' };
+
+  for (const [id, b] of st.acMap) {
+    if (b.isGroundVehicle) continue;
+    if (b.phase === 'takeoff') return { id, kind: 'takeoff' };
+  }
+  return null;
+}
+
+/** Compute the 3-D conflict midpoint for the given alert. */
+function alertMidpoint(st: SceneState, alertId: string): THREE.Vector3 {
+  const alert = st.activeAlerts.find(a => a.id === alertId);
+  if (!alert) return st.orbitTarget.clone();
+  let mx = 0, my = 0, mz = 0, cnt = 0;
+  for (const id of alert.aircraftIds.slice(0, 2)) {
+    const b = st.acMap.get(id);
+    if (b) { mx += b.renderPos.x; my += b.renderPos.y; mz += b.renderPos.z; cnt++; }
+  }
+  return cnt > 0
+    ? new THREE.Vector3(mx / cnt, Math.max(MIN_LOOK_Y, my / cnt), mz / cnt)
+    : st.orbitTarget.clone();
+}
+
+/**
+ * Run the director state machine for one rAF frame.
+ * Three priority levels:
+ *   1. Alert (highest) — fly to conflict midpoint in 2 s, hold 10 s, back to orbit.
+ *   2. Approach / takeoff — fly to aircraft in 3 s, track until phase changes, back to orbit.
+ *   3. Orbit (lowest) — slow 360° rotation around airport.
+ */
+function runDirector(st: SceneState, camera: THREE.PerspectiveCamera, nowMs: number): void {
+  const d = st.dir;
+
+  // ── 1. Check for a new alert (always highest priority) ───────────────────
+  if (st.alertFocusId && st.alertFocusId !== d.alertId && d.phase !== 'hold_alert') {
+    const mp    = alertMidpoint(st, st.alertFocusId);
+    const horiz = new THREE.Vector3(camera.position.x - mp.x, 0, camera.position.z - mp.z);
+    if (horiz.length() < 1) horiz.set(0, 0, 1);
+    horiz.normalize().multiplyScalar(900);
+
+    const camTo = new THREE.Vector3(mp.x + horiz.x, mp.y + 700, mp.z + horiz.z);
+    const fwd   = new THREE.Vector3();
+    camera.getWorldDirection(fwd);
+
+    d.flyFrom.copy(camera.position);
+    d.flyTo.copy(camTo);
+    d.lookFrom.copy(camera.position.clone().addScaledVector(fwd, 2000));
+    d.lookTo.copy(mp);
+    d.flyStartMs = nowMs;
+    d.flyMs      = 2_000;
+    d.alertId    = st.alertFocusId;
+    d.phase      = 'fly_alert';
+    d.lookAt.copy(d.lookFrom);
+    console.log(`[DIRECTOR] alert interrupt → ${d.alertId}`);
+  }
+
+  // ── 2. State machine ─────────────────────────────────────────────────────
+  switch (d.phase) {
+
+    case 'orbit': {
+      st.angle += ORBIT_SPEED;
+      camera.position.set(
+        st.orbitTarget.x + st.orbitRadius * Math.cos(st.angle),
+        st.orbitElevation,
+        st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle),
+      );
+      camera.lookAt(st.orbitTarget);
+
+      const subject = pickDirectorAircraft(st);
+      if (subject) {
+        const b = st.acMap.get(subject.id);
+        if (b) {
+          const lookTarget = b.renderPos.clone();
+          lookTarget.y = Math.max(MIN_LOOK_Y, lookTarget.y);
+          const camTo  = lookTarget.clone().add(DIRECTOR_CAM_OFFSET);
+          const fwd2   = new THREE.Vector3();
+          camera.getWorldDirection(fwd2);
+
+          d.flyFrom.copy(camera.position);
+          d.flyTo.copy(camTo);
+          d.lookFrom.copy(camera.position.clone().addScaledVector(fwd2, 2000));
+          d.lookTo.copy(lookTarget);
+          d.flyStartMs = nowMs;
+          d.flyMs      = 3_000;
+          d.acId       = subject.id;
+          d.phase      = 'fly_ac';
+          d.lookAt.copy(d.lookFrom);
+          console.log(`[DIRECTOR] → ${subject.kind} ${d.acId}`);
+        }
+      }
+      break;
+    }
+
+    case 'fly_alert': {
+      const t  = Math.min((nowMs - d.flyStartMs) / d.flyMs, 1);
+      const et = easeInOut(t);
+      camera.position.lerpVectors(d.flyFrom, d.flyTo, et);
+      const lk = new THREE.Vector3().lerpVectors(d.lookFrom, d.lookTo, et);
+      lk.y = Math.max(MIN_LOOK_Y, lk.y);
+      camera.lookAt(lk);
+      d.lookAt.copy(lk);
+      if (t >= 1) {
+        d.phase       = 'hold_alert';
+        d.holdUntilMs = nowMs + 10_000;
+        console.log(`[DIRECTOR] alert ${d.alertId} — hold 10 s`);
+      }
+      break;
+    }
+
+    case 'hold_alert': {
+      if (d.alertId) {
+        const mp = alertMidpoint(st, d.alertId);
+        d.lookAt.lerp(mp, 0.03);
+      }
+      camera.position.copy(d.flyTo);
+      camera.lookAt(d.lookAt);
+      if (nowMs >= d.holdUntilMs) {
+        console.log(`[DIRECTOR] alert ${d.alertId} done — orbit`);
+        d.alertId = null;
+        d.phase   = 'orbit';
+        const done = st.alertFocusDone;
+        st.alertFocusDone = null;
+        st.alertFocusId   = null;
+        done?.();
+      }
+      break;
+    }
+
+    case 'fly_ac': {
+      const b = d.acId ? st.acMap.get(d.acId) : null;
+      if (!b) { d.acId = null; d.phase = 'orbit'; break; }
+
+      const t  = Math.min((nowMs - d.flyStartMs) / d.flyMs, 1);
+      const et = easeInOut(t);
+
+      // Track moving aircraft continuously during the fly.
+      const lookTarget = b.renderPos.clone();
+      lookTarget.y = Math.max(MIN_LOOK_Y, lookTarget.y);
+      d.flyTo.copy(lookTarget.clone().add(DIRECTOR_CAM_OFFSET));
+      d.lookTo.copy(lookTarget);
+
+      camera.position.lerpVectors(d.flyFrom, d.flyTo, et);
+      const lk = new THREE.Vector3().lerpVectors(d.lookFrom, d.lookTo, et);
+      lk.y = Math.max(MIN_LOOK_Y, lk.y);
+      camera.lookAt(lk);
+      d.lookAt.copy(lk);
+
+      if (t >= 1) {
+        d.phase = 'hold_ac';
+        d.lookAt.copy(lookTarget);
+        console.log(`[DIRECTOR] arrived at ${d.acId}`);
+      }
+      break;
+    }
+
+    case 'hold_ac': {
+      const b            = d.acId ? st.acMap.get(d.acId) : null;
+      const stillPriority = b && !b.isGroundVehicle &&
+        (b.phase === 'approach' || b.phase === 'landing' || b.phase === 'takeoff');
+
+      if (!stillPriority) {
+        console.log(`[DIRECTOR] ${d.acId} left priority phase — orbit`);
+        d.acId = null; d.phase = 'orbit';
+        break;
+      }
+
+      const lookTarget = b!.renderPos.clone();
+      lookTarget.y = Math.max(MIN_LOOK_Y, lookTarget.y);
+      camera.position.lerp(lookTarget.clone().add(DIRECTOR_CAM_OFFSET), 0.04);
+      d.lookAt.lerp(lookTarget, 0.06);
+      camera.lookAt(d.lookAt);
+      break;
+    }
+  }
 }
 
 // ── Helper: begin fly-to animation toward an aircraft ────────────────────────
@@ -1401,10 +1579,18 @@ export default function AirspaceView3D({
   alertFocusIdRef.current     = alertFocusId ?? null;
   onAlertFocusDoneRef.current = onAlertFocusDone ?? null;
 
-  // Sync directorMode prop into SceneState so the rAF loop always reads fresh.
+  // Sync directorMode prop → SceneState; reset director to orbit when activated.
   useEffect(() => {
     const st = sceneRef.current;
-    if (st) st.directorMode = directorMode;
+    if (!st) return;
+    st.directorMode = directorMode;
+    if (directorMode) {
+      st.dir.phase      = 'orbit';
+      st.dir.alertId    = null;
+      st.dir.acId       = null;
+      st.dir.holdUntilMs = 0;
+      console.log('[DIRECTOR] activated — starting orbit');
+    }
   }, [directorMode]);
 
   // Sync showPaths prop — controls velocity vectors, sep bubbles, wake ribbons, taxi rings,
@@ -1433,63 +1619,13 @@ export default function AirspaceView3D({
     if (st) st.pinnedAcIds = pinnedAcIds ?? new Set();
   }, [pinnedAcIds]);
 
-  // ── Sync alert focus interrupt (Task #16) ──────────────────────────────────
-  // When alertFocusId changes to a new non-null value, kick off the 3-D camera
-  // interrupt.  When it clears to undefined the interrupt is cancelled cleanly.
+  // ── Sync alertFocusId prop → sceneRef so the director picks it up ───────────
   useEffect(() => {
     const st = sceneRef.current;
     if (!st) return;
-
+    st.alertFocusId   = alertFocusId ?? null;
     st.alertFocusDone = onAlertFocusDone ?? null;
-
-    if (!alertFocusId) {
-      // Prop cleared (alert dismissed / callback fired) — cancel any interrupt.
-      st.alertFocusId   = null;
-      st.alertInterrupt = null;
-      return;
-    }
-    if (st.alertFocusId === alertFocusId && st.alertInterrupt) return; // already running
-
-    console.log(`[3D CAM] alert focus interrupt → ${alertFocusId}`);
-
-    // Capture the camera's current look-at direction as the start point.
-    const dir = new THREE.Vector3();
-    st.camera.getWorldDirection(dir);
-    const startLook = st.camera.position.clone().addScaledVector(dir, 2000);
-
-    // Derive the conflict 3D midpoint from acMap (best effort — updates each frame).
-    const focusAlert = st.activeAlerts.find(a => a.id === alertFocusId);
-    let mx = 0, my = 0, mz = 0, cnt = 0;
-    if (focusAlert) {
-      for (const id of focusAlert.aircraftIds.slice(0, 2)) {
-        const b = st.acMap.get(id);
-        if (b) { mx += b.renderPos.x; my += b.renderPos.y; mz += b.renderPos.z; cnt++; }
-      }
-    }
-    const targetLook = cnt > 0
-      ? new THREE.Vector3(mx / cnt, my / cnt, mz / cnt)
-      : startLook.clone(); // fallback: pivot to where we already are
-
-    // Compute approach direction: normalised vector from conflict midpoint toward
-    // the camera, clamped to a minimum elevation so we never dive underground.
-    const ALERT_CAM_DIST = 850; // world units — close enough to fill ~70% of frame
-    const toCamera = st.camera.position.clone().sub(targetLook);
-    if (toCamera.length() < 1) toCamera.set(0, 1, 1); // degenerate fallback
-    // Ensure a meaningful upward component so the camera stays above the scene.
-    if (toCamera.y < toCamera.length() * 0.25) {
-      toCamera.y = toCamera.length() * 0.35;
-    }
-    const approachDir = toCamera.normalize();
-
-    st.alertFocusId   = alertFocusId;
-    st.alertInterrupt = {
-      elapsedMs:  0,
-      prevNowMs:  performance.now(),
-      startLook,
-      targetLook,
-      startPos:   st.camera.position.clone(),
-      approachDir,
-    };
+    if (alertFocusId) console.log(`[DIRECTOR] prop sync: alertFocusId → ${alertFocusId}`);
   }, [alertFocusId, onAlertFocusDone]);
 
   // ── Sync external cameraMode prop → sceneRef ────────────────────────────────
@@ -1502,27 +1638,7 @@ export default function AirspaceView3D({
     if (st.cameraMode === 'returning') return;
     console.log(`[3D CAM] prop→scene sync: ${st.cameraMode} → ${cameraMode}`);
     if (cameraMode === 'follow' && st.selectedAcId) {
-      if (st.directorMode) {
-        // Director: seed directorLookAt directly to the aircraft's current
-        // renderPos so the camera points at the plane on frame 1 rather than
-        // drifting from wherever the camera was previously aimed.
-        const b = st.acMap.get(st.selectedAcId);
-        if (b) {
-          st.directorLookAt.copy(b.renderPos);
-          st.directorLookAt.y = Math.max(MIN_LOOK_Y, st.directorLookAt.y);
-        } else {
-          const dir = new THREE.Vector3();
-          st.camera.getWorldDirection(dir);
-          st.directorLookAt.copy(st.camera.position).addScaledVector(dir, 500);
-        }
-        // First-ever director follow entry → start the 15 s page-load intro glide.
-        if (!st.directorIntroStarted) {
-          st.directorIntroStarted = true;
-          st.directorIntroEnd     = performance.now() + 15_000;
-        }
-      }
-      // Fly-to setup — applies to both director and non-director so the camera
-      // arrives at the aircraft quickly rather than gliding from a distant position.
+      // Fly-to setup — glides camera to the selected aircraft over ~5 s.
       st.flyFrom.copy(st.camera.position);
       st.flyProgress = 0;
       st.cameraMode  = 'follow';
@@ -1666,9 +1782,19 @@ export default function AirspaceView3D({
       leftDragLastX:    0,
       leftDragLastY:    0,
       directorMode:         false,
-      directorLookAt:       new THREE.Vector3(), // starts at scene origin (airport centre)
-      directorIntroStarted: false,
-      directorIntroEnd:     0,
+      dir: {
+        phase:       'orbit',
+        flyFrom:     new THREE.Vector3(),
+        flyTo:       new THREE.Vector3(),
+        lookFrom:    new THREE.Vector3(),
+        lookTo:      new THREE.Vector3(),
+        flyStartMs:  0,
+        flyMs:       2_000,
+        alertId:     null,
+        holdUntilMs: 0,
+        acId:        null,
+        lookAt:      new THREE.Vector3(),
+      },
       alertedIds:           new Map(),
       activeAlerts:         [],
       beamMap:              new Map(),
@@ -1676,7 +1802,6 @@ export default function AirspaceView3D({
       labelMap:             new Map(),
       alertFocusId:         null,
       alertFocusDone:       null,
-      alertInterrupt:       null,
       takeoffMap:           new Map(),
       approachMap:          new Map(),
       glideSlopeMap:        new Map(),
@@ -1687,32 +1812,16 @@ export default function AirspaceView3D({
     };
     sceneRef.current = st;
 
-    // ── Remount recovery: alert focus interrupt ──────────────────────────────
-    // The alert-focus sync effect runs BEFORE scene setup on re-mount and finds
-    // sceneRef.current null, so it exits early.  Because alertFocusId doesn't
-    // change between unmount and remount, the effect never re-fires.
-    // We detect this here using the stable refs (written every render) and
-    // start the interrupt directly, so the director-pause flag can be cleared.
+    // ── Remount recovery: alertFocusId ──────────────────────────────────────
+    // The sync effect runs before scene setup on re-mount and misses sceneRef.
+    // Apply stable refs directly so the director picks up the alert on frame 1.
     {
       const fid  = alertFocusIdRef.current;
       const done = onAlertFocusDoneRef.current;
       if (fid) {
-        console.log(`[3D CAM] remount recovery: alert interrupt → ${fid}`);
-        const dir = new THREE.Vector3();
-        camera.getWorldDirection(dir);
-        const sl = camera.position.clone().addScaledVector(dir, 2000);
+        console.log(`[DIRECTOR] remount recovery: alertFocusId=${fid}`);
         st.alertFocusId   = fid;
         st.alertFocusDone = done;
-        // targetLook starts equal to startLook; the rAF loop updates it once
-        // st.activeAlerts is populated (next re-render after aircraft sync).
-        st.alertInterrupt = {
-          elapsedMs:   0,
-          prevNowMs:   performance.now(),
-          startLook:   sl,
-          targetLook:  sl.clone(),
-          startPos:    camera.position.clone(),
-          approachDir: new THREE.Vector3(0, 0.35, 1).normalize(),
-        };
       }
     }
 
@@ -1723,6 +1832,11 @@ export default function AirspaceView3D({
     const tick = () => {
       st.animId = requestAnimationFrame(tick);
       const nowMs = performance.now();
+
+      // ── Director state machine — takes over when active and in orbit ────────
+      if (st.directorMode && st.cameraMode === 'orbit') {
+        runDirector(st, camera, nowMs);
+      } else {
 
       switch (st.cameraMode) {
         case 'orbit': {
@@ -1765,44 +1879,17 @@ export default function AirspaceView3D({
           if (st.selectedAcId) {
             const b = st.acMap.get(st.selectedAcId);
             if (b) {
-              const offset     = st.directorMode ? DIRECTOR_FOLLOW_OFFSET : FOLLOW_OFFSET;
-              const liveTarget = b.renderPos.clone().add(offset);
-
-              if (st.directorMode) {
-                // ── Director: fly-to then cinematic glide ──────────────────
-                // Phase 1 (intro only): on first page-load glide slowly from
-                //   orbit into director position (15 s, lerp 0.003/frame).
-                // Phase 2 (aircraft cut): fast fly-to (same 5 s as manual
-                //   follow) so the camera arrives near the aircraft immediately
-                //   rather than drifting across empty space for 8+ s.
-                // Phase 3 (arrived): slow cinematic lerp (0.006/frame ≈ 8 s
-                //   95%) to track the aircraft as it moves.
-                const isIntro = st.directorIntroStarted && performance.now() < st.directorIntroEnd;
-                if (isIntro) {
-                  camera.position.lerp(liveTarget, DIRECTOR_POS_LERP_INTRO);
-                } else if (st.flyProgress < 1) {
-                  st.flyProgress = Math.min(st.flyProgress + FLY_SPEED_NORMAL, 1);
-                  const t = easeInOut(st.flyProgress);
-                  camera.position.lerpVectors(st.flyFrom, liveTarget, t);
-                } else {
-                  camera.position.lerp(liveTarget, DIRECTOR_POS_LERP);
-                }
-                st.directorLookAt.lerp(b.renderPos, DIRECTOR_LOOK_LERP);
-                st.directorLookAt.y = Math.max(MIN_LOOK_Y, st.directorLookAt.y);
-                camera.lookAt(st.directorLookAt);
+              const liveTarget = b.renderPos.clone().add(FOLLOW_OFFSET);
+              if (st.flyProgress < 1) {
+                st.flyProgress = Math.min(st.flyProgress + FLY_SPEED_NORMAL, 1);
+                const t = easeInOut(st.flyProgress);
+                camera.position.lerpVectors(st.flyFrom, liveTarget, t);
               } else {
-                // ── Normal follow ──────────────────────────────────────────
-                if (st.flyProgress < 1) {
-                  st.flyProgress = Math.min(st.flyProgress + FLY_SPEED_NORMAL, 1);
-                  const t = easeInOut(st.flyProgress);
-                  camera.position.lerpVectors(st.flyFrom, liveTarget, t);
-                } else {
-                  camera.position.copy(liveTarget);
-                }
-                const nlp = b.renderPos.clone();
-                nlp.y = Math.max(MIN_LOOK_Y, nlp.y);
-                camera.lookAt(nlp);
+                camera.position.copy(liveTarget);
               }
+              const nlp = b.renderPos.clone();
+              nlp.y = Math.max(MIN_LOOK_Y, nlp.y);
+              camera.lookAt(nlp);
             }
           }
           break;
@@ -1828,90 +1915,7 @@ export default function AirspaceView3D({
         }
       }
 
-      // ── Alert focus interrupt overlay (Task #16) ─────────────────────────
-      // Runs after the camera-mode switch so it can read the natural look-at
-      // the mode code just set, then override it with the interpolated direction.
-      // Camera POSITION is never modified — only the look direction is lerped.
-      {
-        const intr = st.alertInterrupt;
-        if (intr) {
-          const dt = nowMs - intr.prevNowMs;
-          intr.prevNowMs  = nowMs;
-          intr.elapsedMs += dt;
-
-          const PIVOT_IN_MS  = 2000;
-          const HOLD_MS      = 6000;  // 2 s in + 6 s hold + 2 s out = 10 s total
-          const PIVOT_OUT_MS = 2000;
-          const TOTAL_MS     = PIVOT_IN_MS + HOLD_MS + PIVOT_OUT_MS;
-
-          // Keep target updated as aircraft move during hold phase.
-          const focusAlert = st.activeAlerts.find(a => a.id === st.alertFocusId);
-          if (focusAlert && focusAlert.aircraftIds.length >= 1) {
-            let mx = 0, my = 0, mz = 0, cnt = 0;
-            for (const id of focusAlert.aircraftIds.slice(0, 2)) {
-              const b = st.acMap.get(id);
-              if (b) { mx += b.renderPos.x; my += b.renderPos.y; mz += b.renderPos.z; cnt++; }
-            }
-            if (cnt > 0) intr.targetLook.set(mx / cnt, Math.max(MIN_LOOK_Y, my / cnt), mz / cnt);
-          }
-
-          // Guard: if this interrupt was created by an older code path that
-          // pre-dates the fly-in fields, cancel it rather than crash.
-          if (!intr.approachDir || !intr.startPos) {
-            st.alertInterrupt = null;
-            st.alertFocusId   = null;
-            st.alertFocusDone?.();
-            st.alertFocusDone = null;
-            return; // skip remainder of this rAF tick; next frame is clean
-          }
-
-          if (intr.elapsedMs >= TOTAL_MS) {
-            // Full sequence complete — fire callback and let camera resume naturally.
-            const done = st.alertFocusDone;
-            st.alertFocusDone = null;
-            st.alertInterrupt = null;
-            st.alertFocusId   = null;
-            done?.();
-          } else {
-            // Close-up camera position: ALERT_CAM_DIST along the approach direction
-            // from the (live-updated) conflict midpoint.  Computed here (inside the
-            // active-interrupt branch) so it is never evaluated on completion/cleanup.
-            const ALERT_CAM_DIST = 850;
-            const closPos = intr.targetLook.clone()
-              .addScaledVector(intr.approachDir, ALERT_CAM_DIST);
-            // If approachDir has a downward component the naive offset can land
-            // underground.  Guarantee the camera is always above the conflict zone.
-            closPos.y = Math.max(intr.targetLook.y + 200, closPos.y);
-
-            // naturalPos / naturalLook: where the mode code just placed the camera
-            // (orbit / follow ran earlier this frame).  Used as the pivot-out target
-            // so the return transition hands off seamlessly to the live camera mode.
-            const naturalPos  = camera.position.clone();
-            const dirVec      = new THREE.Vector3();
-            camera.getWorldDirection(dirVec);
-            const naturalLook = camera.position.clone().addScaledVector(dirVec, 2000);
-
-            let posOverride:  THREE.Vector3;
-            let lookOverride: THREE.Vector3;
-
-            if (intr.elapsedMs < PIVOT_IN_MS) {
-              const t = easeInOut(intr.elapsedMs / PIVOT_IN_MS);
-              posOverride  = new THREE.Vector3().lerpVectors(intr.startPos, closPos, t);
-              lookOverride = new THREE.Vector3().lerpVectors(intr.startLook, intr.targetLook, t);
-            } else if (intr.elapsedMs < PIVOT_IN_MS + HOLD_MS) {
-              posOverride  = closPos;
-              lookOverride = intr.targetLook.clone();
-            } else {
-              const t = easeInOut((intr.elapsedMs - PIVOT_IN_MS - HOLD_MS) / PIVOT_OUT_MS);
-              posOverride  = new THREE.Vector3().lerpVectors(closPos, naturalPos, t);
-              lookOverride = new THREE.Vector3().lerpVectors(intr.targetLook, naturalLook, t);
-            }
-
-            camera.position.copy(posOverride);
-            camera.lookAt(lookOverride);
-          }
-        }
-      }
+      } // end director else-branch
 
       // ── Velocity extrapolation tick ───────────────────────────────────────
       //
@@ -2855,6 +2859,14 @@ export default function AirspaceView3D({
 
       const prev = st.cameraMode;
 
+      // Director: Esc during aircraft-hold drops back to orbit.
+      if (st.directorMode && (st.dir.phase === 'hold_ac' || st.dir.phase === 'fly_ac')) {
+        st.dir.phase = 'orbit';
+        st.dir.acId  = null;
+        console.log('[3D CAM] Esc: director → orbit');
+        return;
+      }
+
       if (prev === 'follow') {
         st.cameraMode = 'inspect';
         st.flyProgress = 1; // already at target; stay put
@@ -2902,14 +2914,10 @@ export default function AirspaceView3D({
     return () => {
       ro.disconnect();
       cancelAnimationFrame(st.animId);
-      // If a critical-alert camera interrupt was in progress when the 3D view
-      // unmounted (e.g. user switched to airfield view), fire the done callback
-      // now so App's director-pause flag is cleared.  Without this the director
-      // would stay paused indefinitely when the view is remounted.
-      if (st.alertInterrupt || st.alertFocusId) {
+      // Fire the alert-done callback on unmount so App clears alertFocusId.
+      if (st.alertFocusId) {
         const done = st.alertFocusDone;
         st.alertFocusDone = null;
-        st.alertInterrupt = null;
         st.alertFocusId   = null;
         done?.();
       }

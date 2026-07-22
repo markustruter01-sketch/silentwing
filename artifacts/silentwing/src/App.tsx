@@ -38,51 +38,6 @@ const TEST_CONFLICT_AIRCRAFT: Aircraft[] = [
     position: { x: 2000, y: -5000, alt: 3500 }, heading: 0, groundSpeed: 150, confidence: 1 },
 ];
 
-// ── Director Mode ─────────────────────────────────────────────────────────────
-
-const DIRECTOR_DWELL_MS = 10_000; // ms to watch each subject before switching
-
-/** Priority score for each flight phase — higher = more cinematically interesting. */
-const DIRECTOR_PHASE_SCORE: Record<FlightPhase, number> = {
-  'landing':           100,
-  'takeoff':            95,
-  'approach':           80,
-  'departure':          70,
-  'enroute-departure':  55,
-  'enroute-arrival':    50,
-  'taxi-out':           35,
-  'taxi-in':            20,
-  'at-gate':             5,
-};
-
-/** Large bonus when an aircraft just changed phase — prioritises transitions. */
-const DIRECTOR_TRANSITION_BONUS = 160;
-
-/** Bonus applied to approach/landing aircraft within 5 NM of the airport (final approach). */
-const DIRECTOR_FINAL_BONUS = 220;
-/** Distance² threshold for "final approach" proximity bonus: 5 NM = 9 260 m */
-const DIRECTOR_FINAL_DIST_M2 = 9_260 ** 2;
-
-/** Bonus applied to takeoff aircraft very close to the airport (on the runway roll). */
-const DIRECTOR_TAKEOFF_ROLL_BONUS = 200;
-/** Distance² threshold for "takeoff roll" proximity bonus: 2 km from origin */
-const DIRECTOR_TAKEOFF_ROLL_DIST_M2 = 2_000 ** 2;
-
-function directorScore(ac: Aircraft, prevPhase: FlightPhase | undefined): number {
-  const base       = DIRECTOR_PHASE_SCORE[ac.phase] ?? 0;
-  const transition = prevPhase !== undefined && prevPhase !== ac.phase
-    ? DIRECTOR_TRANSITION_BONUS : 0;
-  return base + transition;
-}
-
-/** Returns true if this aircraft is so high-priority that the airport overview cut should be skipped. */
-function isUrgentDirectorSubject(ac: Aircraft): boolean {
-  const dist2 = ac.position.x ** 2 + ac.position.y ** 2;
-  if ((ac.phase === 'approach' || ac.phase === 'landing') && dist2 < DIRECTOR_FINAL_DIST_M2) return true;
-  if (ac.phase === 'takeoff' && dist2 < DIRECTOR_TAKEOFF_ROLL_DIST_M2) return true;
-  return false;
-}
-
 /** Human-readable phase label shown in the NOW WATCHING strip. */
 const PHASE_LABEL: Record<FlightPhase, string> = {
   'enroute-arrival':   'En Route',
@@ -193,11 +148,6 @@ export default function App() {
       } else {
         next.add(id);
         console.log(`[APP] pin ${id}`);
-        // Immediately direct the camera to the newly-pinned aircraft
-        setSelectedAcId(id);
-        setCameraMode('follow');
-        manualInspectRef.current = false;
-        lastSwitchRef.current = Date.now();
       }
       return next;
     });
@@ -205,24 +155,6 @@ export default function App() {
 
   // ── Director Mode state ──────────────────────────────────────────────────
   const [directorMode, setDirectorMode] = useState(true); // starts ON
-  /** Stores the last known phase per aircraft ID for transition detection. */
-  const phaseHistRef       = useRef<Map<string, FlightPhase>>(new Map());
-  /** Timestamp of the last director camera switch (ms). */
-  const lastSwitchRef      = useRef<number>(0);
-  /** Alternates 'aircraft' → 'airport' → 'aircraft' … so every other cut is the airport overview. */
-  const directorPhaseRef   = useRef<'aircraft' | 'airport'>('aircraft');
-  /** Stable ref to the current selectedAcId — avoids stale closures in the interval. */
-  const selectedAcIdRef    = useRef<string | null>(null);
-  /** Cooldown map: aircraft id → ms timestamp of last director selection.
-   *  Aircraft visited within DIRECTOR_COOLDOWN_MS receive a heavy score penalty
-   *  so the director cycles through different subjects instead of looping. */
-  const directorCooldownRef = useRef<Map<string, number>>(new Map());
-  /** Stable ref to the latest visible aircraft list — avoids re-starting interval on every poll. */
-  const visibleAircraftRef = useRef<Aircraft[]>([]);
-  /** True when the user has manually clicked an aircraft in inspect mode —
-   *  prevents the director from overriding the selection until the user
-   *  explicitly deselects, presses Esc, or turns director back on. */
-  const manualInspectRef = useRef(false);
 
   // ── Alert engine (Phase 6A) ──────────────────────────────────────────────
   const alertEngineRef  = useRef(new AlertEngine(YBBN));
@@ -301,8 +233,6 @@ export default function App() {
   const prevCriticalIdsRef     = useRef<Set<string>>(new Set());
   /** Alert ID the 3D camera is currently pivoting toward; null = no interrupt. */
   const [alertFocusId, setAlertFocusId] = useState<string | null>(null);
-  /** Blocks the director dwell-timer tick while the camera interrupt is active. */
-  const alertInterruptActiveRef = useRef(false);
 
   // Detect newly-fired alerts (all severities) and kick off the 3D camera interrupt.
   useEffect(() => {
@@ -314,25 +244,20 @@ export default function App() {
     prevCriticalIdsRef.current = currentAlertIds;
     if (newId) {
       const sev = activeAlerts.find(a => a.id === newId)?.severity ?? 'unknown';
-      console.log(`[APP] new ${sev} alert ${newId} — camera interrupt`);
-      alertInterruptActiveRef.current = true;
+      console.log(`[APP] new ${sev} alert ${newId} — director interrupt`);
       setAlertFocusId(newId);
     }
   }, [activeAlerts]);
 
-  /** Called by AirspaceView3D when the pivot-in/hold/pivot-out completes. */
+  /** Called by AirspaceView3D when the director alert hold completes. */
   const handleAlertFocusDone = useCallback(() => {
-    console.log('[APP] camera interrupt complete — resuming director');
-    alertInterruptActiveRef.current = false;
+    console.log('[APP] director alert hold complete');
     setAlertFocusId(null);
-    // Reset dwell so the director holds for a full 10 s before switching subjects.
-    lastSwitchRef.current = Date.now();
   }, []);
 
-  /** Manual focus — called when the controller clicks an alert in the list panel. */
+  /** Manual alert focus — director flies to the selected alert. */
   const handleManualAlertFocus = useCallback((alertId: string) => {
     console.log(`[APP] manual alert focus → ${alertId}`);
-    alertInterruptActiveRef.current = true;
     setAlertFocusId(alertId);
   }, []);
 
@@ -346,15 +271,6 @@ export default function App() {
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
 
-  // Keep the stable refs in sync with state/memo values
-  useEffect(() => { selectedAcIdRef.current = selectedAcId; }, [selectedAcId]);
-
-  // Track phase transitions on every snapshot so the scoring function can
-  // detect when an aircraft just changed phase.
-  useEffect(() => {
-    const ph = phaseHistRef.current;
-    for (const ac of snapshot.aircraft) ph.set(ac.id, ac.phase);
-  }, [snapshot.aircraft]);
 
   // ── Display filters (hide from rendering; data is always fully ingested) ──
   /** Hide category-C2 ground vehicles and TWR stations (default ON). */
@@ -371,9 +287,6 @@ export default function App() {
     }),
     [snapshot.aircraft, hideGroundVehicles, hideAnonymous],
   );
-
-  // Keep the visibleAircraft ref in sync without restarting the director interval
-  useEffect(() => { visibleAircraftRef.current = visibleAircraft; }, [visibleAircraft]);
 
   // ── Sequence ladder queues ────────────────────────────────────────────────
   /** Next 3 arrivals sorted by ascending altitude (lower = closer to threshold).
@@ -409,109 +322,6 @@ export default function App() {
     return all.slice(0, 3);
   }, [visibleAircraft, pinnedAcIds]);
 
-  // ── Director tick ────────────────────────────────────────────────────────
-  // Runs a 1 s interval only while directorMode is ON.
-  // Reads visibleAircraftRef / selectedAcIdRef / phaseHistRef to avoid stale
-  // closures — the interval is only recreated when directorMode changes.
-  useEffect(() => {
-    if (!directorMode) return;
-
-    const tick = () => {
-      const now = Date.now();
-      // Pause dwell timer during critical-alert camera interrupt so the director
-      // doesn't switch subjects while the camera is mid-pivot.
-      if (alertInterruptActiveRef.current) return;
-      // Don't override a manual user inspection — the user has explicitly focused
-      // on an aircraft; the director cedes control until they deselect or re-enable director.
-      if (manualInspectRef.current) return;
-      // If a pinned aircraft is currently selected, hold it indefinitely —
-      // reset dwell every tick so the director never switches away.
-      const currentId = selectedAcIdRef.current;
-      if (currentId && pinnedAcIdsRef.current.has(currentId)) {
-        lastSwitchRef.current = now;
-        return;
-      }
-      if (now - lastSwitchRef.current < DIRECTOR_DWELL_MS) return;
-      lastSwitchRef.current = now;
-
-      const ph     = phaseHistRef.current;
-      const list   = visibleAircraftRef.current;
-      const DIRECTOR_RADIUS_M2 = 10_000 ** 2;
-
-      const DIRECTOR_COOLDOWN_MS = 90_000;
-      const DIRECTOR_COOLDOWN_PENALTY = 200;
-      const cooldown = directorCooldownRef.current;
-
-      // Prune expired cooldown entries
-      for (const [id, ts] of cooldown) {
-        if (now - ts > DIRECTOR_COOLDOWN_MS) cooldown.delete(id);
-      }
-
-      const scored = list
-        .filter(ac =>
-          ac.phase !== 'at-gate' &&
-          ac.position.alt < 3_000 &&
-          ac.position.x ** 2 + ac.position.y ** 2 < DIRECTOR_RADIUS_M2,
-        )
-        .map(ac => {
-          const base    = directorScore(ac, ph.get(ac.id));
-          const dist2   = ac.position.x ** 2 + ac.position.y ** 2;
-          // Final approach bonus — heavily weights aircraft on a 5 NM or closer final
-          const finalBonus = (ac.phase === 'approach' || ac.phase === 'landing') &&
-                             dist2 < DIRECTOR_FINAL_DIST_M2
-            ? DIRECTOR_FINAL_BONUS : 0;
-          // Takeoff roll bonus — aircraft close to the runway during takeoff phase
-          const takeoffRollBonus = ac.phase === 'takeoff' &&
-                                   dist2 < DIRECTOR_TAKEOFF_ROLL_DIST_M2
-            ? DIRECTOR_TAKEOFF_ROLL_BONUS : 0;
-          const penalty = cooldown.has(ac.id) ? DIRECTOR_COOLDOWN_PENALTY : 0;
-          return { ac, score: base + finalBonus + takeoffRollBonus - penalty };
-        })
-        .sort((a, b) => b.score - a.score);
-
-      // ── Airport overview cut (every other switch) ─────────────────────────
-      // Skip the overview if there's an urgent subject (final approach / takeoff roll)
-      const hasUrgent = scored.length > 0 && isUrgentDirectorSubject(scored[0].ac);
-      if (directorPhaseRef.current === 'airport' && !hasUrgent) {
-        directorPhaseRef.current = 'aircraft';
-        setCameraMode('orbit');
-        console.log('[DIRECTOR] → airport overview');
-        return;
-      }
-      // If urgent, skip the overview and fall through to pick the aircraft
-      if (directorPhaseRef.current === 'airport' && hasUrgent) {
-        // Keep the alternating phase so next non-urgent switch goes to overview
-        directorPhaseRef.current = 'aircraft';
-      } else {
-        // ── Aircraft cut ──────────────────────────────────────────────────────
-        directorPhaseRef.current = 'airport'; // next cut will be the airport
-      }
-
-      if (scored.length === 0) return;
-
-      // Always pick the top scorer after cooldown penalties.
-      // (The old "skip current if #2 is good enough" check is now redundant
-      // because the current aircraft carries a full cooldown penalty.)
-      const pick = scored[0].ac;
-
-      // Record this pick in the cooldown map
-      cooldown.set(pick.id, now);
-
-      manualInspectRef.current = false; // director is now driving; release any manual lock
-      setSelectedAcId(pick.id);
-      setCameraMode('follow');
-      console.log(
-        `[DIRECTOR] → ${pick.callsign} (${pick.phase})` +
-        ` score=${scored.find(s => s.ac.id === pick.id)?.score ?? '?'}`,
-      );
-    };
-
-    // Fire immediately so the user doesn't stare at an empty screen
-    lastSwitchRef.current = 0;
-    tick();
-    const timer = setInterval(tick, 1_000);
-    return () => clearInterval(timer);
-  }, [directorMode]); // stable — reads all live values through refs
 
   // ── Global keyboard handler ──────────────────────────────────────────────
   // The 3D view handles its own Esc chain internally; we handle 2D Esc here.
@@ -615,10 +425,7 @@ export default function App() {
             setDirectorMode(v => {
               const next = !v;
               console.log(`[APP] Director mode ${next ? 'ON' : 'OFF'}`);
-              if (next) {
-                lastSwitchRef.current = 0; // fire immediately on enable
-                manualInspectRef.current = false; // release any manual lock
-              }
+              void next; // director state reset handled by directorMode sync effect
               return next;
             });
           }}
@@ -770,13 +577,6 @@ export default function App() {
             }}
             onCameraMode={(mode) => {
               console.log(`[APP] camera mode: ${mode}`);
-              // Track whether the user is manually holding inspect focus so the
-              // director interval knows not to steal control.
-              if (mode === 'inspect') {
-                manualInspectRef.current = true;
-              } else if (mode === 'orbit' || mode === 'returning') {
-                manualInspectRef.current = false;
-              }
               setCameraMode(mode);
             }}
           />

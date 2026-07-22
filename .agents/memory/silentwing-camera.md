@@ -1,34 +1,40 @@
 ---
-name: Three.js camera state machine
-description: CameraMode type, Esc chain design, and the prop-sync pattern for keeping React props in sync with the rAF loop without teardown
+name: Director camera state machine
+description: Architecture of the SilentWing 3D director camera — three-priority state machine replacing the old scoring/interval approach
 ---
 
-## CameraMode states
-`'orbit' | 'manual' | 'inspect' | 'follow'`
-- Exported from `AirspaceView3D.tsx`, imported by `App.tsx`
-- Canonical state lives in `App.tsx` as React state; synced into `sceneRef` via a `useEffect`
+## Architecture (current)
 
-## Esc chain (in AirspaceView3D onKey, window keydown)
-```
-follow  → inspect  (panel stays, camera holds, flyProgress=1)
-inspect → manual   (selectedAcId=null, onSelectAircraft(null), panel closes)
-manual  → orbit    (auto-orbit resumes)
-orbit   → orbit    (no-op)
-```
-Each transition emits `console.log('[3D CAM] Esc: X → Y ...')` for raw verification.
+The director camera is a self-contained state machine inside `runDirector()` in `AirspaceView3D.tsx`. It runs **every rAF frame** when `st.directorMode === true && st.cameraMode === 'orbit'`. App.tsx no longer has any director interval or scoring logic.
 
-## Prop-sync pattern
-Callbacks (`onSelectAircraft`, `onCameraMode`) are stored in stable refs (`selectRef`, `camModeRef`) updated on every render. Event handlers inside the setup `useEffect([])` call these refs, never the closure-captured prop, so they always call the latest version without re-registering.
+### Three priority levels (highest first)
 
-External prop changes (e.g. panel "Follow" button) flow in via a `useEffect([cameraMode])` that writes to `st.cameraMode` directly — no rAF teardown.
+1. **Alert** — when `st.alertFocusId` changes to a new non-null value, immediately transition to `fly_alert` (2 s), then `hold_alert` (10 s), then fire `alertFocusDone` callback and return to `orbit`.
+2. **Approach / takeoff** — `pickDirectorAircraft()` scans acMap for approach/landing aircraft (lowest renderPos.y first), then takeoff. On finding one: `fly_ac` (3 s) → `hold_ac` (track while priority phase continues) → `orbit`.
+3. **Orbit** — slow 360° rotation around airport.
 
-## Fly-to animation
-- Progress: `+= 0.022` per frame ≈ 45 frames ≈ 0.75 s at 60 fps
-- Easing: `t < 0.5 ? 2t² : -1+(4-2t)t` (ease-in-out quadratic)
-- Start lookAt: derived from `camera.getWorldDirection() * 2000`
-- Target: `acPos + (0, 700, 1400)` in Three.js space (south-and-above the aircraft)
+### DirState interface (fields on SceneState.dir)
+- `phase: 'orbit' | 'fly_alert' | 'hold_alert' | 'fly_ac' | 'hold_ac'`
+- `flyFrom/flyTo/lookFrom/lookTo: THREE.Vector3` — shared fly-animation vectors
+- `flyStartMs, flyMs` — ms timestamps for easing
+- `alertId: string | null` — alert being shown
+- `holdUntilMs: number` — when hold_alert ends
+- `acId: string | null` — aircraft being followed
+- `lookAt: THREE.Vector3` — smoothly lerped look-at
 
-## Raycasting
-Cones are registered in `coneToId: Map<THREE.Mesh, string>` at spawn; removed at despawn. `raycaster.intersectObjects([...coneToId.keys()])` on every click (pointerup with dist < 6 px).
+### Key constants
+- `DIRECTOR_CAM_OFFSET = (0, 1200, 2400)` — offset from aircraft for fly_ac/hold_ac
+- Alert camera: 900 units horizontally from midpoint (current azimuth) + 700 above
 
-**Why:** The rAF loop must not call setState; all camera state is mutable in sceneRef. Only callbacks to App are allowed, and they go through stable refs to avoid stale closures.
+### CameraMode type
+`'orbit' | 'manual' | 'inspect' | 'follow' | 'returning'`
+
+The director only runs when `st.cameraMode === 'orbit'`. User drag → `manual`, click → `inspect`, double-click → `follow`. Esc during `hold_ac` or `fly_ac` drops director back to `orbit` phase.
+
+### App.tsx responsibilities
+- Detects new alerts → sets `alertFocusId` state
+- Passes `alertFocusId` and `onAlertFocusDone` as props to AirspaceView3D
+- `handleAlertFocusDone` just clears `alertFocusId`
+- No director scoring, interval, or ref state
+
+**Why:** The old 1 s interval + scoring approach caused camera thrash between aircraft, couldn't track moving conflicts smoothly, and required complex ref plumbing to avoid stale closures. The rAF state machine runs 60×/s with full access to live renderPos, eliminating all of those issues.
