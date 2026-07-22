@@ -462,6 +462,8 @@ interface SceneState {
   directorIntroStarted: boolean;
   /** performance.now() timestamp when the 15 s intro lerp ends. */
   directorIntroEnd:     number;
+  /** Aircraft ID → alert severity for the current snapshot (Phase 6A). */
+  alertedIds: Map<string, 'advisory' | 'caution' | 'critical'>;
 }
 
 // ── Helper: begin fly-to animation toward an aircraft ────────────────────────
@@ -498,6 +500,8 @@ export interface AirspaceView3DProps {
   directorMode?:    boolean;
   /** Live weather — drives approach corridor and wind indicator. */
   weather?:         WorldSnapshot['weather'];
+  /** Aircraft IDs → severity for active separation alerts (Phase 6A). */
+  alertedIds?:      Map<string, 'advisory' | 'caution' | 'critical'>;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -509,6 +513,7 @@ export default function AirspaceView3D({
   onCameraMode,
   directorMode = false,
   weather,
+  alertedIds,
 }: AirspaceView3DProps) {
   const mountRef       = useRef<HTMLDivElement>(null);
   const sceneRef       = useRef<SceneState | null>(null);
@@ -527,6 +532,12 @@ export default function AirspaceView3D({
     const st = sceneRef.current;
     if (st) st.directorMode = directorMode;
   }, [directorMode]);
+
+  // Sync alertedIds prop so the rAF loop highlights alerted aircraft.
+  useEffect(() => {
+    const st = sceneRef.current;
+    if (st) st.alertedIds = alertedIds ?? new Map();
+  }, [alertedIds]);
 
   // ── Sync external cameraMode prop → sceneRef ────────────────────────────────
   // Fired when App changes cameraMode (e.g. "Follow" button in panel).
@@ -683,6 +694,7 @@ export default function AirspaceView3D({
       directorLookAt:       new THREE.Vector3(), // starts at scene origin (airport centre)
       directorIntroStarted: false,
       directorIntroEnd:     0,
+      alertedIds:           new Map(),
     };
     sceneRef.current = st;
 
@@ -1391,6 +1403,17 @@ export default function AirspaceView3D({
 
         // ── Purple halo ring — visible only when director-selected ────────────
         if (b.halo) b.halo.visible = isSelected;
+
+        // ── Alert colour override — overrides phase colour for alerted aircraft ─
+        // Applied AFTER the stale/phase logic so alerts are always visible.
+        const alertSev = st.alertedIds.get(ac.id);
+        if (alertSev && !isStale) {
+          const alertHex = alertSev === 'critical' ? 0xef4444
+                         : alertSev === 'caution'  ? 0xf59e0b : 0xfbbf24;
+          cm.color.setHex(alertHex);
+          cm.emissive.setHex(alertHex);
+          cm.emissiveIntensity = 0.80;
+        }
 
         // ── FIX A: trail sanity cap ────────────────────────────────────────
         // Drop a trail point that is physically further from the last point

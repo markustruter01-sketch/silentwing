@@ -1,0 +1,169 @@
+# SILENTWING — PHASE 6A: ALERT SHELL + FIRST DETECTOR
+
+**ENVIRONMENT:** Existing SilentWing Replit dev project. Build ONLY Phase 6A.
+Do NOT build the harder detectors (predicted conflict, route deviation, runway
+occupancy) — those are Phase 6B. Stop after 6A and report.
+
+**GOAL:** Build the complete alert-tab shell on the LEFT edge of the screen,
+with the full glow / flare / auto-expand tier behaviour, driven by ONE real,
+easily-verifiable detector: horizontal+vertical separation breach. This proves
+the entire alert architecture end-to-end on real Brisbane traffic before we add
+smarter detectors.
+
+Works in BOTH Simulation and Live ADS-B modes.
+
+---
+
+## PART 1 — THE ALERT DATA MODEL (build first)
+
+Create a central alert type and store, independent of any view:
+
+```ts
+type AlertSeverity = 'advisory' | 'caution' | 'critical';
+type AlertKind = 'separation';   // only one kind in 6A; more added in 6B
+
+interface Alert {
+  id: string;                 // stable id for the alert instance
+  kind: AlertKind;
+  severity: AlertSeverity;
+  aircraft: string[];         // callsigns/hex involved
+  message: string;            // one-line plain-language "why"
+  raisedAt: number;           // epoch ms
+  clearedAt?: number;         // set when the condition resolves
+  acknowledged: boolean;      // dismissed by controller
+}
+```
+
+An **AlertEngine** consumes each WorldSnapshot (from whichever adapter is
+active) and maintains the current set of active alerts:
+- Runs the detector(s) on every snapshot.
+- Creates a new Alert when a condition first appears.
+- Keeps the SAME alert id while the condition persists (do not spam a new alert
+  every poll for the same pair).
+- Marks `clearedAt` when the condition resolves, but keeps it in the log.
+- De-duplicates: one active alert per unique aircraft-pair per kind.
+
+The engine must be adapter-agnostic — it reads the snapshot, nothing else.
+
+---
+
+## PART 2 — THE DETECTOR (separation breach)
+
+For every pair of AIRBORNE aircraft in the snapshot, compute:
+- Horizontal distance (nm) between their positions.
+- Vertical distance (ft) between their altitudes.
+
+A **separation breach** exists when BOTH:
+- horizontal separation < 3 nm, AND
+- vertical separation < 1000 ft
+
+Severity tiers (tune-able constants at top of the detector):
+- **advisory:** horizontal < 5 nm AND vertical < 1500 ft (getting close)
+- **caution:**  horizontal < 3 nm AND vertical < 1000 ft (standard sep lost)
+- **critical:** horizontal < 1.5 nm AND vertical < 700 ft (serious)
+
+Rules:
+- Only consider aircraft with FRESH data (skip stale/greyed tracks — a breach
+  computed from stale positions is unreliable). Use the existing seen_pos
+  staleness flag.
+- Skip pairs where either aircraft is on the ground (this is an AIRBORNE
+  separation detector in 6A; ground conflicts come in 6B).
+- The `message` must state the why in plain language, e.g.:
+  "QFA523 & VOZ711 — 2.1 nm / 600 ft, converging" (include the actual numbers).
+- Recompute every snapshot; update severity as the pair gets closer or separates.
+
+**Note on demo-ability:** real Brisbane traffic may not always have a live
+breach. Add a small dev-only "inject test conflict" button (visible only in a
+dev/debug corner) that spawns two sim aircraft on a converging course so the
+alert system can be demonstrated on demand. This button is dev-scaffold, clearly
+labelled, and must not appear as a normal user feature.
+
+---
+
+## PART 3 — THE LEFT-EDGE TAB SHELL
+
+A vertical stack of collapsible tabs on the LEFT edge of the screen. For 6A,
+create these tabs (later phases fill the empty ones):
+
+1. **Alerts** — active (non-cleared, non-acknowledged) alerts, most severe first
+2. **Conflict Horizon** — (placeholder panel for 6B; show "No predicted conflicts" for now)
+3. **Traffic Forecast** — (placeholder for Phase 7)
+4. **Weather Impact** — (placeholder for Phase 7)
+5. **Alert Log** — full timestamped history: every alert raised, its severity,
+   involved aircraft, raisedAt, clearedAt, acknowledged status. Cleared and
+   dismissed alerts remain here. Never deleted.
+
+**Collapsed state:** each tab is a thin vertical strip showing an icon + label
++ a count badge (e.g. Alerts • 2). Clicking a tab expands its panel; clicking
+again collapses.
+
+---
+
+## PART 4 — THE FLARE / TIER BEHAVIOUR (the important part)
+
+When the AlertEngine raises or escalates an alert, the relevant tab reacts by
+severity. This is the core "silent until it matters" mechanic — get it exact:
+
+- **advisory:**
+  - The Alerts tab glows softly (subtle amber tint on the collapsed tab).
+  - Does NOT auto-expand. Does NOT make sound.
+- **caution:**
+  - The Alerts tab glows amber AND pulses (flashing).
+  - The Alerts panel AUTO-EXPANDS to show the alert.
+  - No sound (or a single soft tone — configurable, default off).
+- **critical:**
+  - The Alerts tab glows red AND pulses faster.
+  - The Alerts panel AUTO-EXPANDS.
+  - A SINGLE audio chime plays once (not repeating). Respect a global audio
+    on/off setting.
+
+Strict rules:
+- Auto-expanded alerts stay on screen until the controller explicitly dismisses
+  them (an Acknowledge/Dismiss button on the alert). They do NOT auto-timeout.
+- Dismissing sets `acknowledged = true`, removes it from the active Alerts panel,
+  and writes it to the Alert Log with the dismissal time.
+- If a dismissed condition ESCALATES (e.g. caution the controller dismissed
+  becomes critical), it re-raises as a NEW critical alert (safety: a dismissed
+  low alert must not suppress a later worse one).
+- Advisory alerts NEVER auto-expand and NEVER make sound — verify this
+  explicitly.
+- Every alert row shows: severity, involved aircraft, the one-line why with
+  live numbers, time raised, and a Dismiss button.
+
+---
+
+## PART 5 — VISUAL LINK TO THE AIRCRAFT (light touch)
+
+When a separation alert is active, the involved aircraft in the 3D/2D views
+should be highlighted (e.g. amber/red ring or pulse matching the severity), so
+the controller can connect the alert to the traffic. Reuse the existing
+conflict-highlight styling if present; do not rewrite the aircraft renderer.
+
+---
+
+## HARD RULES
+
+1. The AlertEngine reads ONLY the WorldSnapshot — it must work identically in
+   Sim and Live modes.
+2. Advisory tier: NO auto-expand, NO sound. Non-negotiable.
+3. One active alert per aircraft-pair per kind — no per-poll spam.
+4. Dismissed alerts go to the log, never vanish. Escalation re-raises.
+5. Do NOT build predicted-conflict, route-deviation, runway-occupancy, or
+   weather detectors — those are 6B/7. Only separation breach in 6A.
+6. The "inject test conflict" button is dev-only scaffold, clearly labelled.
+7. Do NOT break existing views, camera, live ingest, or the sim/live toggle.
+
+---
+
+## REPORT AFTER BUILDING (raw, no summaries)
+
+1. Raw file list created/modified.
+2. The separation detector code (distance calc + tier thresholds).
+3. Confirm with a raw trace: feed two aircraft at 2.0 nm / 600 ft — show the
+   engine raising a CAUTION alert with the correct message and numbers.
+4. Confirm advisory does NOT auto-expand and does NOT sound (state how enforced).
+5. Confirm dismiss → writes to log; escalation after dismiss → re-raises new alert.
+6. Confirm the engine runs identically on a Live ADS-B snapshot (state whether
+   any live breach was present in a test poll, or that the inject-test button
+   was used).
+7. Screenshot or describe the collapsed tab row and an auto-expanded caution.

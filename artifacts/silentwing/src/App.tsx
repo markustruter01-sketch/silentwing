@@ -4,9 +4,13 @@ import StatusStrip from '@/components/layout/StatusStrip';
 import AirfieldView2D from '@/components/views/AirfieldView2D';
 import AirspaceView3D, { type CameraMode } from '@/components/views/AirspaceView3D';
 import AircraftDetailPanel from '@/components/panels/AircraftDetailPanel';
+import AlertShell          from '@/components/panels/AlertShell';
 import ControlsHUD from '@/components/ui/ControlsHUD';
 import { getSimAdapter } from '@/sim/engine';
 import { AdsbAdapter } from '@/feed/adsbAdapter';
+import { AlertEngine }  from '@/alerts/engine';
+import type { SWAlert, SWAlertSeverity } from '@/alerts/types';
+import { severityRank } from '@/alerts/types';
 import type { DataFeedAdapter, WorldSnapshot, FlightPhase, Aircraft } from '@/types';
 import { isAirborne } from '@/types';
 
@@ -18,6 +22,16 @@ export type DataSource = 'sim' | 'live';
 function sectorLoad(count: number) {
   return Math.min(99, count * 11);
 }
+
+// ── Dev-only test-conflict aircraft ──────────────────────────────────────────
+// Two aircraft 1.08 nm apart / 500 ft vertical → CRITICAL separation alert.
+// Used exclusively by the "DEV: INJECT CONFLICT" button.  Never shown in prod.
+const TEST_CONFLICT_AIRCRAFT: Aircraft[] = [
+  { id: '__dev_tc1__', callsign: 'TEST01', type: 'B738', phase: 'approach',
+    position: { x: 0, y: -5000, alt: 3000 }, heading: 180, groundSpeed: 150, confidence: 1 },
+  { id: '__dev_tc2__', callsign: 'TEST02', type: 'A320', phase: 'approach',
+    position: { x: 2000, y: -5000, alt: 3500 }, heading: 0, groundSpeed: 150, confidence: 1 },
+];
 
 // ── Director Mode ─────────────────────────────────────────────────────────────
 
@@ -160,6 +174,49 @@ export default function App() {
   const selectedAcIdRef    = useRef<string | null>(null);
   /** Stable ref to the latest visible aircraft list — avoids re-starting interval on every poll. */
   const visibleAircraftRef = useRef<Aircraft[]>([]);
+
+  // ── Alert engine (Phase 6A) ──────────────────────────────────────────────
+  const alertEngineRef  = useRef(new AlertEngine());
+  const [swAlerts,       setSWAlerts]       = useState<SWAlert[]>([]);
+  const [injectConflict, setInjectConflict] = useState(false);
+
+  // Process alerts on every snapshot (and whenever the inject flag changes)
+  useEffect(() => {
+    const extra = injectConflict ? TEST_CONFLICT_AIRCRAFT : [];
+    setSWAlerts(alertEngineRef.current.process(snapshot, extra));
+  }, [snapshot, injectConflict]);
+
+  // Auto-clear injected test conflict after 30 s
+  useEffect(() => {
+    if (!injectConflict) return;
+    const t = setTimeout(() => setInjectConflict(false), 30_000);
+    return () => clearTimeout(t);
+  }, [injectConflict]);
+
+  const handleDismissAlert = useCallback((id: string) => {
+    alertEngineRef.current.dismiss(id);
+    setSWAlerts(alertEngineRef.current.getAllAlerts());
+  }, []);
+
+  /** Active = not acknowledged AND not cleared */
+  const activeAlerts = useMemo(
+    () => swAlerts.filter(a => !a.acknowledged && !a.clearedAt),
+    [swAlerts],
+  );
+
+  /** Map from aircraft ID → highest active alert severity (for 3-D highlight) */
+  const alertedIds = useMemo(() => {
+    const map = new Map<string, SWAlertSeverity>();
+    for (const alert of activeAlerts) {
+      for (const aid of alert.aircraftIds) {
+        const prev = map.get(aid);
+        if (!prev || severityRank(alert.severity) > severityRank(prev)) {
+          map.set(aid, alert.severity);
+        }
+      }
+    }
+    return map;
+  }, [activeAlerts]);
 
   // ── Director intro hint ─────────────────────────────────────────────────
   // Shown for 5 seconds on load, fades out over the last second.
@@ -307,8 +364,9 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKey);
   }, [handleKey]);
 
-  const feedHealth   = adapter.getFeedHealth();
-  const activeAlerts = adapter.getActiveAlerts();
+  const feedHealth    = adapter.getFeedHealth();
+  // Legacy adapter alerts (not used in 6A UI — kept for StatusStrip count fallback)
+  const _legacyAlerts = adapter.getActiveAlerts();
 
   return (
     <div className="flex flex-col w-screen h-screen overflow-hidden bg-[#0A0E14] text-slate-100">
@@ -321,7 +379,7 @@ export default function App() {
       />
       <StatusStrip
         aircraftCount={visibleAircraft.length}
-        alertCount={activeAlerts.length}
+        alertCount={activeAlerts.length || _legacyAlerts.length}
         groundCount={visibleAircraft.filter(ac => !isAirborne(ac)).length}
         sectorLoad={sectorLoad(visibleAircraft.length)}
       />
@@ -389,6 +447,12 @@ export default function App() {
 
       {/* ── Main view area ── */}
       <main className="flex-1 relative overflow-hidden">
+        {/* ── Phase 6A alert shell — left edge ── */}
+        <AlertShell
+          activeAlerts={activeAlerts}
+          allAlerts={swAlerts}
+          onDismiss={handleDismissAlert}
+        />
         {/* ── Brisbane Airport title — 3D airspace only ── */}
         {view === 'airspace' && (
           <div className="absolute inset-x-0 top-3 flex flex-col items-center z-10 pointer-events-none select-none">
@@ -419,6 +483,7 @@ export default function App() {
             cameraMode={cameraMode}
             directorMode={directorMode}
             weather={snapshot.weather}
+            alertedIds={alertedIds}
             onSelectAircraft={(id) => {
               console.log(`[APP] 3D select: ${id ?? 'null'}`);
               setSelectedAcId(id);
@@ -495,6 +560,26 @@ export default function App() {
 
         {/* ── Controls HUD — bottom-centre on both views ── */}
         <ControlsHUD activeView={view} />
+
+        {/* ── DEV-ONLY: inject test conflict ───────────────────────────────
+            Dev scaffold — NOT a production feature. Clearly labelled.
+            Spawns two sim aircraft on a converging course to demo the alert
+            system on demand. Auto-clears after 30 s. */}
+        {import.meta.env.DEV && (
+          <button
+            onClick={() => setInjectConflict(v => !v)}
+            title="DEV SCAFFOLD: Inject two converging aircraft to trigger a CRITICAL separation alert"
+            className={[
+              'fixed bottom-2 left-10 z-[300] text-[7px] font-mono tracking-widest uppercase',
+              'px-2 py-1 rounded border cursor-pointer transition-colors',
+              injectConflict
+                ? 'border-red-600/80 text-red-300 bg-red-950/60 hover:bg-red-950/80'
+                : 'border-slate-700/50 text-slate-600 bg-slate-950/60 hover:text-slate-400',
+            ].join(' ')}
+          >
+            [DEV] {injectConflict ? '■ Clear conflict' : '▶ Inject conflict'}
+          </button>
+        )}
 
         {/* ── Director intro hint ──────────────────────────────────────────── */}
         {showDirectorHint && (
