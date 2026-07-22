@@ -20,7 +20,7 @@ function sectorLoad(count: number) {
 }
 
 export default function App() {
-  const [view, setView] = useState<View>('airfield');
+  const [view, setView] = useState<View>('airspace');
 
   // ── Data source toggle ───────────────────────────────────────────────────
   const [dataSource, setDataSource] = useState<DataSource>('sim');
@@ -80,7 +80,7 @@ export default function App() {
   const handleClosePanel = useCallback(() => {
     console.log('[APP] panel closed via UI');
     setSelectedAcId(null);
-    setCameraMode(prev => (prev === 'orbit' ? 'orbit' : 'manual'));
+    setCameraMode('orbit'); // triggers smooth return-to-orbit in the 3D view
   }, []);
 
   // Follow toggle from panel button

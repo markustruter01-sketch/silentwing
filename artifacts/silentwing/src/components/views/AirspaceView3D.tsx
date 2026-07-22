@@ -17,13 +17,14 @@ import { isAirborne } from '@/types';
 import { REAL_RUNWAYS, REAL_TAXIWAYS, REAL_APRONS } from '@/data/ybbn_real';
 
 // ── Camera mode — exported so App can type-check ──────────────────────────────
-export type CameraMode = 'orbit' | 'manual' | 'inspect' | 'follow';
+export type CameraMode = 'orbit' | 'manual' | 'inspect' | 'follow' | 'returning';
 
 // ── Scene constants ────────────────────────────────────────────────────────────
 const ALT_SCALE    = 0.15;
-const ORBIT_RADIUS = 5200;        // default orbit radius (was 4200 — widened for airspace margin)
-const ORBIT_HEIGHT = 1600;        // was 2600 — lower angle, more runway visible
-const ORBIT_SPEED  = 0.00035;     // rad/frame ≈ 4.4 min/revolution at 60 fps
+const ORBIT_RADIUS     = 7500;    // wide overview — all altitude rings in frame
+const ORBIT_HEIGHT     = 5000;    // elevated for a clear top-down-ish perspective
+const ORBIT_INIT_ANGLE = Math.PI * 0.6; // starting angle (south of airport, runway visible)
+const ORBIT_SPEED      = 0.00025; // rad/frame ≈ 7 min/revolution at 60 fps
 const LOOK_AT      = new THREE.Vector3(0, 0, 0); // airfield centre (was y=700)
 const LABEL_LIFT      = 210;      // Three.js Y-units above cone
 const TRAIL_MAX       = 600;      // max trail points
@@ -107,19 +108,57 @@ function makeLabel(callsign: string, hex: number): THREE.Sprite {
   return sprite;
 }
 
+// ── Ring altitude label sprites ───────────────────────────────────────────────
+function makeRingLabel(text: string): THREE.Sprite {
+  const cv  = document.createElement('canvas');
+  cv.width  = 256;
+  cv.height = 56;
+  const ctx = cv.getContext('2d')!;
+  ctx.clearRect(0, 0, 256, 56);
+  ctx.font         = 'bold 22px "Courier New", monospace';
+  ctx.fillStyle    = '#2d6a9f';
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 128, 28);
+  const tex = new THREE.CanvasTexture(cv);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.80, depthWrite: false });
+  const sp  = new THREE.Sprite(mat);
+  sp.scale.set(480, 105, 1); // metres (scene units)
+  return sp;
+}
+
 // ── Altitude reference rings (FL050 / FL100 / FL150) ──────────────────────────
+// Each ring has four labels at the cardinal points (N / S / E / W).
 function buildAltRings(): THREE.Group {
   const g   = new THREE.Group();
   const mat = new THREE.LineBasicMaterial({ color: 0x162030, transparent: true, opacity: 0.55 });
   const N   = 128;
+  const R   = 4200; // ring radius (metres in scene space)
   for (const fl of [50, 100, 150]) {
-    const y   = fl * 100 * ALT_SCALE;
+    const y     = fl * 100 * ALT_SCALE;
+    const altFt = fl * 100;
+    const label = `${altFt.toLocaleString()} ft`;
+
+    // Ring line
     const pts: THREE.Vector3[] = [];
     for (let i = 0; i <= N; i++) {
       const a = (i / N) * Math.PI * 2;
-      pts.push(new THREE.Vector3(Math.cos(a) * 4200, y, Math.sin(a) * 4200));
+      pts.push(new THREE.Vector3(Math.cos(a) * R, y, Math.sin(a) * R));
     }
     g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat));
+
+    // Cardinal labels slightly above the ring plane
+    const LY = y + 110;
+    for (const [lx, lz] of [
+      [0, -R],  // North  (+Y = north in YBBN adapter → -Z in scene)
+      [0,  R],  // South
+      [R,  0],  // East
+      [-R, 0],  // West
+    ] as [number, number][]) {
+      const sp = makeRingLabel(label);
+      sp.position.set(lx, LY, lz);
+      g.add(sp);
+    }
   }
   return g;
 }
@@ -319,6 +358,9 @@ export default function AirspaceView3D({
   useEffect(() => {
     const st = sceneRef.current;
     if (!st || st.cameraMode === cameraMode) return;
+    // Never interrupt an in-progress smooth return; React already believes
+    // cameraMode is 'orbit' from when we started the animation.
+    if (st.cameraMode === 'returning') return;
     console.log(`[3D CAM] prop→scene sync: ${st.cameraMode} → ${cameraMode}`);
     if (cameraMode === 'follow' && st.selectedAcId && st.cameraMode === 'inspect') {
       // Panel "Follow" button pressed — enter follow immediately
@@ -327,6 +369,19 @@ export default function AirspaceView3D({
       // Panel "Stop Following" — hold current position
       st.cameraMode = 'inspect';
       st.flyProgress = 1; // already at target
+    } else if (cameraMode === 'orbit') {
+      // Any transition to orbit from outside — fly back smoothly.
+      const cam = st.camera;
+      const tx  = st.orbitTarget.x + st.orbitRadius * Math.cos(st.angle);
+      const tz  = st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle);
+      st.flyFrom.copy(cam.position);
+      st.flyTo.set(tx, st.orbitElevation, tz);
+      st.flyLookFrom.copy(st.orbitTarget);
+      st.flyLookTo.copy(st.orbitTarget);
+      st.flyProgress = 0;
+      st.cameraMode  = 'returning';
+      // Leave camModeRef alone — React already has 'orbit', which is what we
+      // will settle into once the animation completes.
     } else {
       st.cameraMode = cameraMode;
     }
@@ -359,7 +414,11 @@ export default function AirspaceView3D({
 
     // Camera
     const camera = new THREE.PerspectiveCamera(42, W / H, 10, 80000);
-    camera.position.set(ORBIT_RADIUS, ORBIT_HEIGHT, 0);
+    camera.position.set(
+      ORBIT_RADIUS * Math.cos(ORBIT_INIT_ANGLE),
+      ORBIT_HEIGHT,
+      ORBIT_RADIUS * Math.sin(ORBIT_INIT_ANGLE),
+    );
     camera.lookAt(LOOK_AT);
 
     // Lights
@@ -385,7 +444,7 @@ export default function AirspaceView3D({
     const st: SceneState = {
       renderer, scene, camera,
       animId:  0,
-      angle:   0,
+      angle:   ORBIT_INIT_ANGLE,
       acMap:   new Map(),
       coneToId: new Map(),
       cameraMode:  'orbit',
@@ -462,6 +521,24 @@ export default function AirspaceView3D({
               camera.position.copy(b.renderPos.clone().add(FOLLOW_OFFSET));
               camera.lookAt(b.renderPos);
             }
+          }
+          break;
+        }
+        case 'returning': {
+          // Smooth fly-back to the default orbit position.
+          // On completion, hands off to 'orbit' with angle re-synced so
+          // the auto-orbit continues seamlessly from the arrived position.
+          st.flyProgress = Math.min(st.flyProgress + 0.018, 1); // ~56 frames ≈ 0.9 s
+          const t  = easeInOut(st.flyProgress);
+          camera.position.lerpVectors(st.flyFrom, st.flyTo, t);
+          const lk = new THREE.Vector3().lerpVectors(st.flyLookFrom, st.flyLookTo, t);
+          camera.lookAt(lk);
+          if (st.flyProgress >= 1) {
+            st.angle = Math.atan2(
+              camera.position.z - st.orbitTarget.z,
+              camera.position.x - st.orbitTarget.x,
+            );
+            st.cameraMode = 'orbit';
           }
           break;
         }
@@ -564,10 +641,17 @@ export default function AirspaceView3D({
               posArr[i * 3]     = tp.pos.x;
               posArr[i * 3 + 1] = tp.pos.y;
               posArr[i * 3 + 2] = tp.pos.z;
-              // alpha: 1 (TRAIL_OPACITY) at newest point → 0 at TRAIL_FADE_S
+              // alpha: TRAIL_OPACITY at newest point → 0 at TRAIL_FADE_S
               const ageFrac = Math.min((nowMs - tp.t) / TRAIL_FADE_MS, 1);
               alpArr[i]     = (1 - ageFrac) * TRAIL_OPACITY;
             }
+
+            // Override the head with the live extrapolated position so the
+            // trail follows the aircraft continuously between 8-second polls.
+            posArr[(n - 1) * 3]     = b.renderPos.x;
+            posArr[(n - 1) * 3 + 1] = b.renderPos.y;
+            posArr[(n - 1) * 3 + 2] = b.renderPos.z;
+            alpArr[n - 1]            = TRAIL_OPACITY; // head is always full opacity
 
             posAttr.needsUpdate = true;
             alpAttr.needsUpdate = true;
@@ -703,13 +787,21 @@ export default function AirspaceView3D({
       if (st.panResumeTimer !== null) clearTimeout(st.panResumeTimer);
       st.panResumeTimer = setTimeout(() => {
         st.panResumeTimer = null;
+        // Re-sync angle from current position, then fly smoothly back.
         st.angle = Math.atan2(
           camera.position.z - st.orbitTarget.z,
           camera.position.x - st.orbitTarget.x,
         );
-        st.cameraMode = 'orbit';
+        const tx = st.orbitTarget.x + st.orbitRadius * Math.cos(st.angle);
+        const tz = st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle);
+        st.flyFrom.copy(camera.position);
+        st.flyTo.set(tx, st.orbitElevation, tz);
+        st.flyLookFrom.copy(st.orbitTarget);
+        st.flyLookTo.copy(st.orbitTarget);
+        st.flyProgress = 0;
+        st.cameraMode  = 'returning';
         camModeRef.current('orbit');
-        console.log('[3D CAM] pan idle 30 s → orbit resumed');
+        console.log('[3D CAM] pan idle 30 s → returning (smooth fly-back to orbit)');
       }, 30_000);
     };
 
@@ -791,16 +883,34 @@ export default function AirspaceView3D({
         console.log(`[3D CAM] Esc: follow → inspect  [panel stays, camera holds]`);
 
       } else if (prev === 'inspect') {
-        st.cameraMode    = 'manual';
-        st.selectedAcId  = null;
+        // Close panel and smoothly fly back to the default overview.
+        st.selectedAcId = null;
         selectRef.current(null);
-        camModeRef.current('manual');
-        console.log(`[3D CAM] Esc: inspect → manual  [panel closed, camera holds]`);
+        const cam = st.camera;
+        const tx  = st.orbitTarget.x + st.orbitRadius * Math.cos(st.angle);
+        const tz  = st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle);
+        st.flyFrom.copy(cam.position);
+        st.flyTo.set(tx, st.orbitElevation, tz);
+        st.flyLookFrom.copy(st.orbitTarget);
+        st.flyLookTo.copy(st.orbitTarget);
+        st.flyProgress = 0;
+        st.cameraMode  = 'returning';
+        camModeRef.current('orbit');
+        console.log(`[3D CAM] Esc: inspect → returning (smooth fly-back, panel closed)`);
 
       } else if (prev === 'manual') {
-        st.cameraMode = 'orbit';
+        // Smooth fly-back instead of a position snap.
+        const cam = st.camera;
+        const tx  = st.orbitTarget.x + st.orbitRadius * Math.cos(st.angle);
+        const tz  = st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle);
+        st.flyFrom.copy(cam.position);
+        st.flyTo.set(tx, st.orbitElevation, tz);
+        st.flyLookFrom.copy(st.orbitTarget);
+        st.flyLookTo.copy(st.orbitTarget);
+        st.flyProgress = 0;
+        st.cameraMode  = 'returning';
         camModeRef.current('orbit');
-        console.log(`[3D CAM] Esc: manual → orbit  [auto-orbit resumed]`);
+        console.log(`[3D CAM] Esc: manual → returning (smooth fly-back to orbit)`);
 
       } else {
         // Already in orbit — nothing to unwind
