@@ -1731,6 +1731,7 @@ export default function AirspaceView3D({
             const t  = easeInOut(st.flyProgress);
             camera.position.lerpVectors(st.flyFrom, st.flyTo, t);
             const lk = new THREE.Vector3().lerpVectors(st.flyLookFrom, st.flyLookTo, t);
+            lk.y = Math.max(MIN_LOOK_Y, lk.y); // never look into the tarmac mid-fly
             camera.lookAt(lk);
           } else {
             // Arrived — track the aircraft's interpolated display position
@@ -1799,6 +1800,7 @@ export default function AirspaceView3D({
           const t  = easeInOut(st.flyProgress);
           camera.position.lerpVectors(st.flyFrom, st.flyTo, t);
           const lk = new THREE.Vector3().lerpVectors(st.flyLookFrom, st.flyLookTo, t);
+          lk.y = Math.max(MIN_LOOK_Y, lk.y); // prevent looking underground during fly-back
           camera.lookAt(lk);
           if (st.flyProgress >= 1) {
             st.angle = Math.atan2(
@@ -1862,6 +1864,9 @@ export default function AirspaceView3D({
             const ALERT_CAM_DIST = 850;
             const closPos = intr.targetLook.clone()
               .addScaledVector(intr.approachDir, ALERT_CAM_DIST);
+            // If approachDir has a downward component the naive offset can land
+            // underground.  Guarantee the camera is always above the conflict zone.
+            closPos.y = Math.max(intr.targetLook.y + 200, closPos.y);
 
             // naturalPos / naturalLook: where the mode code just placed the camera
             // (orbit / follow ran earlier this frame).  Used as the pivot-out target
@@ -2727,7 +2732,7 @@ export default function AirspaceView3D({
       if (st.cameraMode === 'orbit') {
         st.cameraMode = 'manual';
         camModeRef.current('manual');
-        console.log('[3D CAM] right-drag pan → manual (resumes in 30 s idle)');
+        console.log('[3D CAM] right-drag pan → manual (resumes after 10 s idle)');
       }
 
       // Reset 10 s idle timer — on expiry, re-sync angle and resume orbit

@@ -165,12 +165,12 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   return (
     <div className="flex flex-col gap-0.5">
       <span
-        className="font-mono text-[6px] tracking-widest"
-        style={{ color: '#FDE047', opacity: 0.55 }}
+        className="font-mono text-[8px] tracking-widest"
+        style={{ color: '#FDE047', opacity: 0.6 }}
       >
         {label}
       </span>
-      <span className="font-mono text-[9px] text-slate-200 whitespace-nowrap">{children}</span>
+      <span className="font-mono text-[13px] font-medium text-slate-100 whitespace-nowrap leading-none">{children}</span>
     </div>
   );
 }
