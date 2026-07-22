@@ -37,6 +37,30 @@ import { deriveActiveRunwayDirection } from '../airports/helpers';
 const AT_GATE_GS_KT  = 2;   // knots  — aircraft considered stationary at gate
 const AT_GATE_DIST_M = 60;  // metres — gate proximity threshold
 
+// ── angularDiff ───────────────────────────────────────────────────────────────
+// Smallest angular difference between two compass headings (0–180°).
+function angularDiff(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360;
+  return d > 180 ? 360 - d : d;
+}
+
+// ── activeRunwayHeadingDegrees ────────────────────────────────────────────────
+// Converts the active-direction STEM string (e.g. "01", "19") back to the
+// actual compass heading in degrees that aircraft use when departing on that
+// runway end.  Returns undefined if the stem cannot be matched.
+function activeRunwayHeadingDegrees(
+  profile: Pick<AirportProfile, 'runways'>,
+  activeStem: string,
+): number | undefined {
+  for (const rw of profile.runways) {
+    const lowStem  = rw.lowDesignator.replace(/[LRC]$/, '');
+    const highStem = rw.highDesignator.replace(/[LRC]$/, '');
+    if (lowStem  === activeStem) return rw.headingDeg;
+    if (highStem === activeStem) return (rw.headingDeg + 180) % 360;
+  }
+  return undefined;
+}
+
 function derivePhase(
   altFt: number,
   gs: number,
@@ -44,6 +68,8 @@ function derivePhase(
   acX: number,
   acY: number,
   gates: GatePos[],
+  track: number,
+  activeRunwayHeadingDeg: number | undefined,
 ): FlightPhase {
   if (altFt < 50) {
     // On the ground — distinguish at-gate from taxiing
@@ -62,22 +88,29 @@ function derivePhase(
   // baro_rate > 200 ft/min = clearly climbing; < -200 = clearly descending.
   //
   // Many transponders omit baro_rate at low altitude (fresh ADS-B lock right
-  // after rotation is the most common case).  Blind "assume descent" is wrong
-  // here because a takeoff below 500 ft with no baro_rate looks identical to an
-  // approach — except groundspeed tells them apart:
-  //   • Landing short final (<500 ft): decelerating, typically 120–160 kt
-  //   • Takeoff roll/rotation (<500 ft): accelerating through 100–180 kt
-  // Using ≥ 80 kt as a proxy for "fast enough to be a takeoff" catches the
-  // rotation phase reliably without misclassifying slow go-arounds.
+  // after rotation is the most common case).  When baro_rate is absent below
+  // 500 ft we use the aircraft's track relative to the active runway to
+  // distinguish departures from arrivals:
+  //   • Track within ±45° of the DEPARTURE heading → climbing (takeoff)
+  //   • Track within ±45° of the LANDING heading (reciprocal) → not climbing
+  //   • Ambiguous / no runway data → assume descent (safer default; arrivals
+  //     dominate terminal snapshots and a false "landing" label is less
+  //     alarming than a false "takeoff").
   //
   // Above 500 ft the ambiguity matters less (both phases are well-separated by
   // altitude trend), so we keep the conservative "assume descent" fallback there.
   let climbing: boolean;
   if (baroRate !== undefined) {
     climbing = baroRate > 200;
-  } else if (altFt < 500 && gs >= 80) {
-    // Low altitude + fast + no vertical rate → almost certainly a takeoff/rotation
-    climbing = true;
+  } else if (altFt < 500 && gs >= 80 && activeRunwayHeadingDeg !== undefined) {
+    // Departure heading = activeRunwayHeadingDeg
+    // Landing heading  = reciprocal (+ 180)
+    const departureHdg = activeRunwayHeadingDeg;
+    const landingHdg   = (activeRunwayHeadingDeg + 180) % 360;
+    const diffDep      = angularDiff(track, departureHdg);
+    const diffLand     = angularDiff(track, landingHdg);
+    // Within 45° of departure heading → assume takeoff; otherwise → landing/approach
+    climbing = diffDep < 45 && diffDep < diffLand;
   } else {
     // Default: assume descent (statistically more arrivals than departures in
     // the terminal area at any given snapshot).
@@ -128,6 +161,7 @@ function normalise(
   projectFn: (lat: number, lon: number) => { x: number; y: number },
   gates: GatePos[],
   destinationIcao: string,
+  activeRunwayHeadingDeg: number | undefined,
 ): (Aircraft & { isGroundVehicle: boolean }) | null {
   // Rule 3: skip entries with no position
   if (raw.lat == null || raw.lon == null) return null;
@@ -161,7 +195,7 @@ function normalise(
     id:             raw.hex,
     callsign,
     type:           raw.t ?? 'UNKN',
-    phase:          isGroundVehicle ? 'taxi-in' : derivePhase(altFt, Math.round(raw.gs ?? 0), raw.baro_rate, x, y, gates),
+    phase:          isGroundVehicle ? 'taxi-in' : derivePhase(altFt, Math.round(raw.gs ?? 0), raw.baro_rate, x, y, gates, heading, activeRunwayHeadingDeg),
     position:       { x, y, alt: altFt },
     heading,
     groundSpeed:    Math.round(raw.gs ?? 0),
@@ -344,11 +378,19 @@ export class AdsbAdapter implements DataFeedAdapter {
       const gates = this.profile.geometry.gates;
       const icao  = this.profile.icao;
 
+      // Derive active runway direction before normalising aircraft so the phase
+      // classifier can use it as a track-alignment tie-breaker.
+      const sim = this.profile.sim;
+      const windDir   = sim?.defaultWindDir   ?? 190;
+      const windSpeed = sim?.defaultWindSpeed ?? 12;
+      const activeDir = deriveActiveRunwayDirection(this.profile, windDir, windSpeed);
+      const activeHdg = activeRunwayHeadingDegrees(this.profile, activeDir);
+
       const aircraft: Aircraft[] = [];
       let gvCount = 0, anonCount = 0, atGateCount = 0;
 
       for (const raw of rawList) {
-        const norm = normalise(raw, this.projectFn, gates, icao);
+        const norm = normalise(raw, this.projectFn, gates, icao, activeHdg);
         if (!norm) continue;
         if (norm.isGroundVehicle)    gvCount++;
         if (norm.callsign === norm.id) anonCount++;  // callsign fell back to hex
@@ -363,11 +405,6 @@ export class AdsbAdapter implements DataFeedAdapter {
         ` airborne=${airborne} ground-vehicle=${gvCount}` +
         ` anonymous=${anonCount} at-gate=${atGateCount}`,
       );
-
-      const sim = this.profile.sim;
-      const windDir   = sim?.defaultWindDir   ?? 190;
-      const windSpeed = sim?.defaultWindSpeed ?? 12;
-      const activeDir = deriveActiveRunwayDirection(this.profile, windDir, windSpeed);
 
       this.latest = {
         t:       data.now ?? Date.now(),
