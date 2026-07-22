@@ -226,9 +226,9 @@ export default function AlertShell({ activeAlerts, allAlerts, onDismiss }: Alert
         </button>
       </div>
 
-      {/* ── Expanded panel ─────────────────────────────────────────────────── */}
+      {/* ── Expanded panel — shrink-wraps to content, no full-height background ── */}
       {expandedTab && (
-        <div className="w-[280px] flex flex-col bg-[#060A0F]/96 border-r border-slate-800/50 h-full overflow-hidden pointer-events-auto">
+        <div className="w-[280px] flex flex-col bg-[#060A0F]/96 border border-slate-800/50 border-l-0 rounded-br overflow-hidden pointer-events-auto self-start max-h-[80vh]">
           {/* Header */}
           <div className="flex items-center justify-between px-3 py-2 border-b border-slate-800/40 shrink-0">
             <span className="text-[9px] tracking-[0.22em] uppercase font-mono text-slate-400">
@@ -242,8 +242,8 @@ export default function AlertShell({ activeAlerts, allAlerts, onDismiss }: Alert
             </button>
           </div>
 
-          {/* Body */}
-          <div className="flex-1 overflow-y-auto">
+          {/* Body — scrolls only if content exceeds max-height */}
+          <div className="overflow-y-auto">
             {expandedTab === 'alerts'    && <AlertsPanel alerts={activeAlerts} onDismiss={onDismiss} />}
             {expandedTab === 'conflicts' && <PlaceholderPanel message="No predicted conflicts" note="Phase 6B — Conflict Horizon" />}
             {expandedTab === 'traffic'   && <PlaceholderPanel message="No forecast data"       note="Phase 7 — Traffic Forecast" />}
