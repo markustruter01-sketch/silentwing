@@ -1515,6 +1515,7 @@ export default function AirspaceView3D({
             const sprite = new THREE.Sprite(mat);
             sprite.scale.set(900, 270, 1);
             sprite.frustumCulled = false;
+            sprite.renderOrder   = 999; // always draw on top of ground geometry
             scene.add(sprite);
             entry = { sprite, mat, lastMessage: alert.message };
             st.labelMap.set(alert.id, entry);
