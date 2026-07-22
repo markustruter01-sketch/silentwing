@@ -19,6 +19,8 @@ import type { Polyline } from '@/data/ybbn_real';
 import type { SWAlert, SWAlertSeverity } from '@/alerts/types';
 import { useAirport } from '@/airports/context';
 import { computeRunwayThresholds, computeApproachCorridors } from '@/airports/helpers';
+import { ROUTES } from '@/data/routes';
+import type { Route } from '@/data/routes';
 
 // ── Camera mode — exported so App can type-check ──────────────────────────────
 export type CameraMode = 'orbit' | 'manual' | 'inspect' | 'follow' | 'returning';
@@ -381,6 +383,37 @@ function easeInOut(t: number): number {
   return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
 }
 
+/**
+ * Perpendicular distance from point (px, pz) to line segment (ax, az)→(bx, bz)
+ * in the XZ plane only (altitude not considered for route proximity tests).
+ */
+function distToSegment2D(
+  px: number, pz: number,
+  ax: number, az: number,
+  bx: number, bz: number,
+): number {
+  const dx = bx - ax, dz = bz - az;
+  const lenSq = dx * dx + dz * dz;
+  if (lenSq < 1) return Math.hypot(px - ax, pz - az);
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / lenSq));
+  return Math.hypot(px - ax - t * dx, pz - az - t * dz);
+}
+
+// ── SID/STAR route ribbon entry ────────────────────────────────────────────────
+interface RouteLine {
+  line:        THREE.Line;
+  mat:         THREE.LineBasicMaterial;
+  kind:        'SID' | 'STAR';
+  baseOpacity: number;
+  /** Precomputed per-segment data used for per-frame proximity + heading checks. */
+  segments: Array<{
+    ax: number; az: number;  // Three.js X, Z of segment start
+    bx: number; bz: number;  // Three.js X, Z of segment end
+    /** Compass bearing of this segment (0 = north = −Z, 90 = east = +X). */
+    bearingDeg: number;
+  }>;
+}
+
 // sim → Three.js  (x=east, alt ft → Y scaled, y_sim=south → Three Z)
 function toV3(x: number, y: number, alt: number): THREE.Vector3 {
   return new THREE.Vector3(x, alt * ALT_SCALE, y);
@@ -722,6 +755,63 @@ function buildWindIndicator(windDir: number, windSpeed: number): THREE.Group {
   g.add(sp);
 
   return g;
+}
+
+// ── SID/STAR route group builder ─────────────────────────────────────────────
+//
+// Creates a THREE.Group containing one THREE.Line per route for the given
+// airport ICAO.  SID lines are warm gold; STAR lines are cool cyan.  Both
+// kinds start at very low opacity so they don't overwhelm aircraft traffic.
+//
+// Returns the group (ready to add to the scene) and a flat array of RouteLine
+// entries used by the rAF loop for per-frame opacity adjustment.
+function buildRouteGroup(
+  routes: Route[],
+  icao:   string,
+): { group: THREE.Group; lines: RouteLine[] } {
+  const group  = new THREE.Group();
+  const lines: RouteLine[] = [];
+
+  const airportRoutes = routes.filter(r => r.airport === icao);
+
+  for (const route of airportRoutes) {
+    const isSID       = route.kind === 'SID';
+    const baseOpacity = isSID ? 0.10 : 0.12;
+    // SID — warm gold (#F59E0B); STAR — cool cyan (#38BDF8)
+    const color       = isSID ? 0xF59E0B : 0x38BDF8;
+
+    // Convert sim-space waypoints to Three.js positions (x=east, Y=alt, z=sim_y)
+    const pts: THREE.Vector3[] = route.waypoints.map(wp =>
+      new THREE.Vector3(wp.x, wp.altFt * ALT_SCALE, wp.y),
+    );
+
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    const mat = new THREE.LineBasicMaterial({
+      color,
+      transparent: true,
+      opacity:     baseOpacity,
+      depthWrite:  false,
+    });
+    const line = new THREE.Line(geo, mat);
+    line.frustumCulled = false;
+    group.add(line);
+
+    // Pre-compute per-segment bearing for heading alignment test in the rAF loop.
+    // Bearing convention: 0 = north (−Z), 90 = east (+X), same as aircraft heading.
+    const segments: RouteLine['segments'] = [];
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const dx = b.x - a.x;
+      const dz = b.z - a.z;
+      // atan2(east, −south) → compass degrees from north (−Z)
+      const bearingDeg = ((Math.atan2(dx, -dz) * 180 / Math.PI) + 360) % 360;
+      segments.push({ ax: a.x, az: a.z, bx: b.x, bz: b.z, bearingDeg });
+    }
+
+    lines.push({ line, mat, kind: route.kind, baseOpacity, segments });
+  }
+
+  return { group, lines };
 }
 
 // ── Approach / landing indicator (diagonal line + sign) ──────────────────────
@@ -1264,6 +1354,10 @@ export default function AirspaceView3D({
   const sceneRef       = useRef<SceneState | null>(null);
   /** Three.js group rebuilt whenever weather changes (approach cone + wind arrow). */
   const weatherGrpRef  = useRef<THREE.Group | null>(null);
+  /** Three.js group containing all SID/STAR route ribbons for the current airport. */
+  const routeGroupRef      = useRef<THREE.Group | null>(null);
+  /** Flat array of RouteLine entries driving per-frame opacity in the rAF loop. */
+  const routeLineEntriesRef = useRef<RouteLine[]>([]);
 
   // Stable callback refs — updated every render so event handlers always call
   // the latest versions without needing to be re-registered.
@@ -1294,10 +1388,12 @@ export default function AirspaceView3D({
     if (st) st.directorMode = directorMode;
   }, [directorMode]);
 
-  // Sync showPaths prop — controls velocity vectors, sep bubbles, wake ribbons, taxi rings.
+  // Sync showPaths prop — controls velocity vectors, sep bubbles, wake ribbons, taxi rings,
+  // and SID/STAR route ribbons.
   useEffect(() => {
     const st = sceneRef.current;
     if (st) st.showPaths = showPaths;
+    if (routeGroupRef.current) routeGroupRef.current.visible = showPaths;
   }, [showPaths]);
 
   // Sync alertedIds prop so the rAF loop highlights alerted aircraft.
@@ -1989,6 +2085,46 @@ export default function AirspaceView3D({
           }
           bA.sepBubbleMat.color.setHex(overlaps ? 0xff2222 : 0x8899bb);
           bA.sepBubbleMat.opacity = overlaps ? 0.07 : 0.03;
+        }
+      }
+
+      // ── SID/STAR route ribbon highlighting (Task 34) ─────────────────────
+      // Each frame: reset all route lines to their base opacity, then check
+      // every airborne aircraft against each segment.  When an aircraft is
+      // within ROUTE_PROX_M and its heading aligns with the segment bearing
+      // to within ROUTE_HDG_TOL degrees, raise that route's opacity so the
+      // active corridor glows noticeably brighter.
+      {
+        const routeLines = routeLineEntriesRef.current;
+        if (routeLines.length > 0 && routeGroupRef.current?.visible) {
+          const ROUTE_PROX_M   = 1_500; // metres horizontal threshold
+          const ROUTE_HDG_TOL  = 25;    // degrees heading tolerance
+
+          // Reset to base opacity
+          for (const rl of routeLines) {
+            rl.mat.opacity = rl.baseOpacity;
+          }
+
+          // Raise opacity when any airborne aircraft tracks along the route
+          for (const [, b] of st.acMap) {
+            if (!b.isAirborne) continue;
+            const px = b.renderPos.x;
+            const pz = b.renderPos.z;
+
+            for (const rl of routeLines) {
+              if (rl.mat.opacity > rl.baseOpacity) continue; // already lit
+              for (const seg of rl.segments) {
+                const dist = distToSegment2D(px, pz, seg.ax, seg.az, seg.bx, seg.bz);
+                if (dist > ROUTE_PROX_M) continue;
+                const diff = Math.abs(b.headingDeg - seg.bearingDeg);
+                const hdgDiff = Math.min(diff, 360 - diff);
+                if (hdgDiff <= ROUTE_HDG_TOL) {
+                  rl.mat.opacity = 0.50;
+                  break;
+                }
+              }
+            }
+          }
         }
       }
 
@@ -2707,11 +2843,47 @@ export default function AirspaceView3D({
       st.glideSlopeMap.clear();
       st.taxiRingMap.forEach(entry => disposeTaxiRingEntry(entry, scene));
       st.taxiRingMap.clear();
+      // Dispose SID/STAR route ribbons
+      if (routeGroupRef.current) {
+        for (const rl of routeLineEntriesRef.current) {
+          rl.line.geometry.dispose();
+          rl.mat.dispose();
+        }
+        routeLineEntriesRef.current = [];
+        scene.remove(routeGroupRef.current);
+        routeGroupRef.current = null;
+      }
       renderer.dispose();
       if (renderer.domElement.parentNode === el) el.removeChild(renderer.domElement);
       sceneRef.current = null;
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Sync airport profile → rebuild SID/STAR route ribbons ────────────────────
+  // Runs on mount (after scene setup, which has [] deps and runs first) and
+  // whenever the active airport ICAO changes (e.g. YBBN ↔ YSSY switch).
+  useEffect(() => {
+    const st = sceneRef.current;
+    if (!st) return;
+
+    // Dispose the previous airport's route group
+    if (routeGroupRef.current) {
+      for (const rl of routeLineEntriesRef.current) {
+        rl.line.geometry.dispose();
+        rl.mat.dispose();
+      }
+      routeLineEntriesRef.current = [];
+      st.scene.remove(routeGroupRef.current);
+      routeGroupRef.current = null;
+    }
+
+    // Build ribbons for the new airport
+    const { group, lines } = buildRouteGroup(ROUTES, profile.icao);
+    group.visible = false; // hidden by default; [P] key shows them via showPaths
+    st.scene.add(group);
+    routeGroupRef.current      = group;
+    routeLineEntriesRef.current = lines;
+  }, [profile.icao]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Aircraft data sync — runs on every snapshot tick (10 Hz) ────────────────
   useEffect(() => {

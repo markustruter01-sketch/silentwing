@@ -108,7 +108,7 @@ export default function ControlsHUD({ activeView }: Props) {
         </div>
         <Row hint="toggle view" label={<Key>V</Key>} />
         <Row hint="live feed"   label={<Key>L</Key>} />
-        <Row hint="paths"       label={<Key>P</Key>} />
+        <Row hint="paths & routes" label={<Key>P</Key>} />
         {is3D
           ? <Row hint="exit mode" label={<Key>Esc</Key>} />
           : <Row hint="deselect"  label={<Key>Esc</Key>} />
