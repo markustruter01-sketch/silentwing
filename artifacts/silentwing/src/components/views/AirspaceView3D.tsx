@@ -695,8 +695,66 @@ const GLIDE_MAX_DIST    = 9_000; // scene units (≈ NM+ out) — line fully vis
 const GLIDE_PEAK_OPACITY = 0.55; // opacity when aircraft is at or beyond GLIDE_MAX_DIST
 
 interface GlideSlopeEntry {
-  line:    THREE.Line;
-  lineMat: THREE.LineBasicMaterial;
+  line:     THREE.Line;
+  lineMat:  THREE.LineBasicMaterial;
+  label:    THREE.Sprite;
+  labelMat: THREE.SpriteMaterial;
+  labelKey: string; // callsign + angle string — redraw only when changed
+}
+
+// ── Glide slope midpoint label canvas painter ────────────────────────────────
+function _paintGlideSlopeLabel(
+  ctx: CanvasRenderingContext2D,
+  callsign: string,
+  angleDeg: number,
+): void {
+  const W = 512, H = 96;
+  ctx.clearRect(0, 0, W, H);
+
+  // Row 1: "GLIDE SLOPE" header
+  ctx.font        = 'bold 28px "Share Tech Mono", monospace';
+  ctx.fillStyle   = '#7dd3fc'; // sky-blue matching the line colour
+  ctx.textAlign   = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('GLIDE SLOPE', W / 2, 22);
+
+  // Row 2: callsign + angle
+  ctx.font      = 'bold 34px "Share Tech Mono", monospace';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(`${callsign}  ${angleDeg.toFixed(1)}°`, W / 2, 62);
+}
+
+function makeGlideSlopeLabel(callsign: string, angleDeg: number): {
+  sprite: THREE.Sprite;
+  mat: THREE.SpriteMaterial;
+} {
+  const W = 512, H = 96;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d')!;
+  _paintGlideSlopeLabel(ctx, callsign, angleDeg);
+  const tex = new THREE.CanvasTexture(canvas);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(W * 1.6, H * 1.6, 1); // scene-unit scale
+  sprite.frustumCulled = false;
+  return { sprite, mat };
+}
+
+function refreshGlideSlopeLabel(
+  entry: GlideSlopeEntry,
+  callsign: string,
+  angleDeg: number,
+): void {
+  const W = 512, H = 96;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d')!;
+  _paintGlideSlopeLabel(ctx, callsign, angleDeg);
+  const oldTex = entry.labelMat.map;
+  entry.labelMat.map = new THREE.CanvasTexture(canvas);
+  entry.labelMat.needsUpdate = true;
+  oldTex?.dispose();
 }
 
 function createGlideSlopeLine(scene: THREE.Scene): GlideSlopeEntry {
@@ -712,13 +770,20 @@ function createGlideSlopeLine(scene: THREE.Scene): GlideSlopeEntry {
   const line = new THREE.Line(geo, lineMat);
   line.frustumCulled = false;
   scene.add(line);
-  return { line, lineMat };
+
+  const { sprite, mat } = makeGlideSlopeLabel('------', 3.0);
+  scene.add(sprite);
+
+  return { line, lineMat, label: sprite, labelMat: mat, labelKey: '' };
 }
 
 function disposeGlideSlopeLine(entry: GlideSlopeEntry, scene: THREE.Scene): void {
   scene.remove(entry.line);
   entry.line.geometry.dispose();
   entry.lineMat.dispose();
+  scene.remove(entry.label);
+  entry.labelMat.map?.dispose();
+  entry.labelMat.dispose();
 }
 
 // ── Takeoff indicator (vertical line + "TAKE OFF" sign) ──────────────────────
@@ -1785,6 +1850,25 @@ export default function AirspaceView3D({
           arr[3] = nearestX;      arr[4] = 0;              arr[5] = nearestZ;
           posAttr.needsUpdate = true;
           entry.line.geometry.computeBoundingSphere();
+
+          // Midpoint label — position at halfway between aircraft and threshold
+          const midX = (b.renderPos.x + nearestX) / 2;
+          const midY = b.renderPos.y / 2; // halfway up (threshold is y=0)
+          const midZ = (b.renderPos.z + nearestZ) / 2;
+          entry.label.position.set(midX, midY, midZ);
+          entry.label.material.opacity = distFrac * GLIDE_PEAK_OPACITY;
+
+          // Glide angle: atan(alt_metres / horiz_metres)
+          // scene y = altFt * ALT_SCALE  →  altFt = y / ALT_SCALE
+          const altMetres  = (b.renderPos.y / ALT_SCALE) * 0.3048;
+          const angleDeg   = nearestDist > 10
+            ? Math.atan2(altMetres, nearestDist) * (180 / Math.PI)
+            : 0;
+          const labelKey = `${b.callsign}|${angleDeg.toFixed(1)}`;
+          if (entry.labelKey !== labelKey) {
+            entry.labelKey = labelKey;
+            refreshGlideSlopeLabel(entry, b.callsign, angleDeg);
+          }
         }
       }
 
