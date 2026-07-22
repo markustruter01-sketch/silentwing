@@ -190,6 +190,70 @@ function disposeBeamEntry(entry: BeamEntry, scene: THREE.Scene): void {
   entry.sphereMat.dispose();
 }
 
+// ── Danger sphere constants (Phase 6A / Task #5) ──────────────────────────────
+// A large translucent sphere whose radius = half the live 3-D separation
+// distance between the conflicting pair.  Rendered with additive blending so
+// it glows without occluding anything behind it.
+
+/** Unit sphere (r=1) shared across all danger sphere meshes — scale handles size. */
+const DANGER_SPHERE_GEO = new THREE.SphereGeometry(1, 24, 16);
+
+interface DangerSphereParams {
+  color:       THREE.Color;
+  pulseSpeed:  number;
+  opacityBase: number;
+  opacityAmp:  number;
+  /** Max opacity when aircraft are at zero separation (full convergence). */
+  opacityMax:  number;
+}
+
+const DANGER_SPHERE_PARAMS: Record<SWAlertSeverity, DangerSphereParams> = {
+  critical: { color: new THREE.Color(0xef4444), pulseSpeed: 3.5, opacityBase: 0.10, opacityAmp: 0.06, opacityMax: 0.40 },
+  caution:  { color: new THREE.Color(0xf59e0b), pulseSpeed: 2.0, opacityBase: 0.07, opacityAmp: 0.04, opacityMax: 0.28 },
+  advisory: { color: new THREE.Color(0xfbbf24), pulseSpeed: 1.0, opacityBase: 0.05, opacityAmp: 0.02, opacityMax: 0.18 },
+};
+
+/**
+ * Scene-space radius at which each severity alert fires (≈ half the separation
+ * threshold in metres — horizontal only, since alt is ALT_SCALE-compressed).
+ * Used to derive an "intensity factor" so the sphere brightens as aircraft converge.
+ */
+const SPHERE_THRESHOLD_RADIUS: Record<SWAlertSeverity, number> = {
+  advisory: 9_260 / 2,  // 5 nm threshold → 4 630 m radius at alert boundary
+  caution:  5_556 / 2,  // 3 nm
+  critical: 2_778 / 2,  // 1.5 nm
+};
+
+interface DangerSphereEntry {
+  mesh:       THREE.Mesh;
+  mat:        THREE.MeshBasicMaterial;
+  /** Per-sphere phase offset so simultaneous alerts pulse slightly out of sync. */
+  phase:      number;
+  severity:   SWAlertSeverity;
+}
+
+function createDangerSphere(severity: SWAlertSeverity, scene: THREE.Scene, phase: number): DangerSphereEntry {
+  const p   = DANGER_SPHERE_PARAMS[severity];
+  const mat = new THREE.MeshBasicMaterial({
+    color:       p.color,
+    transparent: true,
+    opacity:     p.opacityBase,
+    depthWrite:  false,
+    side:        THREE.DoubleSide,
+    blending:    THREE.AdditiveBlending,
+  });
+  const mesh = new THREE.Mesh(DANGER_SPHERE_GEO, mat);
+  mesh.frustumCulled = false;
+  scene.add(mesh);
+  return { mesh, mat, phase, severity };
+}
+
+function disposeDangerSphere(entry: DangerSphereEntry, scene: THREE.Scene): void {
+  scene.remove(entry.mesh);
+  entry.mat.dispose();
+  // DANGER_SPHERE_GEO is shared — do NOT dispose it here
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function easeInOut(t: number): number {
   return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
@@ -577,6 +641,8 @@ interface SceneState {
   activeAlerts: SWAlert[];
   /** Alert ID → live beam entry (line + midSphere). */
   beamMap: Map<string, BeamEntry>;
+  /** Alert ID → danger sphere entry (large dynamic-radius glow sphere). */
+  sphereMap: Map<string, DangerSphereEntry>;
 }
 
 // ── Helper: begin fly-to animation toward an aircraft ────────────────────────
@@ -826,6 +892,7 @@ export default function AirspaceView3D({
       alertedIds:           new Map(),
       activeAlerts:         [],
       beamMap:              new Map(),
+      sphereMap:            new Map(),
     };
     sceneRef.current = st;
 
@@ -1102,6 +1169,70 @@ export default function AirspaceView3D({
         }
       }
 
+      // ── Danger sphere update (Phase 6A / Task #5) ─────────────────────────
+      // Large translucent sphere centred at the conflict midpoint.
+      // Radius = half the live 3-D scene-space distance between the aircraft
+      // so the sphere exactly spans the gap — it shrinks as they converge.
+      {
+        const tSec = nowMs / 1000;
+
+        // Remove spheres whose alerts are no longer active
+        for (const [alertId, entry] of st.sphereMap) {
+          if (!st.activeAlerts.find(a => a.id === alertId)) {
+            disposeDangerSphere(entry, scene);
+            st.sphereMap.delete(alertId);
+          }
+        }
+
+        // Derive a stable per-alert phase offset from the alert id string
+        // so multiple simultaneous alerts pulse slightly out of phase.
+        let alertIdx = 0;
+        for (const alert of st.activeAlerts) {
+          if (alert.kind !== 'separation' || alert.aircraftIds.length < 2) {
+            alertIdx++;
+            continue;
+          }
+          const [idA, idB] = alert.aircraftIds;
+          const bA = st.acMap.get(idA);
+          const bB = st.acMap.get(idB);
+          if (!bA || !bB) { alertIdx++; continue; }
+
+          const posA = bA.renderPos;
+          const posB = bB.renderPos;
+
+          // 3-D scene-space separation; radius = half that
+          const sep    = posA.distanceTo(posB);
+          const radius = sep * 0.5;
+
+          let entry = st.sphereMap.get(alert.id);
+          if (!entry) {
+            // Phase offset staggers the pulse: π/3 apart per simultaneous alert
+            const phase = alertIdx * (Math.PI / 3);
+            entry = createDangerSphere(alert.severity, scene, phase);
+            st.sphereMap.set(alert.id, entry);
+          }
+
+          // Update position to midpoint
+          entry.mesh.position.set(
+            (posA.x + posB.x) * 0.5,
+            (posA.y + posB.y) * 0.5,
+            (posA.z + posB.z) * 0.5,
+          );
+          // Scale handles sphere size — geometry stays a unit sphere
+          entry.mesh.scale.setScalar(radius);
+
+          // Pulsed opacity that also brightens as the sphere shrinks (aircraft converge).
+          // intensity = 0 at the alert threshold radius, 1 at zero separation.
+          const sp        = DANGER_SPHERE_PARAMS[entry.severity];
+          const threshold = SPHERE_THRESHOLD_RADIUS[entry.severity];
+          const intensity = Math.max(0, 1 - radius / threshold);
+          const pulse     = sp.opacityBase + sp.opacityAmp * Math.sin(tSec * sp.pulseSpeed + entry.phase);
+          entry.mat.opacity = pulse + intensity * (sp.opacityMax - sp.opacityBase);
+
+          alertIdx++;
+        }
+      }
+
       renderer.render(scene, camera);
     };
     tick();
@@ -1373,6 +1504,8 @@ export default function AirspaceView3D({
       st.coneToId.clear();
       st.beamMap.forEach(entry => disposeBeamEntry(entry, scene));
       st.beamMap.clear();
+      st.sphereMap.forEach(entry => disposeDangerSphere(entry, scene));
+      st.sphereMap.clear();
       renderer.dispose();
       if (renderer.domElement.parentNode === el) el.removeChild(renderer.domElement);
       sceneRef.current = null;
