@@ -1283,6 +1283,9 @@ interface SceneState {
   /** All runway threshold positions [designator, x, z] in Three.js scene coords.
    *  Computed once at scene-setup and used every rAF frame for glide slope targeting. */
   allThresholds: Array<[string, number, number]>;
+  /** Active landing runway direction stem (e.g. "19"), derived from weather.
+   *  Kept on st so the rAF tick can filter thresholds without a stale closure. */
+  activeRunwayDirection: string | null;
 
   // ── Task 33 — visual aids ─────────────────────────────────────────────────
   /** Mirror of the showPaths prop — controls velocity vectors, sep bubbles,
@@ -1907,6 +1910,8 @@ export default function AirspaceView3D({
     if (!st) return;
     // Remove previous weather group
     if (weatherGrpRef.current) { st.scene.remove(weatherGrpRef.current); weatherGrpRef.current = null; }
+    // Keep st.activeRunwayDirection fresh so the rAF tick can filter thresholds
+    st.activeRunwayDirection = weather?.activeRunwayDirection ?? null;
     if (!weather) return;
     const wg   = new THREE.Group();
     const corr = computeApproachCorridors(
@@ -2036,6 +2041,7 @@ export default function AirspaceView3D({
       approachMap:          new Map(),
       glideSlopeMap:        new Map(),
       allThresholds:        computeRunwayThresholds(prof.runways, prof.geometry.runways),
+      activeRunwayDirection: null,
       showPaths:            false,
       taxiRingMap:          new Map(),
       pinnedAcIds:          new Set(),
@@ -2736,9 +2742,15 @@ export default function AirspaceView3D({
           const b = st.acMap.get(acId);
           if (!b) continue;
 
-          // Find the nearest threshold to this aircraft's current renderPos
+          // Find the nearest threshold to this aircraft's current renderPos,
+          // restricted to the active landing direction so the beam targets the
+          // correct end (e.g. "19R"/"19L") rather than the opposite threshold.
           let nearestX = 0, nearestZ = 0, nearestDist = Infinity;
-          for (const [, tx, tz] of st.allThresholds) {
+          const activeDir = st.activeRunwayDirection;
+          const thresholdsForGlide = activeDir
+            ? st.allThresholds.filter(([des]) => des.replace(/[LRC]$/, '') === activeDir)
+            : st.allThresholds;
+          for (const [, tx, tz] of thresholdsForGlide) {
             const dx = tx - b.renderPos.x;
             const dz = tz - b.renderPos.z;
             const d  = Math.sqrt(dx * dx + dz * dz);
@@ -2776,9 +2788,9 @@ export default function AirspaceView3D({
 
           // ETA to threshold — gsMps is horizontal ground speed in m/s
           const etaSec = b.gsMps > 1 ? nearestDist / b.gsMps : 0;
-          // Key on callsign + angle (1 dp) + ETA rounded to nearest 5 s to
-          // avoid constant canvas redraws while still ticking visibly
-          const etaBucket = Math.round(etaSec / 5) * 5;
+          // Key on callsign + angle (1 dp) + ETA rounded to nearest 1 s so the
+          // canvas texture repaints each second, giving a smooth countdown.
+          const etaBucket = Math.round(etaSec);
           const labelKey  = `${b.callsign}|${angleDeg.toFixed(1)}|${etaBucket}`;
           if (entry.labelKey !== labelKey) {
             entry.labelKey = labelKey;
@@ -3514,14 +3526,21 @@ export default function AirspaceView3D({
     // are on long finals simultaneously.  The line switches automatically to the
     // next closest inbound once the current aircraft transitions to 'landing'.
     {
-      // Find the closest approach aircraft to any threshold
+      // Find the closest approach aircraft to any active-direction threshold.
+      // Pre-filter to the active landing direction so an aircraft on long final
+      // to runway 19 is not erroneously matched to the nearer 01 threshold.
+      const activeDirSync = weather?.activeRunwayDirection ?? null;
+      const thresholdsForSync = activeDirSync
+        ? st.allThresholds.filter(([des]) => des.replace(/[LRC]$/, '') === activeDirSync)
+        : st.allThresholds;
+
       let closestId: string | null = null;
       let closestDist = Infinity;
       for (const ac of aircraft) {
         if (ac.phase !== 'approach') continue;
         const b = acMap.get(ac.id);
         if (!b) continue;
-        for (const [, tx, tz] of st.allThresholds) {
+        for (const [, tx, tz] of thresholdsForSync) {
           const dx = tx - b.renderPos.x;
           const dz = tz - b.renderPos.z;
           const d  = Math.sqrt(dx * dx + dz * dz);
