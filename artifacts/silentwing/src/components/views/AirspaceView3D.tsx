@@ -812,6 +812,8 @@ interface AcBundle {
   corrFromPos:     THREE.Vector3;
   /** performance.now() when the current correction began.  -1 = no correction. */
   corrStartMs:     number;
+  /** Pre-allocated Float32Array backing the stem geometry (updated in-place each frame). */
+  stemPosArr:      Float32Array;
   /** Purple selection halo ring shown when director focuses this aircraft. */
   halo:            THREE.Mesh;
   /** Callsign string — stored so refreshAcLabel can repaint without extra props. */
@@ -823,17 +825,64 @@ interface AcBundle {
 }
 
 function disposeBundle(b: AcBundle): void {
-  b.cone.geometry.dispose(); (b.cone.material as THREE.Material).dispose();
+  // cone/halo use shared geometries (CONE_GEO, HALO_GEO) — do NOT dispose them.
+  // Only dispose the per-aircraft materials.
+  (b.cone.material as THREE.Material).dispose();
   b.stem.geometry.dispose();
   b.trail.geometry.dispose(); (b.trail.material as THREE.Material).dispose();
   const sm = b.label.material as THREE.SpriteMaterial;
   sm.map?.dispose(); sm.dispose();
   // HMR guard — bundles created before this field existed won't have halo
-  if (b.halo) { b.halo.geometry.dispose(); (b.halo.material as THREE.Material).dispose(); }
+  if (b.halo) { (b.halo.material as THREE.Material).dispose(); }
 }
 
 // Shared stem material — one instance, never disposed here
 const STEM_MAT = new THREE.LineBasicMaterial({ color: 0x334155, transparent: true, opacity: 0.50 });
+
+// ── Shared aircraft geometries & trail material template ──────────────────────
+//
+// PROBLEM: spawning 14 aircraft simultaneously on the first ADS-B poll caused
+// a hard page-freeze because each aircraft created its own THREE.ShaderMaterial,
+// triggering 14 synchronous GLSL program compilations on the GPU driver thread.
+//
+// FIX:
+//  • CONE_GEO / HALO_GEO — shared buffer across all aircraft meshes (geometries
+//    are just vertex data; the mesh's own matrix provides its unique position).
+//  • TRAIL_MAT_TEMPLATE — single ShaderMaterial compiled ONCE at module load.
+//    Each aircraft calls .clone() which creates a new uniforms object (so each
+//    aircraft has its own color uniform) but reuses the already-compiled GL
+//    program — Three.js caches programs by GLSL source string.
+//
+// disposeBundle must NOT dispose these shared objects.
+
+const CONE_GEO = (() => {
+  const g = new THREE.ConeGeometry(27.5, 85, 4, 1);
+  g.rotateX(-Math.PI / 2); // apex faces −Z (north)
+  return g;
+})();
+
+const HALO_GEO = new THREE.TorusGeometry(70, 7, 8, 64);
+
+const TRAIL_MAT_TEMPLATE = new THREE.ShaderMaterial({
+  uniforms: { color: { value: new THREE.Color(0xffffff) } },
+  vertexShader: `
+    attribute float alpha;
+    varying   float vAlpha;
+    void main() {
+      vAlpha      = alpha;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform vec3  color;
+    varying float vAlpha;
+    void main() {
+      gl_FragColor = vec4(color, vAlpha);
+    }
+  `,
+  transparent: true,
+  depthWrite:  false,
+});
 
 // ── Mutable scene state (lives in sceneRef, never in React state) ─────────────
 interface SceneState {
@@ -1524,11 +1573,12 @@ export default function AirspaceView3D({
           b.halo.rotation.z += 0.008; // slow spin in the horizontal plane
         }
 
-        b.stem.geometry.setFromPoints([
-          new THREE.Vector3(b.renderPos.x, 0,             b.renderPos.z),
-          new THREE.Vector3(b.renderPos.x, b.renderPos.y, b.renderPos.z),
-        ]);
-        b.stem.geometry.computeBoundingSphere();
+        // Update stem endpoints in-place — no allocation, no new Vector3s.
+        const sa = b.stemPosArr;
+        sa[0] = b.renderPos.x; sa[1] = 0;             sa[2] = b.renderPos.z;
+        sa[3] = b.renderPos.x; sa[4] = b.renderPos.y; sa[5] = b.renderPos.z;
+        const stemAttr = b.stem.geometry.attributes.position as THREE.BufferAttribute;
+        stemAttr.needsUpdate = true;
 
         // ── Per-frame trail fade ─────────────────────────────────────────────
         // Every frame: drop points older than TRAIL_FADE_S, then write
@@ -2262,13 +2312,14 @@ export default function AirspaceView3D({
 
       if (!acMap.has(ac.id)) {
         // ── Spawn ──────────────────────────────────────────────────────────
+        // Shared geometries (CONE_GEO, HALO_GEO) are never disposed per-aircraft.
+        // Trail material is cloned from TRAIL_MAT_TEMPLATE — shares the compiled
+        // GL program, only uniforms (color) differ per aircraft.
 
-        const coneGeo = new THREE.ConeGeometry(27.5, 85, 4, 1);
-        coneGeo.rotateX(-Math.PI / 2); // apex faces −Z (north)
         const coneMat = new THREE.MeshLambertMaterial({
           color: hex, emissive: hex, emissiveIntensity: 0.30,
         });
-        const cone = new THREE.Mesh(coneGeo, coneMat);
+        const cone = new THREE.Mesh(CONE_GEO, coneMat);
         cone.position.copy(pos);
         cone.rotation.y = headY;
         // renderOrder=1 ensures the opaque cone renders AFTER the transparent
@@ -2279,20 +2330,21 @@ export default function AirspaceView3D({
         coneToId.set(cone, ac.id); // register for raycasting
 
         // Purple selection halo — flat torus ring, hidden until director selects
-        const haloGeo = new THREE.TorusGeometry(70, 7, 8, 64);
         const haloMat = new THREE.MeshBasicMaterial({
           color: 0xa855f7, transparent: true, opacity: 0.50, depthWrite: false,
         });
-        const halo = new THREE.Mesh(haloGeo, haloMat);
+        const halo = new THREE.Mesh(HALO_GEO, haloMat);
         halo.rotation.x = Math.PI / 2; // lay flat (horizontal ring)
         halo.renderOrder = 3;
         halo.visible = false;
         scene.add(halo);
 
-        const stemGeo = new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(pos.x, 0, pos.z),
-          new THREE.Vector3(pos.x, pos.y, pos.z),
-        ]);
+        // Stem: pre-allocated Float32Array so rAF can update in-place without
+        // allocating new Vector3s or calling setFromPoints every frame.
+        const stemPosArr = new Float32Array([pos.x, 0, pos.z, pos.x, pos.y, pos.z]);
+        const stemGeo    = new THREE.BufferGeometry();
+        stemGeo.setAttribute('position', new THREE.BufferAttribute(stemPosArr, 3));
+        stemGeo.setDrawRange(0, 2);
         const stem = new THREE.Line(stemGeo, STEM_MAT);
         scene.add(stem);
 
@@ -2309,27 +2361,10 @@ export default function AirspaceView3D({
         trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPosArr, 3));
         trailGeo.setAttribute('alpha',    new THREE.BufferAttribute(trailAlphaArr, 1));
         trailGeo.setDrawRange(0, 2);
-        // ShaderMaterial: per-vertex alpha encodes fade along the trail length.
-        const trailMat = new THREE.ShaderMaterial({
-          uniforms: { color: { value: new THREE.Color(hex) } },
-          vertexShader: `
-            attribute float alpha;
-            varying   float vAlpha;
-            void main() {
-              vAlpha      = alpha;
-              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-            }
-          `,
-          fragmentShader: `
-            uniform vec3  color;
-            varying float vAlpha;
-            void main() {
-              gl_FragColor = vec4(color, vAlpha);
-            }
-          `,
-          transparent: true,
-          depthWrite:  false,
-        });
+        // Clone the shared template — reuses the already-compiled GL program.
+        // Only the color uniform is per-aircraft; all other shader state is shared.
+        const trailMat = TRAIL_MAT_TEMPLATE.clone();
+        trailMat.uniforms.color.value = new THREE.Color(hex);
         const trail = new THREE.Line(trailGeo, trailMat);
         scene.add(trail);
 
@@ -2360,7 +2395,7 @@ export default function AirspaceView3D({
             })()
           : pos.clone();
         acMap.set(ac.id, {
-          cone, stem, trail, label, trailBuf, halo,
+          cone, stem, trail, label, trailBuf, halo, stemPosArr,
           renderPos:       spawnPos.clone(),
           lastKnownPos:    spawnPos.clone(),
           lastKnownTimeMs: nowMs,
