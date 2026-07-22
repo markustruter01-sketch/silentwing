@@ -5,7 +5,8 @@ import AirfieldView2D from '@/components/views/AirfieldView2D';
 import AirspaceView3D, { type CameraMode } from '@/components/views/AirspaceView3D';
 import DirectorFocusPanel  from '@/components/panels/DirectorFocusPanel';
 import AlertShell          from '@/components/panels/AlertShell';
-import ControlsHUD from '@/components/ui/ControlsHUD';
+import ControlsHUD    from '@/components/ui/ControlsHUD';
+import WeatherWidget  from '@/components/panels/WeatherWidget';
 import { getSimAdapter } from '@/sim/engine';
 import { AdsbAdapter, HEALTH_LAGGING_MS, HEALTH_STALLED_MS } from '@/feed/adsbAdapter';
 import { AlertEngine }  from '@/alerts/engine';
@@ -39,15 +40,6 @@ const TEST_CONFLICT_AIRCRAFT: Aircraft[] = [
 
 const DIRECTOR_DWELL_MS = 10_000; // ms to watch each subject before switching
 
-/** Deterministic RNG seeded on aircraft ID — gives stable fake manifest data. */
-function seededRng(id: string): () => number {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (Math.imul(31, h) + id.charCodeAt(i)) | 0;
-  return () => {
-    h ^= h << 13; h ^= h >> 17; h ^= h << 5;
-    return (h >>> 0) / 0xFFFFFFFF;
-  };
-}
 
 /** Priority score for each flight phase — higher = more cinematically interesting. */
 const DIRECTOR_PHASE_SCORE: Record<FlightPhase, number> = {
@@ -150,15 +142,6 @@ export default function App() {
     setDirectorMode(false);
     setSelectedAcId(null);
     setCameraMode('orbit'); // triggers smooth return-to-orbit in the 3D view
-  }, []);
-
-  // Follow toggle from panel button
-  const handleToggleFollow = useCallback(() => {
-    setCameraMode(prev => {
-      const next = prev === 'follow' ? 'inspect' : 'follow';
-      console.log(`[APP] follow toggle: ${prev} → ${next}`);
-      return next;
-    });
   }, []);
 
   // ── Predicted paths toggle ───────────────────────────────────────────────
@@ -669,68 +652,16 @@ export default function App() {
         )}
         </AirportProvider>
 
-        {/* ── Director flight info panel — bottom-right when following an aircraft ── */}
-        {directorMode && cameraMode === 'follow' && selectedAc && (() => {
-          const rng        = seededRng(selectedAc.id);
-          const pax        = Math.round(rng() * 150 + 50);
-          const crew       = Math.round(rng() * 5  + 2);
-          const hasDG      = rng() < 0.15;
-          const hasAnimals = rng() < 0.10;
-          const orig       = selectedAc.origin      ?? '—';
-          const dest       = selectedAc.destination ?? YBBN.icao;
-          return (
-            <div className="fixed bottom-24 right-4 z-[150] w-64 pointer-events-none select-none
-                            rounded-lg overflow-hidden shadow-2xl shadow-black/60"
-                 style={{ background: 'rgba(7,10,22,0.93)', border: '1px solid rgba(168,85,247,0.35)' }}>
-              {/* Purple accent bar */}
-              <div className="h-full w-[3px] absolute left-0 top-0 bottom-0 bg-purple-500" />
-              <div className="pl-4 pr-3 py-3 flex flex-col gap-2">
-                {/* Header */}
-                <div className="flex items-baseline gap-2">
-                  <span className="font-mono font-bold text-purple-300 text-base tracking-wider">
-                    {selectedAc.callsign}
-                  </span>
-                  <span className="font-mono text-slate-500 text-xs">{selectedAc.type || '—'}</span>
-                </div>
-                {/* Route */}
-                <div className="font-mono text-sky-300 text-xs tracking-wide">
-                  {orig} <span className="text-slate-500 mx-1">›</span> {dest}
-                </div>
-                {/* Divider */}
-                <div className="h-px bg-purple-900/50" />
-                {/* Data rows */}
-                <div className="grid grid-cols-[48px_1fr] gap-y-1.5 text-xs font-mono">
-                  <span className="text-slate-600 uppercase text-[10px] tracking-widest pt-px">PAX</span>
-                  <span className="text-slate-200">{pax} passengers</span>
-                  <span className="text-slate-600 uppercase text-[10px] tracking-widest pt-px">CREW</span>
-                  <span className="text-slate-200">{crew} crew</span>
-                  <span className="text-slate-600 uppercase text-[10px] tracking-widest pt-px">DG</span>
-                  <span className={hasDG ? 'text-amber-400' : 'text-slate-500'}>
-                    {hasDG ? '⚠ Declared dangerous goods' : 'None declared'}
-                  </span>
-                  <span className="text-slate-600 uppercase text-[10px] tracking-widest pt-px">ANIM</span>
-                  <span className={hasAnimals ? 'text-green-300' : 'text-slate-500'}>
-                    {hasAnimals ? '🐾 Live animals on board' : 'None declared'}
-                  </span>
-                  <span className="text-slate-600 uppercase text-[10px] tracking-widest pt-px">PHASE</span>
-                  <span className="text-slate-400 uppercase tracking-wide">
-                    {selectedAc.phase.replace(/-/g, ' ')}
-                  </span>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
-
-        {/* ── Aircraft detail panel — shared overlay for both views ── */}
-        {selectedAc && (
-          <AircraftDetailPanel
+        {/* ── Director focus panel — single merged popup, director-follow only ── */}
+        {directorMode && cameraMode === 'follow' && selectedAc && (
+          <DirectorFocusPanel
             ac={selectedAc}
-            followMode={cameraMode === 'follow'}
             onClose={handleClosePanel}
-            onToggleFollow={handleToggleFollow}
           />
         )}
+
+        {/* ── Weather widget — always visible, bottom-left ── */}
+        <WeatherWidget />
 
         {/* ── Controls HUD — bottom-centre on both views ── */}
         <ControlsHUD activeView={view} />
