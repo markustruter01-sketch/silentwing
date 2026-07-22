@@ -20,6 +20,7 @@ export const YBBN: AirportProfile = {
   icao:      'YBBN',
   name:      'Brisbane Airport',
   nameShort: 'BRISBANE INTL',
+  timezone:  'Australia/Brisbane',
 
   // ── Projection origin ────────────────────────────────────────────────────────
   // All scene coordinates (metres) are relative to this WGS-84 point.

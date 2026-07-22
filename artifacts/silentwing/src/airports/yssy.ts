@@ -16,6 +16,7 @@ export const YSSY: AirportProfile = {
   icao:      'YSSY',
   name:      'Sydney Airport',
   nameShort: 'SYDNEY INTL',
+  timezone:  'Australia/Sydney',
 
   // ── Projection origin ────────────────────────────────────────────────────────
   // Must match YSSY_ORIGIN in yssy_real.ts exactly.

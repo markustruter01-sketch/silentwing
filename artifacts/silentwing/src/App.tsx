@@ -684,7 +684,7 @@ export default function App() {
         {/* ── Info stack — NOTAMs above weather, bottom-left ── */}
         <div className="absolute bottom-4 left-4 z-40 pointer-events-none select-none flex flex-col gap-2" style={{ maxWidth: 420 }}>
           <NotamWidget />
-          <WeatherWidget />
+          <WeatherWidget profile={activeProfile} />
         </div>
 
         {/* ── Controls HUD — bottom-centre on both views ── */}
