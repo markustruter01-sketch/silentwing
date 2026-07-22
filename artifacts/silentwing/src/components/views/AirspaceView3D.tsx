@@ -254,6 +254,64 @@ function disposeDangerSphere(entry: DangerSphereEntry, scene: THREE.Scene): void
   // DANGER_SPHERE_GEO is shared — do NOT dispose it here
 }
 
+// ── Pulse ring constants (Task #6) ────────────────────────────────────────────
+// Flat concentric rings on the ground plane (y=1) that expand outward like a
+// sonar ping from the ground projection of the conflict midpoint.
+
+/**
+ * Unit circle in the XZ plane (y=0) shared across all ring meshes.
+ * Scale is applied per-mesh each frame to drive expansion.
+ */
+const PULSE_RING_GEO = (() => {
+  const N   = 64;
+  const pts = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    const a        = (i / N) * Math.PI * 2;
+    pts[i * 3]     = Math.cos(a); // x
+    pts[i * 3 + 1] = 0;           // y — flat; position.y = 1 places it above ground
+    pts[i * 3 + 2] = Math.sin(a); // z
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  return geo;
+})();
+
+interface PulseRingParams {
+  color:           THREE.Color;
+  spawnIntervalMs: number;
+  maxAgeMs:        number;
+  minRadius:       number;  // scene units (metres) when ring spawns
+  maxRadius:       number;  // scene units (metres) at full age
+  peakOpacity:     number;
+}
+
+const PULSE_RING_PARAMS: Record<SWAlertSeverity, PulseRingParams> = {
+  critical: { color: new THREE.Color(0xef4444), spawnIntervalMs:  800, maxAgeMs: 2000, minRadius:  50, maxRadius: 2000, peakOpacity: 0.85 },
+  caution:  { color: new THREE.Color(0xf59e0b), spawnIntervalMs: 1200, maxAgeMs: 2500, minRadius:  50, maxRadius: 2000, peakOpacity: 0.70 },
+  advisory: { color: new THREE.Color(0xfbbf24), spawnIntervalMs: 1800, maxAgeMs: 3000, minRadius:  50, maxRadius: 2000, peakOpacity: 0.55 },
+};
+
+interface ActiveRing {
+  mesh:    THREE.LineLoop;
+  mat:     THREE.LineBasicMaterial;
+  startMs: number;
+}
+
+interface PulseRingEntry {
+  rings:       ActiveRing[];
+  lastSpawnMs: number;
+  severity:    SWAlertSeverity;
+}
+
+function disposePulseRingEntry(entry: PulseRingEntry, scene: THREE.Scene): void {
+  for (const ring of entry.rings) {
+    scene.remove(ring.mesh);
+    ring.mat.dispose();
+    // PULSE_RING_GEO is shared — do NOT dispose it here
+  }
+  entry.rings.length = 0;
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function easeInOut(t: number): number {
   return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
@@ -643,6 +701,8 @@ interface SceneState {
   beamMap: Map<string, BeamEntry>;
   /** Alert ID → danger sphere entry (large dynamic-radius glow sphere). */
   sphereMap: Map<string, DangerSphereEntry>;
+  /** Alert ID → expanding pulse ring cluster on the ground plane. */
+  pulseRingMap: Map<string, PulseRingEntry>;
 }
 
 // ── Helper: begin fly-to animation toward an aircraft ────────────────────────
@@ -893,6 +953,7 @@ export default function AirspaceView3D({
       activeAlerts:         [],
       beamMap:              new Map(),
       sphereMap:            new Map(),
+      pulseRingMap:         new Map(),
     };
     sceneRef.current = st;
 
@@ -1233,6 +1294,74 @@ export default function AirspaceView3D({
         }
       }
 
+      // ── Pulse ring update (Task #6) ────────────────────────────────────────
+      // Expanding concentric rings on the ground plane (y=1) pulsing outward
+      // from the ground projection of each active conflict midpoint.
+      {
+        // Remove ring clusters for cleared alerts
+        for (const [alertId, entry] of st.pulseRingMap) {
+          if (!st.activeAlerts.find(a => a.id === alertId)) {
+            disposePulseRingEntry(entry, scene);
+            st.pulseRingMap.delete(alertId);
+          }
+        }
+
+        for (const alert of st.activeAlerts) {
+          if (alert.kind !== 'separation' || alert.aircraftIds.length < 2) continue;
+          const [idA, idB] = alert.aircraftIds;
+          const bA = st.acMap.get(idA);
+          const bB = st.acMap.get(idB);
+          if (!bA || !bB) continue;
+
+          // Ground projection: horizontal midpoint of the two aircraft, y=1
+          const gx = (bA.renderPos.x + bB.renderPos.x) * 0.5;
+          const gz = (bA.renderPos.z + bB.renderPos.z) * 0.5;
+
+          let entry = st.pulseRingMap.get(alert.id);
+          if (!entry) {
+            entry = { rings: [], lastSpawnMs: -Infinity, severity: alert.severity };
+            st.pulseRingMap.set(alert.id, entry);
+          }
+
+          const rp = PULSE_RING_PARAMS[alert.severity];
+
+          // Spawn a new ring when the interval has elapsed
+          if (nowMs - entry.lastSpawnMs >= rp.spawnIntervalMs) {
+            const mat = new THREE.LineBasicMaterial({
+              color:       rp.color,
+              transparent: true,
+              opacity:     rp.peakOpacity,
+              depthWrite:  false,
+              blending:    THREE.AdditiveBlending,
+            });
+            const mesh = new THREE.LineLoop(PULSE_RING_GEO, mat);
+            mesh.frustumCulled = false;
+            mesh.position.set(gx, 1, gz);
+            mesh.scale.setScalar(rp.minRadius);
+            scene.add(mesh);
+            entry.rings.push({ mesh, mat, startMs: nowMs });
+            entry.lastSpawnMs = nowMs;
+          }
+
+          // Advance all rings: expand + fade; collect expired ones
+          const expired: ActiveRing[] = [];
+          for (const ring of entry.rings) {
+            const age = (nowMs - ring.startMs) / rp.maxAgeMs;
+            if (age >= 1) { expired.push(ring); continue; }
+            ring.mesh.position.set(gx, 1, gz);
+            ring.mesh.scale.setScalar(rp.minRadius + (rp.maxRadius - rp.minRadius) * age);
+            ring.mat.opacity = (1 - age) * rp.peakOpacity;
+          }
+
+          // Dispose expired rings
+          for (const ring of expired) {
+            scene.remove(ring.mesh);
+            ring.mat.dispose();
+            entry.rings.splice(entry.rings.indexOf(ring), 1);
+          }
+        }
+      }
+
       renderer.render(scene, camera);
     };
     tick();
@@ -1506,6 +1635,8 @@ export default function AirspaceView3D({
       st.beamMap.clear();
       st.sphereMap.forEach(entry => disposeDangerSphere(entry, scene));
       st.sphereMap.clear();
+      st.pulseRingMap.forEach(entry => disposePulseRingEntry(entry, scene));
+      st.pulseRingMap.clear();
       renderer.dispose();
       if (renderer.domElement.parentNode === el) el.removeChild(renderer.domElement);
       sceneRef.current = null;
