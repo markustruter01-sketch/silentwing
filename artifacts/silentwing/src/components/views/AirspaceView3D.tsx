@@ -1165,8 +1165,22 @@ export default function AirspaceView3D({
     const W = el.clientWidth  || window.innerWidth;
     const H = el.clientHeight || window.innerHeight;
 
-    // Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    // Renderer — guard WebGL context creation so environments without WebGL
+    // (headless browsers, GPU-less VMs) degrade to a fallback message instead
+    // of crashing the whole React tree (which would tear down the data feed).
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    } catch (err) {
+      console.warn('[3D] WebGL unavailable — 3D view disabled:', err);
+      const msg = document.createElement('div');
+      msg.textContent = '3D view unavailable (WebGL not supported in this browser)';
+      msg.style.cssText =
+        'display:flex;align-items:center;justify-content:center;height:100%;' +
+        'color:#64748b;font-size:13px;letter-spacing:0.05em;';
+      el.appendChild(msg);
+      return () => { el.removeChild(msg); };
+    }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(W, H);
     renderer.setClearColor(0x07090F, 1);

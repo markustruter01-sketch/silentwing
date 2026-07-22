@@ -18,6 +18,7 @@ import type { SWAlert, SWAlertSeverity } from '@/alerts/types';
 import { severityRank } from '@/alerts/types';
 import type { DataFeedAdapter, WorldSnapshot, FlightPhase, Aircraft } from '@/types';
 import { isAirborne } from '@/types';
+import { deriveActiveRunwayDirection } from '@/airports/helpers';
 
 type View = 'airspace' | 'airfield';
 export type DataSource = 'sim' | 'live';
@@ -26,6 +27,23 @@ export type DataSource = 'sim' | 'live';
 // NOTE: placeholder — will be replaced with a real demand metric in Phase 7.
 function sectorLoad(count: number, capacity: number) {
   return Math.min(99, Math.round(count / capacity * 100));
+}
+
+/** Empty snapshot used before the effect-owned adapter delivers its first one. */
+function emptySnapshot(profile: AirportProfile): WorldSnapshot {
+  const windDir   = profile.sim?.defaultWindDir   ?? 190;
+  const windSpeed = profile.sim?.defaultWindSpeed ?? 12;
+  return {
+    t: Date.now(),
+    aircraft: [],
+    alerts:   [],
+    weather:  {
+      windDir,
+      windSpeed,
+      activeRunwayDirection: deriveActiveRunwayDirection(profile, windDir, windSpeed),
+      precipitationCells:    [],
+    },
+  };
 }
 
 // ── Dev-only test-conflict aircraft ──────────────────────────────────────────
@@ -101,28 +119,37 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProfile.icao]);
 
-  // Adapter is (re-)created whenever dataSource or activeProfile changes.
-  const adapter = useMemo<DataFeedAdapter>(() => {
-    if (dataSource === 'sim' && activeProfile.sim) return getSimAdapter(activeProfile);
-    return new AdsbAdapter(activeProfile);
-  }, [dataSource, activeProfile]);
+  // ── Adapter lifecycle ────────────────────────────────────────────────────
+  // The adapter is constructed AND started inside a useEffect — never in
+  // useMemo or during render. React may run memo factories in discarded
+  // renders, which previously created orphan AdsbAdapters whose poll timers
+  // never got destroyed (observed as paired /api/adsb requests every cycle).
+  // With effect-owned lifecycle, the same effect that creates+starts an
+  // adapter is guaranteed a matching cleanup that destroys it — exactly one
+  // live poller at all times.
+  const [adapter, setAdapter] = useState<DataFeedAdapter | null>(null);
 
-  // Destroy the ADS-B adapter instance when it's replaced (dataSource change
-  // or component unmount). The sim adapter is a singleton and must NOT be
-  // destroyed — only the ADS-B adapter has a destroy() method.
   useEffect(() => {
+    const a: DataFeedAdapter =
+      dataSource === 'sim' && activeProfile.sim
+        ? getSimAdapter(activeProfile)   // singleton — managed by the sim engine
+        : new AdsbAdapter(activeProfile);
+    if (a instanceof AdsbAdapter) a.start();
+    setAdapter(a);
     return () => {
-      if (adapter instanceof AdsbAdapter) adapter.destroy();
+      // Sim adapter is a singleton and must NOT be destroyed here.
+      if (a instanceof AdsbAdapter) a.destroy();
     };
-  }, [adapter]);
+  }, [dataSource, activeProfile]);
 
   // ── World snapshot ───────────────────────────────────────────────────────
   // Resets immediately when adapter changes so stale aircraft don't linger.
   const [snapshot, setSnapshot] = useState<WorldSnapshot>(() =>
-    adapter.getSnapshotAt(Date.now()),
+    emptySnapshot(activeProfile),
   );
 
   useEffect(() => {
+    if (!adapter) return;
     setSnapshot(adapter.getSnapshotAt(Date.now()));
     const unsub = adapter.subscribe(setSnapshot);
     return unsub;
@@ -198,7 +225,7 @@ export default function App() {
   const [feedHealth, setFeedHealth] = useState<{
     status: 'live' | 'lagging' | 'stalled';
     lastUpdate: number;
-  }>(() => adapter.getFeedHealth());
+  }>({ status: 'stalled', lastUpdate: 0 });
 
   // Dev-only: simulate a feed loss so the failsafe can be demonstrated
   const [simulateFeedLoss,  setSimulateFeedLoss] = useState(false);
@@ -214,7 +241,7 @@ export default function App() {
           age > HEALTH_STALLED_MS ? 'stalled' :
           age > HEALTH_LAGGING_MS ? 'lagging' : 'live';
         setFeedHealth({ status, lastUpdate: feedLossStartRef.current });
-      } else {
+      } else if (adapter) {
         setFeedHealth(adapter.getFeedHealth());
       }
     };
@@ -468,7 +495,7 @@ export default function App() {
   }, [handleKey]);
 
   // Legacy adapter alerts (not used in 6A UI — kept for StatusStrip count fallback)
-  const _legacyAlerts = adapter.getActiveAlerts();
+  const _legacyAlerts = adapter?.getActiveAlerts() ?? [];
 
   return (
     <div className="flex flex-col w-screen h-screen overflow-hidden bg-[#0A0E14] text-slate-100">

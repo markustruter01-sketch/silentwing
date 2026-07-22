@@ -4,4 +4,5 @@
 - [Taxi route geometry rules](silentwing-taxi-geometry.md) — why intl gates moved to y=180, INTL_APRON_W waypoint rationale
 - [Trail fade + velocity extrapolation](silentwing-trail-extrap.md) — per-vertex alpha ShaderMaterial for trails; age-compensated lastKnownPos; backwards-snap root cause and fix
 - [Multi-airport refactor](silentwing-airport-refactor.md) — AirportProfile, helpers, wind convention, approach corridor derivation
+- [Feed adapter lifecycle](silentwing-adapter-lifecycle.md) — adapters must be effect-owned; constructor side effects in useMemo created orphan pollers; WebGL failure must not crash the tree
 - [Sydney (YSSY) addition](silentwing-yssy.md) — YSSY profile, registry, switcher, live-only sim guard, WeatherWidget profile prop
