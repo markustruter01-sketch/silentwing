@@ -2287,6 +2287,7 @@ export default function AirspaceView3D({
       renderer.dispose();
       if (renderer.domElement.parentNode === el) el.removeChild(renderer.domElement);
       sceneRef.current = null;
+      mark(`3d-setup-cleanup icao=${profileRef.current.icao}`);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 

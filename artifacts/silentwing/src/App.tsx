@@ -112,7 +112,7 @@ export default function App() {
   const handleAirportSwitch = useCallback((profile: AirportProfile) => {
     if (profile.icao === activeProfile.icao) return;
     console.log(`[APP] airport switch → ${profile.icao}`);
-    mark(`switch-start→${profile.icao}`);
+    mark(`switch-start→${profile.icao} [from=${activeProfile.icao}]`);
     setActiveProfile(profile);
     if (!profile.sim) setDataSource('live');
     setSelectedAcId(null);
