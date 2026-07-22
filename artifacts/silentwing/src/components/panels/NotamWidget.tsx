@@ -88,7 +88,7 @@ export default function NotamWidget() {
     >
       {/* ── Header ── */}
       <div
-        className="flex items-center justify-between px-3 pt-2 pb-1"
+        className="flex items-center justify-between px-3 pt-1.5 pb-1"
         style={{ borderBottom: '1px solid rgba(250,204,21,0.10)' }}
       >
         <div className="flex items-center gap-2">
@@ -120,43 +120,35 @@ export default function NotamWidget() {
       </div>
 
       {/* ── Body ── */}
-      <div className="px-3 py-2 flex flex-col gap-1">
+      <div className="px-3 py-2">
         {error ? (
-          <span className="font-mono text-[8px] text-slate-600">{error}</span>
+          <span className="font-mono text-[9px] text-slate-600">{error}</span>
         ) : metar === null ? (
-          <span className="font-mono text-[8px] text-slate-700">Loading…</span>
+          <span className="font-mono text-[9px] text-slate-700">Loading…</span>
         ) : (
           <>
-            {/* Row 1 — wind */}
-            <div className="flex items-center gap-3">
-              <Row label="WIND">
+            {/* Single horizontal row — all fields inline */}
+            <div className="flex items-center gap-5 flex-wrap">
+              <Field label="WIND">
                 {metar.wdir === 0
                   ? `VRB ${metar.wspd}KT`
                   : `${String(metar.wdir).padStart(3,'0')}° ${windDir(metar.wdir)} ${metar.wspd}KT`
                   + (metar.wgst ? ` G${metar.wgst}KT` : '')}
-              </Row>
-            </div>
-
-            {/* Row 2 — visibility + weather */}
-            <div className="flex items-center gap-3">
-              <Row label="VIS">{visFmt(metar.visib)}</Row>
+              </Field>
+              <Field label="VIS">{visFmt(metar.visib)}</Field>
               {metar.wxString && (
-                <Row label="WX">
+                <Field label="WX">
                   <span style={{ color: '#F87171' }}>{wxLabel(metar.wxString)}</span>
-                </Row>
+                </Field>
               )}
+              <Field label="TEMP">{metar.temp}°C</Field>
+              <Field label="DP">{metar.dewp}°C</Field>
+              <Field label="QNH">{metar.altim} hPa</Field>
             </div>
 
-            {/* Row 3 — temp / dewpoint */}
-            <div className="flex items-center gap-3">
-              <Row label="TEMP">{metar.temp}°C</Row>
-              <Row label="DP">{metar.dewp}°C</Row>
-              <Row label="QNH">{metar.altim} hPa</Row>
-            </div>
-
-            {/* Raw METAR */}
+            {/* Raw METAR — same row underneath, slightly dimmer */}
             <div
-              className="mt-0.5 pt-1 font-mono text-[6.5px] text-slate-600 leading-tight break-all"
+              className="mt-1.5 pt-1 font-mono text-[8px] text-slate-500 leading-tight"
               style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}
             >
               {metar.rawOb}
@@ -168,16 +160,16 @@ export default function NotamWidget() {
   );
 }
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-baseline gap-1.5">
       <span
-        className="font-mono text-[6px] tracking-widest shrink-0"
+        className="font-mono text-[7px] tracking-widest shrink-0"
         style={{ color: '#FDE047', opacity: 0.55 }}
       >
         {label}
       </span>
-      <span className="font-mono text-[8px] text-slate-200">{children}</span>
+      <span className="font-mono text-[10px] text-slate-200">{children}</span>
     </div>
   );
 }
