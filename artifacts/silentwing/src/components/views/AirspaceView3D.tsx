@@ -2490,8 +2490,8 @@ export default function AirspaceView3D({
         <span className="font-mono text-[10px] tracking-wider text-slate-800 mt-1">GND</span>
       </div>
 
-      {/* ── Phase legend — bottom-left ── */}
-      <div className="absolute bottom-4 left-4 flex flex-col gap-[3px] pointer-events-none select-none">
+      {/* ── Phase legend — bottom-center horizontal ── */}
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex flex-row items-center gap-4 pointer-events-none select-none">
         {([
           ['#38BDF8', 'APPROACH / ARRIVAL'],
           ['#F59E0B', 'TAXI IN'],
