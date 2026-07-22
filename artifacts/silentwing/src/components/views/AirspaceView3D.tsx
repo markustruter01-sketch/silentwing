@@ -342,22 +342,83 @@ const PHASE_HEX: Record<string, number> = {
 const HEX_DEFAULT = 0x94A3B8;
 function phaseHex(phase: string) { return PHASE_HEX[phase] ?? HEX_DEFAULT; }
 
-// ── Callsign label sprite ──────────────────────────────────────────────────────
-function makeLabel(callsign: string, hex: number): THREE.Sprite {
-  const W = 320, H = 80;
-  const canvas = document.createElement('canvas');
-  canvas.width = W; canvas.height = H;
-  const ctx = canvas.getContext('2d')!;
-  ctx.clearRect(0, 0, W, H);
+// ── Combined aircraft label sprite (callsign + heading + phase) ───────────────
+// Replaces the old plain-callsign label.  One sprite per aircraft positioned at
+// LABEL_LIFT above the cone; refreshed per-poll when phase or heading changes.
+
+const AC_LABEL_W = 360, AC_LABEL_H = 100;
+
+const PHASE_LABEL: Record<string, string> = {
+  'approach':           'APPROACH',
+  'landing':            'LANDING',
+  'takeoff':            'TAKE OFF',
+  'taxi-in':            'TAXI IN',
+  'taxi-out':           'TAXI OUT',
+  'at-gate':            'AT GATE',
+  'departure':          'DEPARTURE',
+  'enroute-arrival':    'ARRIVAL',
+  'enroute-departure':  'ENROUTE',
+};
+
+function _paintAcLabel(
+  ctx: CanvasRenderingContext2D,
+  callsign: string,
+  headingDeg: number,
+  phase: string,
+): void {
+  const W = AC_LABEL_W, H = AC_LABEL_H;
+  const color = '#' + ((PHASE_HEX[phase] ?? HEX_DEFAULT) >>> 0).toString(16).padStart(6, '0');
+  const phaseLabel = PHASE_LABEL[phase] ?? phase.toUpperCase();
+  const hdgStr = `HDG ${Math.round(headingDeg).toString().padStart(3, '0')}°`;
+
+  // Border only — transparent interior
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  (ctx as CanvasRenderingContext2D & { roundRect: (...a: unknown[]) => void })
+    .roundRect(3, 3, W - 6, H - 6, 8);
+  ctx.stroke();
+
+  // Callsign — row 1
   ctx.font = 'bold 30px "JetBrains Mono","Courier New",monospace';
-  ctx.fillStyle = '#' + hex.toString(16).padStart(6, '0');
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(callsign, W / 2, H / 2);
-  const tex = new THREE.CanvasTexture(canvas);
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(callsign, W / 2, H * 0.36);
+
+  // HDG + phase — row 2, slightly dimmer
+  ctx.font = '16px "JetBrains Mono","Courier New",monospace';
+  ctx.globalAlpha = 0.72;
+  ctx.fillText(`${hdgStr}  ·  ${phaseLabel}`, W / 2, H * 0.72);
+  ctx.globalAlpha = 1.0;
+}
+
+function makeAcLabel(callsign: string, headingDeg: number, phase: string): THREE.Sprite {
+  const cv = document.createElement('canvas');
+  cv.width = AC_LABEL_W; cv.height = AC_LABEL_H;
+  const ctx = cv.getContext('2d')!;
+  ctx.clearRect(0, 0, AC_LABEL_W, AC_LABEL_H);
+  _paintAcLabel(ctx, callsign, headingDeg, phase);
+  const tex = new THREE.CanvasTexture(cv);
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
-  const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(480, 120, 1);
-  return sprite;
+  const sp = new THREE.Sprite(mat);
+  sp.scale.set(540, 150, 1);
+  return sp;
+}
+
+function refreshAcLabel(b: AcBundle, callsign: string, headingDeg: number, phase: string): void {
+  const cv = document.createElement('canvas');
+  cv.width = AC_LABEL_W; cv.height = AC_LABEL_H;
+  const ctx = cv.getContext('2d')!;
+  ctx.clearRect(0, 0, AC_LABEL_W, AC_LABEL_H);
+  _paintAcLabel(ctx, callsign, headingDeg, phase);
+  const sm = b.label.material as THREE.SpriteMaterial;
+  sm.map?.dispose();
+  sm.map = new THREE.CanvasTexture(cv);
+  sm.map.needsUpdate = true;
+  sm.needsUpdate = true;
+  b.labelPhase = phase;
+  b.labelHeadingDeg = headingDeg;
 }
 
 // ── Ring altitude label sprites ───────────────────────────────────────────────
@@ -597,41 +658,15 @@ function buildWindIndicator(windDir: number, windSpeed: number): THREE.Group {
 const APPROACH_LINE_DROP    = 300; // scene units below the aircraft
 const APPROACH_LINE_FORWARD = 450; // scene units ahead along heading
 
-function makeApproachSign(phase: 'approach' | 'landing'): THREE.Sprite {
-  const W = 320, H = 80;
-  const cv  = document.createElement('canvas');
-  cv.width  = W; cv.height = H;
-  const ctx = cv.getContext('2d')!;
-  ctx.clearRect(0, 0, W, H);
-  // Border only — no fill background
-  const borderHex = phase === 'approach' ? '#38BDF8' : '#60A5FA';
-  const textHex   = phase === 'approach' ? '#7dd3fc' : '#93c5fd';
-  ctx.strokeStyle = borderHex;
-  ctx.lineWidth   = 2.5;
-  ctx.stroke();
-  // Label text
-  ctx.font         = 'bold 26px "JetBrains Mono","Courier New",monospace';
-  ctx.fillStyle    = textHex;
-  ctx.textAlign    = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(phase === 'approach' ? 'APPROACH' : 'LANDING', W / 2, H / 2);
-  const tex = new THREE.CanvasTexture(cv);
-  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
-  const sp  = new THREE.Sprite(mat);
-  sp.scale.set(480, 120, 1);
-  return sp;
-}
-
 interface ApproachIndicatorEntry {
   line:    THREE.Line;
-  sign:    THREE.Sprite;
   lineMat: THREE.LineBasicMaterial;
   /** Phase this entry was created for — used to detect approach↔landing transitions. */
   phase:   'approach' | 'landing';
 }
 
 function createApproachIndicator(scene: THREE.Scene, phase: 'approach' | 'landing'): ApproachIndicatorEntry {
-  const posArr = new Float32Array(6); // top xyz + bottom-forward xyz (updated each frame)
+  const posArr = new Float32Array(6);
   const lineGeo = new THREE.BufferGeometry();
   lineGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
   const lineColor = phase === 'approach' ? 0x38BDF8 : 0x60A5FA;
@@ -642,20 +677,13 @@ function createApproachIndicator(scene: THREE.Scene, phase: 'approach' | 'landin
   line.frustumCulled = false;
   scene.add(line);
 
-  const sign = makeApproachSign(phase);
-  sign.frustumCulled = false;
-  scene.add(sign);
-
-  return { line, sign, lineMat, phase };
+  return { line, lineMat, phase };
 }
 
 function disposeApproachIndicator(entry: ApproachIndicatorEntry, scene: THREE.Scene): void {
-  scene.remove(entry.line, entry.sign);
+  scene.remove(entry.line);
   entry.line.geometry.dispose();
   entry.lineMat.dispose();
-  const sm = entry.sign.material as THREE.SpriteMaterial;
-  sm.map?.dispose();
-  sm.dispose();
 }
 
 // ── Glide slope projected path line (Task #26) ──────────────────────────────
@@ -700,43 +728,13 @@ function disposeGlideSlopeLine(entry: GlideSlopeEntry, scene: THREE.Scene): void
 
 const TAKEOFF_LINE_HEIGHT = 500; // scene units (~3 300 ft) above the aircraft
 
-function makeTakeoffSign(): THREE.Sprite {
-  const W = 320, H = 80;
-  const cv  = document.createElement('canvas');
-  cv.width  = W; cv.height = H;
-  const ctx = cv.getContext('2d')!;
-  ctx.clearRect(0, 0, W, H);
-  // Dark pill background
-  ctx.fillStyle = 'rgba(10,8,30,0.88)';
-  ctx.beginPath();
-  (ctx as CanvasRenderingContext2D & { roundRect: (...a: unknown[]) => void })
-    .roundRect(4, 4, W - 8, H - 8, 8);
-  ctx.fill();
-  // Accent border in takeoff-phase indigo
-  ctx.strokeStyle = '#818CF8';
-  ctx.lineWidth   = 2.5;
-  ctx.stroke();
-  // Label text
-  ctx.font         = 'bold 26px "JetBrains Mono","Courier New",monospace';
-  ctx.fillStyle    = '#a5b4fc';
-  ctx.textAlign    = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('TAKE OFF', W / 2, H / 2);
-  const tex = new THREE.CanvasTexture(cv);
-  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
-  const sp  = new THREE.Sprite(mat);
-  sp.scale.set(480, 120, 1);
-  return sp;
-}
-
 interface TakeoffIndicatorEntry {
   line:    THREE.Line;
-  sign:    THREE.Sprite;
   lineMat: THREE.LineBasicMaterial;
 }
 
 function createTakeoffIndicator(scene: THREE.Scene): TakeoffIndicatorEntry {
-  const posArr = new Float32Array(6); // bottom xyz + top xyz (updated each frame)
+  const posArr = new Float32Array(6);
   const lineGeo = new THREE.BufferGeometry();
   lineGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
   const lineMat = new THREE.LineBasicMaterial({
@@ -746,20 +744,13 @@ function createTakeoffIndicator(scene: THREE.Scene): TakeoffIndicatorEntry {
   line.frustumCulled = false;
   scene.add(line);
 
-  const sign = makeTakeoffSign();
-  sign.frustumCulled = false;
-  scene.add(sign);
-
-  return { line, sign, lineMat };
+  return { line, lineMat };
 }
 
 function disposeTakeoffIndicator(entry: TakeoffIndicatorEntry, scene: THREE.Scene): void {
-  scene.remove(entry.line, entry.sign);
+  scene.remove(entry.line);
   entry.line.geometry.dispose();
   entry.lineMat.dispose();
-  const sm = entry.sign.material as THREE.SpriteMaterial;
-  sm.map?.dispose();
-  sm.dispose();
 }
 
 // ── Per-aircraft Three.js bundle ──────────────────────────────────────────────
@@ -795,6 +786,12 @@ interface AcBundle {
   corrStartMs:     number;
   /** Purple selection halo ring shown when director focuses this aircraft. */
   halo:            THREE.Mesh;
+  /** Callsign string — stored so refreshAcLabel can repaint without extra props. */
+  callsign:        string;
+  /** Phase that was painted into the label last; used to detect change. */
+  labelPhase:      string;
+  /** Heading that was painted into the label last; refresh when drift > 5°. */
+  labelHeadingDeg: number;
 }
 
 function disposeBundle(b: AcBundle): void {
@@ -1734,13 +1731,12 @@ export default function AirspaceView3D({
           arr[3] = rx; arr[4] = top; arr[5] = rz;
           posAttr.needsUpdate = true;
           entry.line.geometry.computeBoundingSphere();
-          entry.sign.position.set(rx, top + 90, rz);
         }
       }
 
       // ── Approach / landing indicator update ───────────────────────────────
       // Diagonal line forward-and-down along the aircraft's heading, evoking
-      // a glide slope descent.  Sign sits at the lower end of the line.
+      // a glide slope descent.
       {
         for (const [acId, entry] of st.approachMap) {
           const b = st.acMap.get(acId);
@@ -1757,7 +1753,6 @@ export default function AirspaceView3D({
           arr[3] = endX; arr[4] = endY; arr[5] = endZ;
           posAttr.needsUpdate = true;
           entry.line.geometry.computeBoundingSphere();
-          entry.sign.position.set(endX, endY - 90, endZ);
         }
       }
 
@@ -2191,7 +2186,7 @@ export default function AirspaceView3D({
         const trail = new THREE.Line(trailGeo, trailMat);
         scene.add(trail);
 
-        const label = makeLabel(ac.callsign, hex);
+        const label = makeAcLabel(ac.callsign, ac.heading, ac.phase);
         label.position.set(pos.x, pos.y + LABEL_LIFT, pos.z);
         // Freshly spawned aircraft always have fresh data — full opacity
         (label.material as THREE.SpriteMaterial).opacity = 1.0;
@@ -2228,6 +2223,9 @@ export default function AirspaceView3D({
           seenPos:         ac.seenPos ?? 0,
           corrFromPos:     spawnPos.clone(),
           corrStartMs:     -1,   // no correction on first appearance
+          callsign:        ac.callsign,
+          labelPhase:      ac.phase,
+          labelHeadingDeg: ac.heading,
         });
 
       } else {
@@ -2282,6 +2280,14 @@ export default function AirspaceView3D({
 
         // Heading snaps immediately (no perceptible jerk at these speeds)
         b.cone.rotation.y = headY;
+
+        // ── Refresh combined label when phase or heading drifts > 5° ─────────
+        {
+          const hdgDrift = Math.abs(((ac.heading - b.labelHeadingDeg) + 180 + 360) % 360 - 180);
+          if (ac.phase !== b.labelPhase || hdgDrift > 5) {
+            refreshAcLabel(b, b.callsign, ac.heading, ac.phase);
+          }
+        }
 
         // ── FIX B: visual stale-track indicator ───────────────────────────
         // SAFETY SIGNAL: aircraft with seen_pos > STALE_DISPLAY_S are shown
