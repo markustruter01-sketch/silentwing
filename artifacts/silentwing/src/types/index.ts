@@ -40,6 +40,11 @@ export interface Aircraft {
   /** Set by the ADS-B adapter for category-C2 entries and TWR stations.
    *  Views may optionally hide these; they are never silently dropped. */
   isGroundVehicle?: boolean;
+  /** Seconds since the transponder last transmitted a fresh position fix
+   *  (ADS-B Exchange seen_pos field).  0 = just updated.  Absent on sim
+   *  aircraft (treat as 0).  SAFETY NOTE: large values mean the displayed
+   *  track may not reflect current aircraft position. */
+  seenPos?: number;
 }
 
 export interface Alert {

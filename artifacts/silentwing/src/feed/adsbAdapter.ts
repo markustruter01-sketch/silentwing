@@ -74,7 +74,10 @@ interface RawAc {
   alt_baro?:     number | 'ground';  // ← CRITICAL: string "ground" when on ground
   alt_geom?:     number;
   category?:     string;
+  seen_pos?:     number;  // seconds since this entry's position was last updated
+  seen?:         number;  // seconds since any message from this aircraft
 }
+
 
 // ── Normalise one raw entry → Aircraft (or null if invalid) ──────────────────
 function normalise(raw: RawAc): (Aircraft & { isGroundVehicle: boolean }) | null {
@@ -119,6 +122,8 @@ function normalise(raw: RawAc): (Aircraft & { isGroundVehicle: boolean }) | null
     origin:         undefined,
     destination:    'YBBN',
     confidence:     1.0,
+    // FIX B: pass seen_pos through so the 3D view can flag stale tracks
+    seenPos:        raw.seen_pos ?? 0,
     isGroundVehicle,
   };
 }
@@ -263,6 +268,7 @@ export class AdsbAdapter implements DataFeedAdapter {
       this.lastPoll  = Date.now();
 
       const rawList: RawAc[] = data.ac ?? [];
+
       const aircraft: Aircraft[] = [];
       let gvCount = 0;
 

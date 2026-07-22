@@ -25,16 +25,23 @@ const ORBIT_RADIUS = 5200;        // default orbit radius (was 4200 — widened 
 const ORBIT_HEIGHT = 1600;        // was 2600 — lower angle, more runway visible
 const ORBIT_SPEED  = 0.00035;     // rad/frame ≈ 4.4 min/revolution at 60 fps
 const LOOK_AT      = new THREE.Vector3(0, 0, 0); // airfield centre (was y=700)
-// Interpolation time constant: renderPos glides to targetPos with this smoothing.
-// ~600 ms means ~63 % of the gap closed in one time-constant; fully settled in ~2 s.
-const INTERP_TAU   = 600;          // ms
 const LABEL_LIFT      = 210;      // Three.js Y-units above cone
-const TRAIL_MAX       = 600;      // 10 Hz × 60 s
-// Label opacity fades between these camera-to-label distances (Three.js units).
-// At orbit distance (~7 600) all labels are invisible; at inspect distance
-// (~1 500) they are fully opaque. Selected aircraft label is always full opacity.
-const LABEL_FULL_DIST = 2800;     // below this → opacity 1.0
-const LABEL_HIDE_DIST = 4500;     // above this → opacity 0.0
+const TRAIL_MAX       = 600;      // max trail points
+
+// ── ADS-B feed quality constants ──────────────────────────────────────────────
+// Knots → m/s for trail-cap and stale-check calculations.
+const KT_TO_MPS       = 0.514444;
+// Aircraft whose seen_pos exceeds this are shown dimmed — their displayed
+// position may be significantly behind their true position.  SAFETY SIGNAL.
+const STALE_DISPLAY_S = 15;       // seconds
+// If a new poll's position is within this of the last known target, the
+// position is considered unchanged (stale transponder data, not real movement).
+const STALE_POS_M     = 1;        // metres
+// Trail-cap parameters.  A new trail point is dropped if it is further from the
+// previous point than: gs_mps × pollInterval_s × TRAIL_SLACK + TRAIL_GPS_M.
+// This kills starburst from seen_pos oscillation without hiding genuine motion.
+const TRAIL_SLACK     = 1.5;      // 50 % margin for poll-timing jitter
+const TRAIL_GPS_M     = 25;       // GPS scatter floor (metres)
 
 // Camera offset from aircraft for inspect / follow modes
 // (south and above: Z=south in Three.js coordinate space)
@@ -461,9 +468,8 @@ export default function AirspaceView3D({
         ]);
         b.stem.geometry.computeBoundingSphere();
 
-        // All identifiers always visible
-        const lm = b.label.material as THREE.SpriteMaterial;
-        lm.opacity = 1.0;
+        // Label opacity is set per-poll (in the data sync effect) based on seenPos —
+        // no per-frame override needed here.
       }
 
       renderer.render(scene, camera);
@@ -777,6 +783,8 @@ export default function AirspaceView3D({
 
         const label = makeLabel(ac.callsign, hex);
         label.position.set(pos.x, pos.y + LABEL_LIFT, pos.z);
+        // Freshly spawned aircraft always have fresh data — full opacity
+        (label.material as THREE.SpriteMaterial).opacity = 1.0;
         scene.add(label);
 
         const trailBuf: THREE.Vector3[] = [pos.clone(), pos.clone()];
@@ -791,26 +799,59 @@ export default function AirspaceView3D({
         const b  = acMap.get(ac.id)!;
         const cm = b.cone.material as THREE.MeshLambertMaterial;
 
-        // Begin a new interpolation segment: glide from wherever renderPos is now
-        // (mid-flight between previous polls) to the new real fix, over the measured
-        // poll interval.  fromPos captures the current display position so there is
-        // no position discontinuity at the segment boundary.
-        b.fromPos.copy(b.renderPos);
-        b.targetPos.copy(pos);
-        b.interpStartMs    = nowMs;
-        b.interpDurationMs = st.pollDurationMs;
+        // ── FIX B: stale-position guard ───────────────────────────────────
+        // If the new position is within STALE_POS_M of the last known target
+        // the transponder has not transmitted a new fix — don't restart the
+        // interpolation segment, just keep the aircraft at its current position.
+        const posActuallyMoved = pos.distanceTo(b.targetPos) > STALE_POS_M;
+        if (posActuallyMoved) {
+          // Begin a new segment: glide from current renderPos to new fix
+          b.fromPos.copy(b.renderPos);
+          b.targetPos.copy(pos);
+          b.interpStartMs    = nowMs;
+          b.interpDurationMs = st.pollDurationMs;
+        }
 
-        // Heading and colour snap immediately (no perceptible jerk)
+        // Heading snaps immediately (no perceptible jerk)
         b.cone.rotation.y = headY;
-        // Selected aircraft: gold highlight
-        cm.color.setHex(isSelected ? 0xFACC15 : hex);
-        cm.emissive.setHex(isSelected ? 0xFACC15 : hex);
-        cm.emissiveIntensity = isSelected ? 0.70 : 0.30;
 
-        // Trail records ground-truth positions (not interpolated drPos)
-        // Trail — write into pre-allocated buffer
-        b.trailBuf.push(pos.clone());
-        if (b.trailBuf.length > TRAIL_MAX) b.trailBuf.shift();
+        // ── FIX B: visual stale-track indicator ───────────────────────────
+        // SAFETY SIGNAL: aircraft with seen_pos > STALE_DISPLAY_S are shown
+        // dimmed so the controller can distinguish a live track from one whose
+        // position may be significantly behind the aircraft's true location.
+        const isStale = (ac.seenPos ?? 0) > STALE_DISPLAY_S;
+        if (isSelected) {
+          cm.color.setHex(0xFACC15);
+          cm.emissive.setHex(0xFACC15);
+          cm.emissiveIntensity = 0.70;
+          (b.label.material as THREE.SpriteMaterial).opacity = 1.0;
+        } else if (isStale) {
+          // Dim to slate-grey with near-zero glow — still visible but clearly degraded
+          cm.color.setHex(0x64748B);
+          cm.emissive.setHex(0x334155);
+          cm.emissiveIntensity = 0.05;
+          (b.label.material as THREE.SpriteMaterial).opacity = 0.35;
+        } else {
+          cm.color.setHex(hex);
+          cm.emissive.setHex(hex);
+          cm.emissiveIntensity = 0.30;
+          (b.label.material as THREE.SpriteMaterial).opacity = 1.0;
+        }
+
+        // ── FIX A: trail sanity cap ────────────────────────────────────────
+        // Drop a trail point that is physically further from the last point
+        // than the aircraft could have travelled in one poll interval.
+        // This kills starburst from seen_pos oscillation (fresh/stale position
+        // alternation) without hiding genuine motion of fast-moving aircraft.
+        const gsMps       = ac.groundSpeed * KT_TO_MPS;
+        const maxTrailJump = gsMps * (st.pollDurationMs / 1000) * TRAIL_SLACK + TRAIL_GPS_M;
+        const lastTp      = b.trailBuf[b.trailBuf.length - 1];
+        if (pos.distanceTo(lastTp) <= maxTrailJump) {
+          b.trailBuf.push(pos.clone());
+          if (b.trailBuf.length > TRAIL_MAX) b.trailBuf.shift();
+        }
+
+        // Write trail buffer into pre-allocated GPU attribute
         const ta  = b.trail.geometry.attributes.position as THREE.BufferAttribute;
         const arr = ta.array as Float32Array;
         for (let i = 0; i < b.trailBuf.length; i++) {
@@ -822,7 +863,7 @@ export default function AirspaceView3D({
         b.trail.geometry.setDrawRange(0, b.trailBuf.length);
         b.trail.geometry.computeBoundingSphere();
         (b.trail.material as THREE.LineBasicMaterial).color.setHex(
-          isSelected ? 0xFACC15 : hex,
+          isSelected ? 0xFACC15 : (isStale ? 0x64748B : hex),
         );
       }
     }
