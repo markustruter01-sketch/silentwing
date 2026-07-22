@@ -69,8 +69,8 @@ const FOLLOW_OFFSET  = new THREE.Vector3(0, 700, 1400);
 // distance so the whole flight path context is visible, not just the aircraft.
 const DIRECTOR_FOLLOW_OFFSET = new THREE.Vector3(0, 4_500, 9_000);
 
-// Transition speed for manual inspect fly-to (flyProgress increment per frame at 60 fps)
-const FLY_SPEED_NORMAL = 0.022; // ~45 frames ≈ 0.75 s
+// Transition speed for fly-to animations (flyProgress increment per frame at 60 fps)
+const FLY_SPEED_NORMAL = 0.0056; // ~180 frames ≈ 3 s
 
 // Director continuous-lerp rates — no discrete fly-to; both position and look-at
 // drift toward their targets every frame so aircraft switches are seamless glides.
@@ -711,7 +711,7 @@ export default function AirspaceView3D({
         case 'inspect': {
           if (st.flyProgress < 1) {
             // Fly-to animation
-            st.flyProgress = Math.min(st.flyProgress + 0.022, 1); // ~45 frames ≈ 0.75 s
+            st.flyProgress = Math.min(st.flyProgress + FLY_SPEED_NORMAL, 1);
             const t  = easeInOut(st.flyProgress);
             camera.position.lerpVectors(st.flyFrom, st.flyTo, t);
             const lk = new THREE.Vector3().lerpVectors(st.flyLookFrom, st.flyLookTo, t);
