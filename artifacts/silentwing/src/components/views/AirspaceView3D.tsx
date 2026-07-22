@@ -161,12 +161,18 @@ interface AcBundle {
   trail:    THREE.Line;
   label:    THREE.Sprite;
   trailBuf: THREE.Vector3[];
-  /** Smoothly interpolated display position — glides toward targetPos every rAF frame.
-   *  Never predicted ahead of the data; never moves backwards. */
-  renderPos: THREE.Vector3;
-  /** Latest real position from the most recent poll — overwritten on each poll,
-   *  never accumulated. The per-frame lerp handles the smooth transition. */
-  targetPos: THREE.Vector3;
+  /** Smoothly interpolated display position — the value applied to visuals each frame.
+   *  Advances from fromPos toward targetPos via smoothstep over interpDurationMs. */
+  renderPos:       THREE.Vector3;
+  /** Position at which this interpolation segment started (renderPos at poll time). */
+  fromPos:         THREE.Vector3;
+  /** Latest real position from the most recent poll — overwritten, never accumulated. */
+  targetPos:       THREE.Vector3;
+  /** performance.now() timestamp when the current interpolation segment began. */
+  interpStartMs:   number;
+  /** Actual measured wall-clock interval between the two most recent polls (ms).
+   *  Derived from consecutive data.now deltas so it tracks real poll cadence. */
+  interpDurationMs: number;
 }
 
 function disposeBundle(b: AcBundle): void {
@@ -206,8 +212,10 @@ interface SceneState {
   mouseDownY:    number;
   lastClickAcId: string | null;
   lastClickTime: number;
-  // interpolation: timestamp of last rAF tick (ms) for dt calculation
-  lastTickTime:  number;
+  // wall-clock timestamp (performance.now, ms) of the most recent poll arrival
+  lastPollMs:    number;
+  // measured interval between the two most recent accepted polls (ms); initially 8000
+  pollDurationMs: number;
   // zoom/pan/rotate state
   orbitRadius:      number;          // mutable zoom radius (starts at ORBIT_RADIUS)
   orbitElevation:   number;          // camera height above scene origin (mutable via drag)
@@ -356,8 +364,9 @@ export default function AirspaceView3D({
       mouseDownX:    0,
       mouseDownY:    0,
       lastClickAcId: null,
-      lastClickTime: 0,
-      lastTickTime:  performance.now(),
+      lastClickTime:  0,
+      lastPollMs:     0,
+      pollDurationMs: 8000,   // conservative default; replaced after first two polls
       orbitRadius:      ORBIT_RADIUS,
       orbitElevation:   ORBIT_HEIGHT,
       orbitTarget:      LOOK_AT.clone(),
@@ -423,21 +432,23 @@ export default function AirspaceView3D({
         }
       }
 
-      // ── Position interpolation — glide renderPos toward targetPos ────────
-      // FIX 2: no dead-reckoning, no offset accumulation.
-      // Each frame renderPos moves a fraction of the remaining gap to targetPos.
-      // TAU ~600 ms: 63 % closed per time-constant; aircraft never move backwards.
-      const nowTick   = performance.now();
-      const dtMs      = Math.min(nowTick - st.lastTickTime, 100); // clamp: tab wake-up
-      st.lastTickTime = nowTick;
-      const lerpAlpha = 1 - Math.exp(-dtMs / INTERP_TAU);
+      // ── Duration-based smoothstep interpolation ──────────────────────────
+      // Each aircraft glides from fromPos to targetPos over the full measured
+      // poll interval.  t runs 0→1 across that duration so motion is continuous
+      // for the entire inter-poll gap — aircraft are NEVER parked between polls.
+      const nowMs = performance.now();
 
       for (const [, b] of st.acMap) {
         // Guard: stale bundles from HMR mid-session may lack the new fields
-        if (!b.renderPos || !b.targetPos) continue;
+        if (!b.renderPos || !b.fromPos || !b.targetPos) continue;
 
-        // Glide toward the latest real fix — simple, never backwards
-        b.renderPos.lerp(b.targetPos, lerpAlpha);
+        // Normalised progress across this poll segment, clamped to [0, 1]
+        const rawT = Math.min((nowMs - b.interpStartMs) / b.interpDurationMs, 1);
+        // Smoothstep easing — eases in and out, avoids hard velocity discontinuity
+        // at each poll boundary: f(t) = t² (3 − 2t)
+        const t = rawT * rawT * (3 - 2 * rawT);
+
+        b.renderPos.lerpVectors(b.fromPos, b.targetPos, t);
         // FIX 3: clamp altitude — cone never sinks below the ground plane
         b.renderPos.y = Math.max(0, b.renderPos.y);
 
@@ -710,6 +721,14 @@ export default function AirspaceView3D({
     if (!st) return;
     const { scene, acMap, coneToId } = st;
 
+    // Measure the actual wall-clock interval between this poll and the previous one.
+    // This is the duration each aircraft will use to span its interpolation segment.
+    const nowMs = performance.now();
+    if (st.lastPollMs > 0) {
+      st.pollDurationMs = nowMs - st.lastPollMs;
+    }
+    st.lastPollMs = nowMs;
+
     // Keep latestAircraftMap current for camera tracking
     st.latestAircraftMap.clear();
     for (const ac of aircraft) st.latestAircraftMap.set(ac.id, ac);
@@ -761,9 +780,10 @@ export default function AirspaceView3D({
         scene.add(label);
 
         const trailBuf: THREE.Vector3[] = [pos.clone(), pos.clone()];
-        // renderPos and targetPos both start at spawn position — no jump on first frame
+        // Spawn: renderPos = fromPos = targetPos = real position; no motion until first update
         acMap.set(ac.id, { cone, stem, trail, label, trailBuf,
-          renderPos: pos.clone(), targetPos: pos.clone() });
+          renderPos: pos.clone(), fromPos: pos.clone(), targetPos: pos.clone(),
+          interpStartMs: nowMs, interpDurationMs: st.pollDurationMs });
 
       } else {
         // ── Update ────────────────────────────────────────────────────────
@@ -771,9 +791,14 @@ export default function AirspaceView3D({
         const b  = acMap.get(ac.id)!;
         const cm = b.cone.material as THREE.MeshLambertMaterial;
 
-        // FIX 2: overwrite targetPos with the latest real fix.
-        // The per-frame lerp handles the smooth visual transition — no accumulation.
+        // Begin a new interpolation segment: glide from wherever renderPos is now
+        // (mid-flight between previous polls) to the new real fix, over the measured
+        // poll interval.  fromPos captures the current display position so there is
+        // no position discontinuity at the segment boundary.
+        b.fromPos.copy(b.renderPos);
         b.targetPos.copy(pos);
+        b.interpStartMs    = nowMs;
+        b.interpDurationMs = st.pollDurationMs;
 
         // Heading and colour snap immediately (no perceptible jerk)
         b.cone.rotation.y = headY;
