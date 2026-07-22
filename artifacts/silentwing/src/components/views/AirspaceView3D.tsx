@@ -18,6 +18,7 @@ import { wakeCategory } from '@/utils/wakeCategory';
 import type { Polyline } from '@/data/ybbn_real';
 import type { SWAlert, SWAlertSeverity } from '@/alerts/types';
 import { useAirport } from '@/airports/context';
+import type { AirportProfile } from '@/airports/types';
 import { computeRunwayThresholds, computeApproachCorridors } from '@/airports/helpers';
 import { ROUTES } from '@/data/routes';
 import type { Route } from '@/data/routes';
@@ -1586,6 +1587,11 @@ export interface AirspaceView3DProps {
   /** When true: velocity vectors, separation bubbles, wake ribbons, and taxi
    *  rings are rendered in the 3D scene.  Mirrors the App-level [P] toggle. */
   showPaths?: boolean;
+  /** DEV-ONLY: on mount the component writes rebuildGroundGeometry() into this
+   *  ref so the parent can call it imperatively from a dev toolbar button.
+   *  The function removes/disposes existing ground groups, builds new geometry
+   *  from the given profile, clears all aircraft, and resets the orbit camera. */
+  rebuildGroundRef?: { current: ((profile: AirportProfile) => void) | null };
 }
 
 // ── Deferred aircraft spawn ───────────────────────────────────────────────────
@@ -1779,9 +1785,13 @@ export default function AirspaceView3D({
   onAlertFocusDone,
   showPaths = false,
   pinnedAcIds,
+  rebuildGroundRef,
 }: AirspaceView3DProps) {
   const mountRef       = useRef<HTMLDivElement>(null);
   const sceneRef       = useRef<SceneState | null>(null);
+  /** Three.js Groups comprising the current airport's ground geometry.
+   *  Stored so rebuildGroundGeometry() can remove and dispose them in-place. */
+  const groundGrpsRef  = useRef<THREE.Group[]>([]);
   /** Three.js group rebuilt whenever weather changes (approach cone + wind arrow). */
   const weatherGrpRef  = useRef<THREE.Group | null>(null);
   /** Three.js group containing all SID/STAR route ribbons for the current airport. */
@@ -1851,6 +1861,88 @@ export default function AirspaceView3D({
     const st = sceneRef.current;
     if (st) st.pinnedAcIds = pinnedAcIds ?? new Set();
   }, [pinnedAcIds]);
+
+  // ── rebuildGroundGeometry — exposed via rebuildGroundRef for imperative callers ──
+  // Written once at mount; reads refs at call-time so no stale closure risk.
+  useEffect(() => {
+    if (!rebuildGroundRef) return;
+    rebuildGroundRef.current = (profile: AirportProfile) => {
+      const st = sceneRef.current;
+      if (!st) return;
+      const { scene } = st;
+
+      // 1. Remove and dispose every mesh/line/sprite in the current ground groups.
+      //    Only ground geometry is touched — scene, renderer, and rAF loop are untouched.
+      for (const grp of groundGrpsRef.current) {
+        scene.remove(grp);
+        grp.traverse(obj => {
+          const node = obj as THREE.Mesh | THREE.Line | THREE.Sprite;
+          if ((node as THREE.Mesh).geometry) (node as THREE.Mesh).geometry.dispose();
+          const mat = (node as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+          if (mat) {
+            if (Array.isArray(mat)) mat.forEach(m => m.dispose());
+            else mat.dispose();
+          }
+        });
+      }
+      groundGrpsRef.current = [];
+
+      // 2. Build fresh ground geometry from the new profile and add to same scene.
+      const thresholds = computeRunwayThresholds(profile.runways, profile.geometry.runways);
+      const geoGrp     = buildGroundGeometry(profile.geometry.runways, profile.geometry.taxiways, profile.geometry.aprons);
+      const altGrp     = buildAltRings();
+      const annoGrp    = buildAirportAnnotations(thresholds, profile.terminalLabelPos);
+      scene.add(geoGrp, altGrp, annoGrp);
+      groundGrpsRef.current = [geoGrp, altGrp, annoGrp];
+      // Update threshold cache used by the glide-slope rAF pass.
+      st.allThresholds = thresholds;
+
+      // 3. Clear all aircraft (they belong to the old airport).
+      //    Per-aircraft cloned materials/geometries are disposed; shared module-level
+      //    geometry/materials (CONE_GEO, HALO_MAT, etc.) are NOT touched.
+      st.acMap.forEach(b => {
+        scene.remove(b.cone, b.stem, b.trail, b.label);
+        if (b.halo)      scene.remove(b.halo);
+        if (b.pinRing)   scene.remove(b.pinRing);
+        if (b.velVec)    scene.remove(b.velVec);
+        if (b.sepBubble) scene.remove(b.sepBubble);
+        if (b.wakeL)     scene.remove(b.wakeL);
+        if (b.wakeR)     scene.remove(b.wakeR);
+        disposeBundle(b);
+      });
+      st.acMap.clear();
+      st.coneToId.clear();
+      // Drain the spawn queue so stale IDs don't get built into the new scene.
+      st.spawnQueue.length = 0;
+      st.spawnQueueIds.clear();
+
+      // Clear aircraft-linked overlays (indicators reference old aircraft positions).
+      st.takeoffMap.forEach(entry => disposeTakeoffIndicator(entry, scene));
+      st.takeoffMap.clear();
+      st.approachMap.forEach(entry => disposeApproachIndicator(entry, scene));
+      st.approachMap.clear();
+      st.glideSlopeMap.forEach(entry => disposeGlideSlopeLine(entry, scene));
+      st.glideSlopeMap.clear();
+      st.taxiRingMap.forEach(entry => disposeTaxiRingEntry(entry, scene));
+      st.taxiRingMap.clear();
+
+      // 4. Reset orbit camera to frame the new airport's origin.
+      st.orbitTarget.set(0, 0, 0);
+      st.orbitRadius    = ORBIT_RADIUS;
+      st.orbitElevation = ORBIT_HEIGHT;
+      st.angle          = ORBIT_INIT_ANGLE;
+      st.cameraMode     = 'orbit';
+      st.camera.position.set(
+        ORBIT_RADIUS * Math.cos(ORBIT_INIT_ANGLE),
+        ORBIT_HEIGHT,
+        ORBIT_RADIUS * Math.sin(ORBIT_INIT_ANGLE),
+      );
+      st.camera.lookAt(st.orbitTarget);
+
+      console.log(`[GROUND] rebuild complete — ${profile.icao}`);
+    };
+    return () => { rebuildGroundRef.current = null; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Sync alertFocusId prop → sceneRef so the director picks it up ───────────
   useEffect(() => {
@@ -1981,9 +2073,11 @@ export default function AirspaceView3D({
 
     const prof       = profileRef.current;
     const thresholds = computeRunwayThresholds(prof.runways, prof.geometry.runways);
-    scene.add(buildGroundGeometry(prof.geometry.runways, prof.geometry.taxiways, prof.geometry.aprons));
-    scene.add(buildAltRings());
-    scene.add(buildAirportAnnotations(thresholds, prof.terminalLabelPos));
+    const geoGrp  = buildGroundGeometry(prof.geometry.runways, prof.geometry.taxiways, prof.geometry.aprons);
+    const altGrp  = buildAltRings();
+    const annoGrp = buildAirportAnnotations(thresholds, prof.terminalLabelPos);
+    scene.add(geoGrp, altGrp, annoGrp);
+    groundGrpsRef.current = [geoGrp, altGrp, annoGrp];
 
     // Initialise mutable state
     const st: SceneState = {

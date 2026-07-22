@@ -169,8 +169,10 @@ export default function App() {
 
   // Dev-only: simulate a feed loss so the failsafe can be demonstrated
   const [simulateFeedLoss,  setSimulateFeedLoss] = useState(false);
-  const simulateFeedLossRef = useRef(false);      // stable ref read inside interval
-  const feedLossStartRef    = useRef<number>(0);  // when the simulated loss began
+  const simulateFeedLossRef  = useRef(false);      // stable ref read inside interval
+  const feedLossStartRef     = useRef<number>(0);  // when the simulated loss began
+  /** Receives the rebuildGroundGeometry function from AirspaceView3D on mount. */
+  const rebuildGroundRef     = useRef<((profile: typeof YBBN) => void) | null>(null);
 
   useEffect(() => {
     const tick = () => {
@@ -458,6 +460,13 @@ export default function App() {
           <>
             <span className="ml-3 w-px self-stretch bg-slate-800/80" aria-hidden />
             <button
+              onClick={() => rebuildGroundRef.current?.(YBBN)}
+              title="DEV: Dispose current ground geometry + all aircraft and rebuild Brisbane in-place (tests the airport-swap mechanism without tearing down the scene)"
+              className="flex items-center gap-1 px-2 py-[2px] text-[7px] font-mono tracking-widest uppercase rounded border border-slate-700/40 text-slate-700 hover:text-slate-500 transition-colors select-none cursor-pointer"
+            >
+              ↺ geo
+            </button>
+            <button
               onClick={() => setInjectConflict(v => !v)}
               title="DEV: Inject two converging aircraft to trigger a CRITICAL separation alert"
               className={[
@@ -571,6 +580,7 @@ export default function App() {
             onAlertFocusDone={handleAlertFocusDone}
             showPaths={showPredictedPaths}
             pinnedAcIds={pinnedAcIds}
+            rebuildGroundRef={rebuildGroundRef}
             onSelectAircraft={(id) => {
               console.log(`[APP] 3D select: ${id ?? 'null'}`);
               setSelectedAcId(id);
