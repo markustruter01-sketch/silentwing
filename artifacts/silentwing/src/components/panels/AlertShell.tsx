@@ -160,7 +160,7 @@ export default function AlertShell({ activeAlerts, onAlertFocus }: AlertShellPro
 
       {/* ── Notebook tab spine (always visible) ──────────────────────────────── */}
       <div
-        className="w-11 flex flex-col bg-[#06090D]/95 border-r border-slate-800/40 pointer-events-auto"
+        className="w-11 flex flex-col h-fit bg-[#06090D]/95 border-r border-b border-slate-800/40 pointer-events-auto rounded-br"
         style={{ boxShadow: '3px 0 14px rgba(0,0,0,0.65)' }}
       >
         {TABS.map((tab, idx) => {
@@ -239,9 +239,6 @@ export default function AlertShell({ activeAlerts, onAlertFocus }: AlertShellPro
             </button>
           );
         })}
-
-        {/* ── Rest of the "page" below the tabs ──────────────────────────────── */}
-        <div className="flex-1 border-b border-slate-800/30" />
 
         {/* ── Audio mute toggle ──────────────────────────────────────────────── */}
         <button

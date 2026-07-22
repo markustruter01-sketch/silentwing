@@ -94,7 +94,7 @@ export default function ControlsHUD({ activeView }: Props) {
 
   return (
     <div
-      className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30
+      className="absolute bottom-4 right-4 z-30
                  flex items-end gap-4 px-4 py-2.5
                  rounded-xl border border-slate-700/60
                  bg-slate-900/75 backdrop-blur-sm
