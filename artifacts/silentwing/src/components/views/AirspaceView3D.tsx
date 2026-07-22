@@ -1723,11 +1723,15 @@ export default function AirspaceView3D({
             if (cnt > 0) intr.targetLook.set(mx / cnt, my / cnt, mz / cnt);
           }
 
-          // Close-up camera position: ALERT_CAM_DIST along the approach direction
-          // from the (live-updated) conflict midpoint.
-          const ALERT_CAM_DIST = 850;
-          const closPos = intr.targetLook.clone()
-            .addScaledVector(intr.approachDir, ALERT_CAM_DIST);
+          // Guard: if this interrupt was created by an older code path that
+          // pre-dates the fly-in fields, cancel it rather than crash.
+          if (!intr.approachDir || !intr.startPos) {
+            st.alertInterrupt = null;
+            st.alertFocusId   = null;
+            st.alertFocusDone?.();
+            st.alertFocusDone = null;
+            return; // skip remainder of this rAF tick; next frame is clean
+          }
 
           if (intr.elapsedMs >= TOTAL_MS) {
             // Full sequence complete — fire callback and let camera resume naturally.
@@ -1737,6 +1741,13 @@ export default function AirspaceView3D({
             st.alertFocusId   = null;
             done?.();
           } else {
+            // Close-up camera position: ALERT_CAM_DIST along the approach direction
+            // from the (live-updated) conflict midpoint.  Computed here (inside the
+            // active-interrupt branch) so it is never evaluated on completion/cleanup.
+            const ALERT_CAM_DIST = 850;
+            const closPos = intr.targetLook.clone()
+              .addScaledVector(intr.approachDir, ALERT_CAM_DIST);
+
             // naturalPos / naturalLook: where the mode code just placed the camera
             // (orbit / follow ran earlier this frame).  Used as the pivot-out target
             // so the return transition hands off seamlessly to the live camera mode.
