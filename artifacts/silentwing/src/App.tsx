@@ -367,6 +367,7 @@ export default function App() {
             aircraft={visibleAircraft}
             selectedAcId={selectedAcId}
             cameraMode={cameraMode}
+            directorMode={directorMode}
             onSelectAircraft={(id) => {
               console.log(`[APP] 3D select: ${id ?? 'null'}`);
               setSelectedAcId(id);
