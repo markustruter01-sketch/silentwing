@@ -1183,6 +1183,14 @@ interface SceneState {
     startLook:  THREE.Vector3;
     /** 3D conflict midpoint — updated each frame so it tracks moving aircraft. */
     targetLook: THREE.Vector3;
+    /** Camera world position at the moment the interrupt started. */
+    startPos:   THREE.Vector3;
+    /**
+     * Normalised direction from the conflict midpoint toward the camera at
+     * interrupt start.  Used each frame to recompute targetPos as aircraft move,
+     * so the camera stays at the correct approach angle during the hold phase.
+     */
+    approachDir: THREE.Vector3;
   } | null;
 }
 
@@ -1341,12 +1349,25 @@ export default function AirspaceView3D({
       ? new THREE.Vector3(mx / cnt, my / cnt, mz / cnt)
       : startLook.clone(); // fallback: pivot to where we already are
 
+    // Compute approach direction: normalised vector from conflict midpoint toward
+    // the camera, clamped to a minimum elevation so we never dive underground.
+    const ALERT_CAM_DIST = 850; // world units — close enough to fill ~70% of frame
+    const toCamera = st.camera.position.clone().sub(targetLook);
+    if (toCamera.length() < 1) toCamera.set(0, 1, 1); // degenerate fallback
+    // Ensure a meaningful upward component so the camera stays above the scene.
+    if (toCamera.y < toCamera.length() * 0.25) {
+      toCamera.y = toCamera.length() * 0.35;
+    }
+    const approachDir = toCamera.normalize();
+
     st.alertFocusId   = alertFocusId;
     st.alertInterrupt = {
       elapsedMs:  0,
       prevNowMs:  performance.now(),
       startLook,
       targetLook,
+      startPos:   st.camera.position.clone(),
+      approachDir,
     };
   }, [alertFocusId, onAlertFocusDone]);
 
@@ -1562,10 +1583,12 @@ export default function AirspaceView3D({
         // targetLook starts equal to startLook; the rAF loop updates it once
         // st.activeAlerts is populated (next re-render after aircraft sync).
         st.alertInterrupt = {
-          elapsedMs:  0,
-          prevNowMs:  performance.now(),
-          startLook:  sl,
-          targetLook: sl.clone(),
+          elapsedMs:   0,
+          prevNowMs:   performance.now(),
+          startLook:   sl,
+          targetLook:  sl.clone(),
+          startPos:    camera.position.clone(),
+          approachDir: new THREE.Vector3(0, 0.35, 1).normalize(),
         };
       }
     }
@@ -1700,6 +1723,12 @@ export default function AirspaceView3D({
             if (cnt > 0) intr.targetLook.set(mx / cnt, my / cnt, mz / cnt);
           }
 
+          // Close-up camera position: ALERT_CAM_DIST along the approach direction
+          // from the (live-updated) conflict midpoint.
+          const ALERT_CAM_DIST = 850;
+          const closPos = intr.targetLook.clone()
+            .addScaledVector(intr.approachDir, ALERT_CAM_DIST);
+
           if (intr.elapsedMs >= TOTAL_MS) {
             // Full sequence complete — fire callback and let camera resume naturally.
             const done = st.alertFocusDone;
@@ -1708,21 +1737,31 @@ export default function AirspaceView3D({
             st.alertFocusId   = null;
             done?.();
           } else {
-            // Where the camera mode code just pointed (used as pivot-out return target).
-            const dirVec = new THREE.Vector3();
+            // naturalPos / naturalLook: where the mode code just placed the camera
+            // (orbit / follow ran earlier this frame).  Used as the pivot-out target
+            // so the return transition hands off seamlessly to the live camera mode.
+            const naturalPos  = camera.position.clone();
+            const dirVec      = new THREE.Vector3();
             camera.getWorldDirection(dirVec);
             const naturalLook = camera.position.clone().addScaledVector(dirVec, 2000);
 
+            let posOverride:  THREE.Vector3;
             let lookOverride: THREE.Vector3;
+
             if (intr.elapsedMs < PIVOT_IN_MS) {
               const t = easeInOut(intr.elapsedMs / PIVOT_IN_MS);
+              posOverride  = new THREE.Vector3().lerpVectors(intr.startPos, closPos, t);
               lookOverride = new THREE.Vector3().lerpVectors(intr.startLook, intr.targetLook, t);
             } else if (intr.elapsedMs < PIVOT_IN_MS + HOLD_MS) {
+              posOverride  = closPos;
               lookOverride = intr.targetLook.clone();
             } else {
               const t = easeInOut((intr.elapsedMs - PIVOT_IN_MS - HOLD_MS) / PIVOT_OUT_MS);
+              posOverride  = new THREE.Vector3().lerpVectors(closPos, naturalPos, t);
               lookOverride = new THREE.Vector3().lerpVectors(intr.targetLook, naturalLook, t);
             }
+
+            camera.position.copy(posOverride);
             camera.lookAt(lookOverride);
           }
         }
