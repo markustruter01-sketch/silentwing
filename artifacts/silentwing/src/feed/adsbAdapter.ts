@@ -285,23 +285,26 @@ export class AdsbAdapter implements DataFeedAdapter {
   // ── Private ────────────────────────────────────────────────────────────────
 
   private _start(): void {
-    // Page Visibility: pause timer when tab is genuinely backgrounded, resume
-    // (and immediately catch up) when it becomes visible again.
-    // IMPORTANT: do NOT gate the initial poll/timer on visibilityState.
-    // In embedded iframes (e.g. the Replit preview pane) the document starts as
-    // "hidden" even while the user is actively viewing it, because the iframe
-    // hasn't received a visibility transition yet.  Gating startup on
-    // visibilityState === 'visible' would suppress the first poll forever.
+    // Page Visibility: fire a catchup poll when returning from genuine background.
+    //
+    // CRITICAL — do NOT clear/restart the timer based on visibilityState.
+    // In embedded iframes (e.g. the Replit preview pane) the document fires a
+    // 'visibilitychange' to 'hidden' immediately after load and NEVER fires
+    // 'visible'.  Clearing the timer in the 'hidden' branch permanently kills
+    // the interval: the startup unconditional poll fires once, then the
+    // visibilitychange-to-hidden arrives and destroys the setInterval, and
+    // because 'visible' never follows, _startTimer() is never re-called.
+    //
+    // The tick-level guard (!document.hidden inside _startTimer's callback) is
+    // sufficient to suppress actual fetches while the tab is genuinely
+    // backgrounded without destroying and recreating the interval.
     this.visHandler = () => {
       if (document.visibilityState === 'visible') {
-        // Returning from genuine background — fire an immediate catchup poll
-        // and (re)start the interval if it was cleared.
+        // Returning from genuine background — fire an immediate catchup poll.
+        // The setInterval is already running; no need to restart it.
         this._poll();
-        if (!this.timer) this._startTimer();
-      } else {
-        // Genuinely backgrounded — pause the interval to save quota.
-        if (this.timer) { clearInterval(this.timer); this.timer = null; }
       }
+      // Deliberately no clearInterval on 'hidden': see comment above.
     };
     document.addEventListener('visibilitychange', this.visHandler);
 
@@ -312,10 +315,13 @@ export class AdsbAdapter implements DataFeedAdapter {
 
   private _startTimer(): void {
     this.timer = setInterval(() => {
-      // Skip individual ticks if the tab is genuinely hidden (belt-and-suspenders:
-      // the visibilitychange handler already clears the timer on hide, but a
-      // race between the event and the next tick is possible).
-      if (!document.hidden) this._poll();
+      // No document.hidden guard here: in embedded iframes (e.g. Replit preview)
+      // document.hidden is always true, which would suppress every tick and leave
+      // the feed permanently stalled after the first startup poll.  The quota
+      // cost of polling while genuinely backgrounded is negligible (one HTTP
+      // request per 8 s).  The destroyed-flag check inside _poll() is the real
+      // lifecycle guard.
+      this._poll();
     }, POLL_INTERVAL_MS);
   }
 
