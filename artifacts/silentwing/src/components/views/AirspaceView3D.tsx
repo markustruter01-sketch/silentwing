@@ -913,6 +913,10 @@ interface AcBundle {
   labelPhase:      string;
   /** Heading that was painted into the label last; refresh when drift > 5°. */
   labelHeadingDeg: number;
+  /** Thin line drawn from the displaced label to the aircraft cone — only
+   *  visible when the label has been pushed away to resolve an overlap. */
+  leaderLine:    THREE.Line;
+  leaderLineMat: THREE.LineBasicMaterial;
 }
 
 function disposeBundle(b: AcBundle): void {
@@ -921,8 +925,9 @@ function disposeBundle(b: AcBundle): void {
   b.trail.geometry.dispose(); (b.trail.material as THREE.Material).dispose();
   const sm = b.label.material as THREE.SpriteMaterial;
   sm.map?.dispose(); sm.dispose();
-  // HMR guard — bundles created before this field existed won't have halo
+  // HMR guard — bundles created before this field existed won't have halo/leaderLine
   if (b.halo) { b.halo.geometry.dispose(); (b.halo.material as THREE.Material).dispose(); }
+  if (b.leaderLine) { b.leaderLine.geometry.dispose(); b.leaderLineMat?.dispose(); }
 }
 
 // Shared stem material — one instance, never disposed here
@@ -1652,6 +1657,61 @@ export default function AirspaceView3D({
         // no per-frame override needed here.
       }
 
+      // ── Label deconfliction + leader lines ───────────────────────────────
+      // Project all aircraft labels to screen space, push overlapping ones
+      // apart vertically, unproject back to world, and draw a thin leader line
+      // from the displaced label to the aircraft cone for each displaced label.
+      {
+        const canvasW = renderer.domElement.clientWidth  || 1;
+        const canvasH = renderer.domElement.clientHeight || 1;
+        const MIN_SEP_NDC = (120 / canvasH) * 2; // 120 CSS px minimum gap in NDC
+
+        // Collect all bundles + their default-position NDC
+        const items: { b: AcBundle; ndc: THREE.Vector3; defY: number }[] = [];
+        const _tmp = new THREE.Vector3();
+        for (const b of st.acMap.values()) {
+          _tmp.set(b.renderPos.x, b.renderPos.y + LABEL_LIFT, b.renderPos.z);
+          _tmp.project(camera);
+          items.push({ b, ndc: _tmp.clone(), defY: _tmp.y });
+        }
+
+        // Sort top → bottom in screen space (NDC Y descending = visually higher)
+        items.sort((a, b) => b.ndc.y - a.ndc.y);
+
+        // Iterative push-apart (3 passes resolves most common overlaps)
+        for (let pass = 0; pass < 3; pass++) {
+          for (let i = 0; i + 1 < items.length; i++) {
+            const a = items[i], b = items[i + 1];
+            const gap = a.ndc.y - b.ndc.y;
+            if (gap < MIN_SEP_NDC) {
+              const push = (MIN_SEP_NDC - gap) / 2;
+              a.ndc.y += push;
+              b.ndc.y -= push;
+            }
+          }
+        }
+
+        // Apply deconflicted positions; draw leader lines for displaced labels
+        for (const { b, ndc, defY } of items) {
+          const worldPos = ndc.clone().unproject(camera);
+          b.label.position.copy(worldPos);
+
+          const displaced = Math.abs(ndc.y - defY) > 0.015;
+          if (b.leaderLine) {
+            if (displaced) {
+              const posAttr = b.leaderLine.geometry.attributes.position as THREE.BufferAttribute;
+              const arr = posAttr.array as Float32Array;
+              // from label centre → top of aircraft cone
+              arr[0] = worldPos.x; arr[1] = worldPos.y; arr[2] = worldPos.z;
+              arr[3] = b.renderPos.x; arr[4] = b.renderPos.y + 60; arr[5] = b.renderPos.z;
+              posAttr.needsUpdate = true;
+              b.leaderLine.geometry.computeBoundingSphere();
+            }
+            b.leaderLine.visible = displaced;
+          }
+        }
+      }
+
       // ── Threat beam update (Phase 6A) ─────────────────────────────────────
       // Each frame: sync beamMap to st.activeAlerts, update line endpoints from
       // live renderPos, and tick the shader time uniform.
@@ -2342,6 +2402,19 @@ export default function AirspaceView3D({
         (label.material as THREE.SpriteMaterial).opacity = 1.0;
         scene.add(label);
 
+        // Leader line — thin connector from displaced label to aircraft cone.
+        // Hidden by default; the deconfliction pass makes it visible only when
+        // the label has been pushed away to resolve an overlap.
+        const leaderGeo = new THREE.BufferGeometry();
+        leaderGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+        const leaderLineMat = new THREE.LineBasicMaterial({
+          color: 0x64748b, transparent: true, opacity: 0.50, depthWrite: false,
+        });
+        const leaderLine = new THREE.Line(leaderGeo, leaderLineMat);
+        leaderLine.frustumCulled = false;
+        leaderLine.visible = false;
+        scene.add(leaderLine);
+
         const trailBuf: { pos: THREE.Vector3; t: number }[] = [
           { pos: pos.clone(), t: nowMs },
           { pos: pos.clone(), t: nowMs },
@@ -2364,6 +2437,7 @@ export default function AirspaceView3D({
           : pos.clone();
         acMap.set(ac.id, {
           cone, stem, trail, label, trailBuf, halo,
+          leaderLine, leaderLineMat,
           renderPos:       spawnPos.clone(),
           lastKnownPos:    spawnPos.clone(),
           lastKnownTimeMs: nowMs,
@@ -2513,10 +2587,22 @@ export default function AirspaceView3D({
     }
 
     // ── Sync takeoff indicators ───────────────────────────────────────────────
-    // Create an indicator the moment an aircraft enters 'takeoff'; dispose it
-    // the moment it leaves that phase (or despawns — handled below).
+    // Show for: explicit 'takeoff' phase (airborne climb), runway roll (high gs
+    // on ground), or holding at a runway threshold (slow/stopped near threshold).
+    const TAKEOFF_ROLL_GS_KT     = 28;  // knots — runway roll vs normal taxi
+    const TAKEOFF_THRESHOLD_M2   = 220 * 220; // 220 m proximity to any threshold
     for (const ac of aircraft) {
-      if (ac.phase === 'takeoff') {
+      const onGround = (ac.position.alt ?? 0) < 50;
+      const notVehicle = !ac.isGroundVehicle;
+      const isRolling = onGround && notVehicle && ac.groundSpeed >= TAKEOFF_ROLL_GS_KT;
+      const isHoldingThreshold = onGround && notVehicle && !isRolling &&
+        st.allThresholds.some(([, tx, tz]) => {
+          const dx = ac.position.x - tx;
+          const dz = ac.position.y - tz; // adapter y → Three.js Z axis
+          return dx * dx + dz * dz <= TAKEOFF_THRESHOLD_M2;
+        });
+
+      if (ac.phase === 'takeoff' || isRolling || isHoldingThreshold) {
         if (!st.takeoffMap.has(ac.id)) {
           st.takeoffMap.set(ac.id, createTakeoffIndicator(scene));
         }

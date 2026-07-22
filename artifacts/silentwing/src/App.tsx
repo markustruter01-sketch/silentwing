@@ -181,6 +181,10 @@ export default function App() {
   const directorCooldownRef = useRef<Map<string, number>>(new Map());
   /** Stable ref to the latest visible aircraft list — avoids re-starting interval on every poll. */
   const visibleAircraftRef = useRef<Aircraft[]>([]);
+  /** True when the user has manually clicked an aircraft in inspect mode —
+   *  prevents the director from overriding the selection until the user
+   *  explicitly deselects, presses Esc, or turns director back on. */
+  const manualInspectRef = useRef(false);
 
   // ── Alert engine (Phase 6A) ──────────────────────────────────────────────
   const alertEngineRef  = useRef(new AlertEngine(YBBN));
@@ -346,6 +350,9 @@ export default function App() {
       // Pause dwell timer during critical-alert camera interrupt so the director
       // doesn't switch subjects while the camera is mid-pivot.
       if (alertInterruptActiveRef.current) return;
+      // Don't override a manual user inspection — the user has explicitly focused
+      // on an aircraft; the director cedes control until they deselect or re-enable director.
+      if (manualInspectRef.current) return;
       if (now - lastSwitchRef.current < DIRECTOR_DWELL_MS) return;
       lastSwitchRef.current = now;
 
@@ -412,6 +419,7 @@ export default function App() {
       // Record this pick in the cooldown map
       cooldown.set(pick.id, now);
 
+      manualInspectRef.current = false; // director is now driving; release any manual lock
       setSelectedAcId(pick.id);
       setCameraMode('follow');
       console.log(
@@ -529,7 +537,10 @@ export default function App() {
             setDirectorMode(v => {
               const next = !v;
               console.log(`[APP] Director mode ${next ? 'ON' : 'OFF'}`);
-              if (next) lastSwitchRef.current = 0; // fire immediately on enable
+              if (next) {
+                lastSwitchRef.current = 0; // fire immediately on enable
+                manualInspectRef.current = false; // release any manual lock
+              }
               return next;
             });
           }}
@@ -679,6 +690,13 @@ export default function App() {
             }}
             onCameraMode={(mode) => {
               console.log(`[APP] camera mode: ${mode}`);
+              // Track whether the user is manually holding inspect focus so the
+              // director interval knows not to steal control.
+              if (mode === 'inspect') {
+                manualInspectRef.current = true;
+              } else if (mode === 'orbit' || mode === 'returning') {
+                manualInspectRef.current = false;
+              }
               setCameraMode(mode);
             }}
           />
