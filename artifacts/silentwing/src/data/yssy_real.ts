@@ -84,100 +84,127 @@ export const YSSY_RUNWAYS: Polyline[] = [
 ];
 
 // ── Taxiways ──────────────────────────────────────────────────────────────────
-// Simplified principal taxiway network.  Positions consistent with corrected
-// runway geometry above.
+// Taxiways run PARALLEL to the runways (heading ~167°/347°, ≈23° east of N-S).
+// Positions derived from live ADS-B observations:
+//   JST403 (gs=22kt, trk=348°) taxied at scene (x≈-127, z≈-916) → Alpha taxiway
+//   QFA429 (gs=20kt, trk=166°) taxied at scene (x≈ -18, z≈-911) → Bravo taxiway
+// Perpendicular east offset from 16L/34R centreline:
+//   Alpha ≈ 250 m  → shift (+195, -44) in Three.js (x,z)
+//   Bravo ≈ 350 m  → shift (+273, -61) in Three.js (x,z)
+// Native y_native = -Three.js_z; coords below are in native +y=north frame.
 
 export const YSSY_TAXIWAYS: Polyline[] = [
   {
-    // Northern cross-connector — links north ends of both parallel runways
-    ref: 'N1',
-    coords: [
-      [-610, 1940],
-      [-420, 1955],
-      [-230, 1960],
-      [ -40, 1965],
-      [  90, 1975],
-      [ 150, 1990],
-    ],
-  },
-  {
-    // Main N-S centreline taxiway between runways (~x = 200)
+    // Alpha — primary inter-runway taxiway, ~250 m east of 16L/34R, parallel to runways.
+    // Confirmed by live JST403 position at (x=-127, z=-916): centreline matches.
     ref: 'A',
     coords: [
-      [ 200,  1900],
-      [ 200,  1400],
-      [ 200,   900],
-      [ 200,   400],
-      [ 200,  -100],
-      [ 200,  -600],
-      [ 200, -1100],
-      [ 200, -1600],
+      [ -347,  1989],   // near 34R northern end
+      [ -230,  1463],
+      [ -113,   937],
+      [    4,   411],
+      [  121,  -115],
+      [  238,  -641],
+      [  355, -1167],
+      [  475, -1691],   // near 16L southern end
     ],
   },
   {
-    // Mid-field east-west connector (roughly y = 0, between runways)
+    // Bravo — secondary inter-runway taxiway, ~350 m east of 16L/34R, parallel to runways.
+    // Confirmed by live QFA429 position at (x=-18, z=-911): centreline matches.
     ref: 'B',
     coords: [
-      [-200,  -20],
-      [   0,  -20],
-      [ 200,  -20],
-      [ 400,  -20],
-      [ 560,  -20],
+      [ -249,  2010],   // near 34R end
+      [ -130,  1475],
+      [   -9,   942],
+      [  110,   408],
+      [  231,  -125],
+      [  352,  -659],
+      [  473, -1192],
+      [  573, -1670],   // near 16L end
     ],
   },
   {
-    // Southern cross-connector — links south ends of parallel runways
+    // N1 — northern cross-connector: 34R → Alpha → 34L
+    ref: 'N1',
+    coords: [
+      [ -610,  1940],   // just west of 34R threshold
+      [ -480,  1960],
+      [ -347,  1989],   // Alpha north end
+      [    0,  1990],
+      [  129,  1990],   // 34L threshold
+    ],
+  },
+  {
+    // S1 — southern cross-connector: 16L → Alpha → 16R
     ref: 'S1',
     coords: [
-      [ 200, -1750],
-      [ 400, -1745],
-      [ 600, -1740],
-      [ 800, -1735],
-      [ 960, -1725],
+      [  231, -1746],   // 16L threshold
+      [  380, -1720],
+      [  475, -1691],   // Alpha south end
+      [  700, -1710],
+      [  951, -1724],   // 16R threshold
     ],
   },
   {
-    // Terminal access taxiway — E-W through the terminal precinct (y ≈ 250)
+    // Charlie — mid-field E-W connector at y_native ≈ 400
+    // Links Alpha (x≈4) across to eastern runway zone (x≈481)
+    ref: 'C',
+    coords: [
+      [    4,   411],   // Alpha mid-point
+      [  100,   400],
+      [  200,   390],
+      [  300,   385],
+      [  400,   380],
+      [  481,   376],
+    ],
+  },
+  {
+    // Terminal — E-W access across northern terminal precinct at y_native ≈ 1100
+    // (VOZ/QFA gates cluster at x≈150-200, native y≈985-1200 in live data)
     ref: 'T',
     coords: [
-      [-200,  300],
-      [   0,  290],
-      [ 200,  280],
-      [ 400,  270],
-      [ 580,  260],
+      [ -347,  1100],   // from Alpha at y≈1100
+      [ -200,  1090],
+      [    4,  1075],
+      [  110,  1085],
+      [  231,  1095],
+      [  355,  1075],
+      [  475,  1058],
     ],
   },
   {
-    // RWY 07 threshold connector (western end)
+    // W1 — RWY 07 threshold connector (western end to terminal area)
     ref: 'W1',
     coords: [
-      [-1154,  -221],
-      [-1000,  -240],
-      [ -800,  -250],
-      [ -600,  -220],
-      [ -400,  -200],
+      [-1154,  -221],   // 07 threshold
+      [ -900,  -220],
+      [ -650,  -215],
+      [ -400,  -210],
+      [ -200,  -205],
+      [  121,  -115],   // joins Alpha
     ],
   },
   {
-    // RWY 25 threshold connector (eastern end)
+    // E1 — RWY 25 threshold connector (eastern end)
     ref: 'E1',
     coords: [
-      [ 1487,   310],
-      [ 1300,   300],
-      [ 1100,   290],
-      [  900,   275],
-      [  700,   260],
+      [ 1487,   310],   // 25 threshold
+      [ 1300,   310],
+      [ 1100,   310],
+      [  900,   310],
+      [  700,   310],
     ],
   },
   {
-    // Southern freight / maintenance apron connector
+    // M — southern freight/maintenance connector
     ref: 'M',
     coords: [
-      [-400, -1800],
-      [-200, -1810],
-      [   0, -1820],
-      [ 200, -1810],
-      [ 400, -1790],
+      [  231, -1746],   // 16L threshold
+      [  100, -1770],
+      [  -50, -1790],
+      [ -200, -1800],
+      [ -400, -1790],
     ],
   },
 ];

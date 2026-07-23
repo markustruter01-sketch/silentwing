@@ -1,0 +1,37 @@
+The YSSY geometry was rebuilt but aircraft STILL don't align with runways — a
+real aircraft (JST403) is taking off parallel to but OFFSET sideways from the
+runway. Your verification used a computed/invented aircraft position, not a real
+one. Diagnose with REAL live data.
+
+  a. Take an ACTUAL live YSSY aircraft currently on or near a runway (ground or
+     low final). Show:
+     - its raw lat/lon from the ADS-B feed
+     - the scene (x,y) the ADAPTER projects it to (via projectLatLon/the
+       adapter's formula)
+     - the scene (x,y) of the nearest runway centreline point from the REBUILT
+       yssy_real.ts geometry
+     Put these side by side. If the aircraft's projected (x,y) is offset from
+     the runway it's physically on, show the exact delta.
+
+  b. Confirm the adapter's projection formula and the formula used to project
+     yssy_real.ts geometry are BYTE-IDENTICAL:
+     - same origin lat0/lon0
+     - same constants (111320 * cos(lat0) for x, 110540 for y)
+     - same y-sign handling (is the geometry pre-flipped in the file, AND
+       flipRealY applied again at render? A DOUBLE y-flip would offset it.
+       Or is the adapter NOT applying a flip the geometry expects?)
+     Quote both formulas literally.
+
+  c. CRITICAL CHECK — double transformation: yssy_real.ts geometry was projected
+     offline to scene metres. Then flipRealY() is applied at render. Is the
+     geometry ALSO being re-projected or re-scaled anywhere on load? And is the
+     y-flip applied to YSSY geometry exactly ONCE (not zero times, not twice)?
+     For YBBN this is correct — verify YSSY gets the IDENTICAL single flip.
+
+  d. Confirm the app is actually using the REBUILT yssy_real.ts, not a cached
+     old version. Show a coordinate from the currently-loaded geometry and
+     confirm it matches the rebuilt file (e.g. the 16L threshold should be the
+     new AIP value, not the old -1919,-2631).
+
+Report all four with real live-aircraft numbers. The proof is: a real aircraft
+physically on a runway must project to that runway's centreline coordinates.
