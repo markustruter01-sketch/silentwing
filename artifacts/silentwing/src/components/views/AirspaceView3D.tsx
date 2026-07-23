@@ -2781,30 +2781,40 @@ export default function AirspaceView3D({
         }
 
         for (const alert of st.activeAlerts) {
-          // Advisory alerts have no 3D label (matches old expand behaviour)
-          if (alert.severity === 'advisory') continue;
           if (alert.aircraftIds.length === 0) continue;
 
-          // Compute 3D midpoint from up to 2 aircraft renderPos
-          let midX = 0, midY = 0, midZ = 0, cnt = 0;
-          for (const id of alert.aircraftIds.slice(0, 2)) {
-            const b = st.acMap.get(id);
-            if (!b) continue;
-            midX += b.renderPos.x;
-            midY += b.renderPos.y;
-            midZ += b.renderPos.z;
-            cnt++;
+          // Anchor label to the beam midpoint sphere so they stay in lockstep.
+          // Fall back to averaging renderPos when the beam entry isn't ready yet.
+          const beamEntry = st.beamMap.get(alert.id);
+          let midX: number, midY: number, midZ: number;
+          if (beamEntry) {
+            midX = beamEntry.midSphere.position.x;
+            midY = beamEntry.midSphere.position.y;
+            midZ = beamEntry.midSphere.position.z;
+          } else {
+            let cnt = 0;
+            midX = 0; midY = 0; midZ = 0;
+            for (const id of alert.aircraftIds.slice(0, 2)) {
+              const b = st.acMap.get(id);
+              if (!b) continue;
+              midX += b.renderPos.x;
+              midY += b.renderPos.y;
+              midZ += b.renderPos.z;
+              cnt++;
+            }
+            if (cnt === 0) continue;
+            midX /= cnt; midY /= cnt; midZ /= cnt;
           }
-          if (cnt === 0) continue;
-          midX /= cnt; midY /= cnt; midZ /= cnt;
-          midY += 280; // lift above the aircraft / beam midpoint
+          // Float the label just above the sphere (sphere radius = 55 m; 160 m gives
+          // ~105 m clearance so it reads cleanly without obscuring the aircraft).
+          midY += 160;
 
           let entry = st.labelMap.get(alert.id);
           if (!entry) {
             const tex    = makeAlertLabelTexture(alert.severity, alert.aircraft.join(' & '), alert.message);
             const mat    = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
             const sprite = new THREE.Sprite(mat);
-            sprite.scale.set(900, 270, 1);
+            sprite.scale.set(800, 240, 1);
             sprite.frustumCulled = false;
             sprite.renderOrder   = 999; // always draw on top of ground geometry
             scene.add(sprite);
