@@ -32,6 +32,10 @@ const ORBIT_RADIUS     = 3400;    // wide overview — full airport visible on l
 const ORBIT_HEIGHT     = 900;     // shallower depression (~24°) so sky is visible
 const ORBIT_INIT_ANGLE = Math.PI * 0.6; // starting angle (south of airport, runway visible)
 const ORBIT_SPEED      = 0.00025; // rad/frame ≈ 7 min/revolution at 60 fps
+/** Maximum horizontal distance from the airport centre at which the director
+ *  will focus on an alert.  Set to 50% of ORBIT_RADIUS so the camera stays
+ *  within the airport's visual footprint and ignores distant enroute traffic. */
+const DIRECTOR_MAX_ALERT_DIST = ORBIT_RADIUS * 0.5; // 1 700 m
 const LOOK_AT      = new THREE.Vector3(0, 0, 0); // airfield centre (was y=700)
 const LABEL_LIFT      = 210;      // Three.js Y-units above cone
 const TRAIL_MAX       = 600;      // max trail points
@@ -1433,7 +1437,11 @@ function runDirector(st: SceneState, camera: THREE.PerspectiveCamera, nowMs: num
   // is available.  d.alertId is NOT set here, keeping the retry alive.
   if (st.alertFocusId && st.alertFocusId !== d.alertId && d.phase !== 'hold_alert') {
     const mp        = alertMidpoint(st, st.alertFocusId);
-    const hasTarget = mp.distanceTo(st.orbitTarget) > 100; // real aircraft found
+    const horizDist = Math.hypot(mp.x - st.orbitTarget.x, mp.z - st.orbitTarget.z);
+    // hasTarget: aircraft are in the scene (> 100 m from origin) AND within the
+    // airport's footprint (< DIRECTOR_MAX_ALERT_DIST from centre).  Alerts beyond
+    // that radius are distant enroute traffic — skip them and wait for a closer one.
+    const hasTarget = horizDist > 100 && horizDist < DIRECTOR_MAX_ALERT_DIST;
 
     if (hasTarget) {
       const horiz = new THREE.Vector3(camera.position.x - mp.x, 0, camera.position.z - mp.z);
