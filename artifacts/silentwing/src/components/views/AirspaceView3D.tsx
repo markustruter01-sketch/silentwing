@@ -2125,7 +2125,6 @@ export default function AirspaceView3D({
       profileRef.current.geometry.runways,
       weather.activeRunwayDirection,
     );
-    wg.add(buildApproachCone(corr));
     wg.add(buildWindIndicator(weather.windDir, weather.windSpeed));
     st.scene.add(wg);
     weatherGrpRef.current = wg;
