@@ -130,12 +130,13 @@ export default function App() {
   }, [dataSource]);
 
   // Close panel helper — used by × button and by 2D Esc.
-  // Also turns Director off: if the user explicitly dismisses the panel they
-  // don't want the director to immediately re-select something.
+  // Clears the current alert focus so the director doesn't immediately
+  // jump to the same conflict, but leaves director mode ON so it can
+  // resume picking up new alerts on the next poll cycle.
   const handleClosePanel = useCallback(() => {
     console.log('[APP] panel closed via UI');
-    setDirectorMode(false);
     setSelectedAcId(null);
+    setAlertFocusId(null);  // prevent immediate re-selection
     setCameraMode('orbit'); // triggers smooth return-to-orbit in the 3D view
   }, []);
 

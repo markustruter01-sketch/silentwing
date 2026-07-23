@@ -1426,26 +1426,36 @@ function runDirector(st: SceneState, camera: THREE.PerspectiveCamera, nowMs: num
   const d = st.dir;
 
   // ── 1. Check for a new alert (always highest priority) ───────────────────
+  // Guard: only start the fly when we can resolve a real conflict midpoint.
+  // If the alert's aircraft haven't been spawned into acMap yet, alertMidpoint
+  // returns orbitTarget as a fallback — flying there produces an invisible focus
+  // on empty airspace, so we retry the check every frame until a real position
+  // is available.  d.alertId is NOT set here, keeping the retry alive.
   if (st.alertFocusId && st.alertFocusId !== d.alertId && d.phase !== 'hold_alert') {
-    const mp    = alertMidpoint(st, st.alertFocusId);
-    const horiz = new THREE.Vector3(camera.position.x - mp.x, 0, camera.position.z - mp.z);
-    if (horiz.length() < 1) horiz.set(0, 0, 1);
-    horiz.normalize().multiplyScalar(900);
+    const mp        = alertMidpoint(st, st.alertFocusId);
+    const hasTarget = mp.distanceTo(st.orbitTarget) > 100; // real aircraft found
 
-    const camTo = new THREE.Vector3(mp.x + horiz.x, mp.y + 700, mp.z + horiz.z);
-    const fwd   = new THREE.Vector3();
-    camera.getWorldDirection(fwd);
+    if (hasTarget) {
+      const horiz = new THREE.Vector3(camera.position.x - mp.x, 0, camera.position.z - mp.z);
+      if (horiz.length() < 1) horiz.set(0, 0, 1);
+      horiz.normalize().multiplyScalar(900);
 
-    d.flyFrom.copy(camera.position);
-    d.flyTo.copy(camTo);
-    d.lookFrom.copy(camera.position.clone().addScaledVector(fwd, 2000));
-    d.lookTo.copy(mp);
-    d.flyStartMs = nowMs;
-    d.flyMs      = 2_000;
-    d.alertId    = st.alertFocusId;
-    d.phase      = 'fly_alert';
-    d.lookAt.copy(d.lookFrom);
-    console.log(`[DIRECTOR] alert interrupt → ${d.alertId}`);
+      const camTo = new THREE.Vector3(mp.x + horiz.x, mp.y + 700, mp.z + horiz.z);
+      const fwd   = new THREE.Vector3();
+      camera.getWorldDirection(fwd);
+
+      d.flyFrom.copy(camera.position);
+      d.flyTo.copy(camTo);
+      d.lookFrom.copy(camera.position.clone().addScaledVector(fwd, 2000));
+      d.lookTo.copy(mp);
+      d.flyStartMs = nowMs;
+      d.flyMs      = 2_000;
+      d.alertId    = st.alertFocusId;
+      d.phase      = 'fly_alert';
+      d.lookAt.copy(d.lookFrom);
+      console.log(`[DIRECTOR] alert interrupt → ${d.alertId}`);
+    }
+    // else: aircraft not yet in scene — d.alertId stays null, retry next frame
   }
 
   // ── 2. State machine ─────────────────────────────────────────────────────
@@ -1509,12 +1519,25 @@ function runDirector(st: SceneState, camera: THREE.PerspectiveCamera, nowMs: num
       camera.position.copy(d.flyTo);
       camera.lookAt(d.lookAt);
       if (nowMs >= d.holdUntilMs) {
-        console.log(`[DIRECTOR] alert ${d.alertId} done — orbit`);
+        console.log(`[DIRECTOR] alert ${d.alertId} done — returning to orbit`);
         d.alertId = null;
         d.phase   = 'orbit';
         const done = st.alertFocusDone;
         st.alertFocusDone = null;
         st.alertFocusId   = null;
+        // Glide camera back to orbit position instead of snapping.
+        // Switch into the shared 'returning' animation so the director
+        // picks up the next alert as soon as the camera re-enters orbit.
+        const tx = st.orbitTarget.x + st.orbitRadius * Math.cos(st.angle);
+        const tz = st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle);
+        const fwdV = new THREE.Vector3();
+        camera.getWorldDirection(fwdV);
+        st.flyFrom.copy(camera.position);
+        st.flyTo.set(tx, st.orbitElevation, tz);
+        st.flyLookFrom.copy(camera.position).addScaledVector(fwdV, 2000);
+        st.flyLookTo.copy(st.orbitTarget);
+        st.flyProgress = 0;
+        st.cameraMode  = 'returning';
         done?.();
       }
       break;
@@ -2008,6 +2031,14 @@ export default function AirspaceView3D({
       // Reset alertedIds so no stale highlight bleeds into the new airport.
       st.alertedIds = new Map();
       st.activeAlerts = [];
+
+      // Reset director state so a stale hold_alert from the previous airport
+      // cannot block new alerts after the switch, and any expired hold timer
+      // doesn't immediately consume the first new alert on resuming orbit.
+      st.dir.phase      = 'orbit';
+      st.dir.alertId    = null;
+      st.dir.acId       = null;
+      st.dir.holdUntilMs = 0;
 
       // 4. Reset orbit camera to frame the new airport's origin.
       st.orbitTarget.set(0, 0, 0);
