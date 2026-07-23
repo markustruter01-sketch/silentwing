@@ -35,6 +35,17 @@ export function detectStaleTracks(aircraft: Aircraft[]): StaleTrackFinding[] {
     // Sim aircraft have seenPos undefined → treated as 0 (always fresh)
     if (staleSecs < STALE_ALERT_S) continue;
 
+    // Skip anonymous ground targets (grey blips).  When a transponder reports no
+    // callsign the adapter falls back to the hex ID, so callsign === id means the
+    // aircraft is anonymous.  A stationary anonymous blob on the ground is almost
+    // always a parked vehicle or a transponder left on in a hangar — not a safety
+    // concern.  We suppress the alert when it is anonymous AND on the ground (or
+    // moving slower than 3 kt, which covers the alt_baro='ground' edge case where
+    // onGround is not set).
+    const isAnonymous = ac.callsign === ac.id;
+    const isGrounded  = ac.onGround === true || (ac.groundSpeed ?? 0) < 3;
+    if (isAnonymous && isGrounded) continue;
+
     const severity: SWAlertSeverity = staleSecs >= STALE_CAUTION_S ? 'caution' : 'advisory';
     const staleRounded = Math.round(staleSecs);
 
