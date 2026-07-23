@@ -1882,6 +1882,11 @@ export default function AirspaceView3D({
   alertFocusIdRef.current     = alertFocusId ?? null;
   onAlertFocusDoneRef.current = onAlertFocusDone ?? null;
 
+  // Stable ref so the scene-setup effect ([] deps, runs after the directorMode
+  // sync effect) can read the CURRENT directorMode without a closure.
+  const directorModeRef = useRef(directorMode);
+  directorModeRef.current = directorMode;
+
   // Sync directorMode prop → SceneState; reset director to orbit when activated.
   useEffect(() => {
     const st = sceneRef.current;
@@ -2257,12 +2262,20 @@ export default function AirspaceView3D({
     };
     sceneRef.current = st;
 
-    // ── Remount recovery: alertFocusId ──────────────────────────────────────
-    // The sync effect runs before scene setup on re-mount and misses sceneRef.
-    // Apply stable refs directly so the director picks up the alert on frame 1.
+    // ── Remount recovery: directorMode + alertFocusId ───────────────────────
+    // The sync effects (useEffect([directorMode]) etc.) fire BEFORE the scene
+    // is created (sceneRef is still null when they run on first mount), so they
+    // always early-return without writing anything.  Read the stable refs here,
+    // immediately after sceneRef.current is set, to bootstrap the correct state
+    // on every mount — including hard page refresh and HMR remounts.
     {
+      const dm   = directorModeRef.current;
       const fid  = alertFocusIdRef.current;
       const done = onAlertFocusDoneRef.current;
+      st.directorMode = dm;
+      if (dm) {
+        console.log('[DIRECTOR] activated — starting orbit');
+      }
       if (fid) {
         console.log(`[DIRECTOR] remount recovery: alertFocusId=${fid}`);
         st.alertFocusId   = fid;

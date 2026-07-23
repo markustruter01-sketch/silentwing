@@ -39,8 +39,20 @@ clearing `st.alertFocusId` and consuming the first new alert from the new airpor
 **Fix:** `rebuildGroundGeometry` now resets `d.phase = 'orbit'`, `d.alertId = null`,
 `d.acId = null`, `d.holdUntilMs = 0`.
 
+## Root cause 5 — directorMode never written to st on first mount
+`useEffect([directorMode])` runs before the scene-setup `useEffect` (React fires effects in
+source order on mount). `sceneRef.current` is `null` → early return → `st.directorMode` never
+set to `true`. Scene initialises with `directorMode: false` hardcoded. Since the prop never
+changes value again, the sync effect never re-fires and `st.directorMode` stays `false` forever.
+
+**Fix:** Added `directorModeRef = useRef(directorMode)` updated every render (same pattern as
+`profileRef`). In the remount-recovery block (immediately after `sceneRef.current = st`),
+bootstrap `st.directorMode = directorModeRef.current`. The toggle appeared to "fix" it because
+clicking toggle → prop changes → `useEffect([directorMode])` re-fires with `sceneRef` now set.
+
 ## Debugging note
-`[DIRECTOR] activated — starting orbit` only fires when `directorMode` prop transitions to `true`.
-Absence of this log after an HMR remount means `directorMode` is `false` in App state.
-The `[DIRECTOR] prop sync: alertFocusId → X` log fires regardless of `directorMode`, so it
-cannot be used to confirm the director is actually running.
+`[DIRECTOR] activated — starting orbit` only fires when `directorMode` prop transitions to `true`
+OR (after the fix) immediately after scene setup if `directorModeRef.current = true`.
+Absence of this log after mount means `st.directorMode = false`.
+`[DIRECTOR] prop sync: alertFocusId → X` fires regardless of `directorMode` — it cannot confirm
+the director is actually running.
