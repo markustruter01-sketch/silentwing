@@ -253,7 +253,7 @@ export default function AlertShell({ activeAlerts, onAlertFocus }: AlertShellPro
       {/* ── Alert list panel — appears to the right of the spine ─────────────── */}
       {activeTab === 'alerts' && (
         <div
-          className="w-72 h-full bg-[#05080D]/98 border-r border-slate-800/40 pointer-events-auto flex flex-col"
+          className="w-72 h-[calc(100%-1rem)] bg-[#05080D]/98 border-r border-slate-800/40 pointer-events-auto flex flex-col"
           style={{ boxShadow: '6px 0 24px rgba(0,0,0,0.75)' }}
         >
           {/* Panel header */}
