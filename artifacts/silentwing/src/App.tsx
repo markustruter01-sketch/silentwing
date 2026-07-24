@@ -7,6 +7,7 @@ import DirectorFocusPanel  from '@/components/panels/DirectorFocusPanel';
 import AlertShell          from '@/components/panels/AlertShell';
 import SequenceLadder, { ARRIVAL_PHASES, DEPARTURE_PHASES } from '@/components/panels/SequenceLadder';
 import ControlsHUD    from '@/components/ui/ControlsHUD';
+import WelcomeModal   from '@/components/ui/WelcomeModal';
 import WeatherWidget  from '@/components/panels/WeatherWidget';
 import NotamWidget    from '@/components/panels/NotamWidget';
 import { getSimAdapter } from '@/sim/engine';
@@ -314,6 +315,9 @@ export default function App() {
   const [hideGroundVehicles, setHideGroundVehicles] = useState(true);
   /** Hide contacts whose callsign is just their hex code — no real flight ID. */
   const [hideAnonymous, setHideAnonymous] = useState(false);
+
+  // Welcome modal — shown on every load / refresh, no persistence
+  const [showWelcome, setShowWelcome] = useState(true);
 
   /** Aircraft that pass the current display filters — passed to both views. */
   const visibleAircraft = useMemo(() =>
@@ -752,6 +756,9 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* ── Welcome modal — shown on every page load / refresh ─────────── */}
+      {showWelcome && <WelcomeModal onDismiss={() => setShowWelcome(false)} />}
     </div>
   );
 }
