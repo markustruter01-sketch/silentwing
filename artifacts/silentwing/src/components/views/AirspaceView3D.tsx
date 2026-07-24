@@ -778,25 +778,85 @@ function buildApproachCone(corr: { cx: number; cz: number; dz: 1 | -1 }): THREE.
   return g;
 }
 
-// ── Wind direction indicator ───────────────────────────────────────────────────
-// Floating arrow NW of airport showing current wind FROM direction + speed.
+// ── Wind direction indicator — windsock ───────────────────────────────────────
+// A 3-D windsock grounded NW of airport.  The sock droops under gravity at
+// calm wind and extends horizontally downwind as speed increases.
+// Traditional alternating orange / near-white bands; open end faces INTO wind.
 function buildWindIndicator(windDir: number, windSpeed: number): THREE.Group {
   const g = new THREE.Group();
-  g.position.set(-2200, 680, -1800); // NW of airport, well above aircraft traffic
+  // Base sits at ground level; the group is placed NW of the airport origin.
+  g.position.set(-2200, 0, -1800);
 
-  // Wind FROM direction — arrow points in the downwind (TO) direction
-  const rad = (windDir * Math.PI) / 180;
-  const dir = new THREE.Vector3(-Math.sin(rad), 0, Math.cos(rad)).normalize();
-  const arrow = new THREE.ArrowHelper(dir, new THREE.Vector3(), 900, 0x38bdf8, 260, 130);
-  (arrow.line.material as THREE.LineBasicMaterial).transparent = true;
-  (arrow.line.material as THREE.LineBasicMaterial).opacity     = 0.72;
-  (arrow.cone.material as THREE.MeshBasicMaterial).transparent = true;
-  (arrow.cone.material as THREE.MeshBasicMaterial).opacity     = 0.72;
-  g.add(arrow);
+  // ── Pole ──────────────────────────────────────────────────────────────────
+  const POLE_H  = 380;
+  const poleGeo = new THREE.CylinderGeometry(5, 7, POLE_H, 6);
+  const poleMat = new THREE.MeshBasicMaterial({ color: 0x64748b, transparent: true, opacity: 0.85 });
+  const pole    = new THREE.Mesh(poleGeo, poleMat);
+  pole.position.set(0, POLE_H / 2, 0);
+  g.add(pole);
 
-  // Label
-  const sp = makeRingLabel(`WIND  ${Math.round(windDir).toString().padStart(3,'0')}° / ${Math.round(windSpeed)} kt`);
-  sp.position.set(0, 300, 0);
+  // ── Sock orientation ──────────────────────────────────────────────────────
+  // Wind FROM windDir → sock tail points downwind (TO direction).
+  // Droop: calm = straight down; ≥ 25 kt = fully horizontal downwind.
+  const speedKt = Math.max(0, Math.min(windSpeed, 30));
+  // angle from horizontal: 90° at 0 kt, 0° at ≥ 25 kt
+  const droopRad = (Math.PI / 2) * Math.max(0, 1 - speedKt / 25);
+
+  const rad      = (windDir * Math.PI) / 180;
+  // Downwind horizontal unit vector (direction wind blows TO)
+  const downwindX = -Math.sin(rad);
+  const downwindZ =  Math.cos(rad);
+  const isCalm    = speedKt < 1;
+
+  // Target direction for sock axis (from wide/open end → narrow tail)
+  // At full droop this is straight down; at full extension it is horizontal downwind.
+  const sockDir = isCalm
+    ? new THREE.Vector3(0, -1, 0)
+    : new THREE.Vector3(
+        downwindX * Math.cos(droopRad),
+        -Math.sin(droopRad),
+        downwindZ * Math.cos(droopRad),
+      ).normalize();
+
+  // ── Sock bands ────────────────────────────────────────────────────────────
+  // Five tapered frustum sections built along local +Y axis, then the whole
+  // group is rotated so local +Y → sockDir.
+  const BAND_COUNT = 5;
+  const BAND_LEN   = 70;
+  const R_OPEN     = 72;   // wide end (open, catches wind)
+  const R_TAIL     = 10;   // narrow tail end
+  const COLORS     = [0xf97316, 0xe2e8f0] as const; // orange / near-white
+
+  const sockGrp = new THREE.Group();
+  sockGrp.position.set(0, POLE_H, 0); // attach at pole top
+
+  for (let i = 0; i < BAND_COUNT; i++) {
+    const t0   = i       / BAND_COUNT;
+    const t1   = (i + 1) / BAND_COUNT;
+    const rTop = R_OPEN + (R_TAIL - R_OPEN) * t0; // wider toward open end
+    const rBot = R_OPEN + (R_TAIL - R_OPEN) * t1;
+    const bandGeo = new THREE.CylinderGeometry(rBot, rTop, BAND_LEN, 10, 1, true);
+    const bandMat = new THREE.MeshBasicMaterial({
+      color:      COLORS[i % 2],
+      side:       THREE.DoubleSide,
+      transparent: true,
+      opacity:     0.88,
+      depthWrite:  false,
+    });
+    const band = new THREE.Mesh(bandGeo, bandMat);
+    // Stack along local +Y (band 0 starts at y=0, extends to y=-BAND_LEN etc.)
+    band.position.set(0, -(i * BAND_LEN + BAND_LEN / 2), 0);
+    sockGrp.add(band);
+  }
+
+  // Rotate group so its local –Y axis aligns with sockDir
+  sockGrp.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), sockDir);
+  g.add(sockGrp);
+
+  // ── Label (wind info text, above pole top) ────────────────────────────────
+  const dirStr = isCalm ? 'CALM' : `${Math.round(windDir).toString().padStart(3, '0')}°`;
+  const sp = makeRingLabel(`WIND  ${dirStr} / ${Math.round(windSpeed)} kt`);
+  sp.position.set(0, POLE_H + 230, 0);
   g.add(sp);
 
   return g;
