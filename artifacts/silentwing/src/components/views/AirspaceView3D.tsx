@@ -28,7 +28,7 @@ export type CameraMode = 'orbit' | 'manual' | 'inspect' | 'follow' | 'returning'
 
 // ── Scene constants ────────────────────────────────────────────────────────────
 const ALT_SCALE    = 0.15;
-const ORBIT_RADIUS     = 3400;    // wide overview — full airport visible on load
+const ORBIT_RADIUS     = 2550;    // wide overview — full airport visible on load
 const ORBIT_HEIGHT     = 900;     // shallower depression (~24°) so sky is visible
 const ORBIT_INIT_ANGLE = Math.PI * 0.6; // starting angle (south of airport, runway visible)
 const ORBIT_SPEED      = 0.00025; // rad/frame ≈ 7 min/revolution at 60 fps
