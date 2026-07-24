@@ -186,12 +186,12 @@ export default function MetarWidget({ profile, onWind }: Props) {
     >
       {/* ── Header ── */}
       <div className="flex items-center gap-2 px-3 pt-2 pb-1.5 border-b border-slate-800/50">
-        <span className="font-mono text-[8px] tracking-[0.2em] text-slate-600 uppercase">{profile.icao}</span>
-        <span className="text-slate-700 text-[8px]">·</span>
-        <span className="font-mono text-[8px] tracking-wider text-slate-600 uppercase">METAR</span>
+        <span className="font-mono text-[12px] tracking-[0.2em] text-slate-600 uppercase">{profile.icao}</span>
+        <span className="text-slate-700 text-[12px]">·</span>
+        <span className="font-mono text-[12px] tracking-wider text-slate-600 uppercase">METAR</span>
         <div className="ml-auto flex items-center gap-1.5">
           {cat && (
-            <span className={`flex items-center gap-1 px-1.5 py-px rounded border font-mono text-[9px] font-bold tracking-wider ${cs.bg} ${cs.text}`}>
+            <span className={`flex items-center gap-1 px-1.5 py-px rounded border font-mono text-[13px] font-bold tracking-wider ${cs.bg} ${cs.text}`}>
               <span className={`w-1.5 h-1.5 rounded-full ${cs.dot}`} />
               {cat}
             </span>
@@ -203,8 +203,8 @@ export default function MetarWidget({ profile, onWind }: Props) {
         <>
           {/* ── Raw METAR ── */}
           <div className="px-3 py-2 border-b border-slate-800/40">
-            <div className="font-mono text-[8px] tracking-widest text-slate-600 uppercase mb-1">Raw</div>
-            <div className="font-mono text-[9px] text-slate-400 leading-relaxed break-all">
+            <div className="font-mono text-[12px] tracking-widest text-slate-600 uppercase mb-1">Raw</div>
+            <div className="font-mono text-[13px] text-slate-400 leading-relaxed break-all">
               {m.rawOb}
             </div>
           </div>
@@ -220,8 +220,8 @@ export default function MetarWidget({ profile, onWind }: Props) {
               ['QNH',   fmtQnh(m.altim)],
             ].map(([label, value]) => (
               <div key={label} className="flex flex-col">
-                <span className="font-mono text-[7px] tracking-widest text-slate-600 uppercase">{label}</span>
-                <span className="font-mono text-[9px] text-slate-300 leading-tight mt-px">{value}</span>
+                <span className="font-mono text-[11px] tracking-widest text-slate-600 uppercase">{label}</span>
+                <span className="font-mono text-[13px] text-slate-300 leading-tight mt-px">{value}</span>
               </div>
             ))}
           </div>
@@ -233,11 +233,11 @@ export default function MetarWidget({ profile, onWind }: Props) {
                 className="w-full flex items-center justify-between px-3 py-1.5 hover:bg-slate-800/30 transition-colors"
                 onClick={() => setShowTaf(v => !v)}
               >
-                <span className="font-mono text-[8px] tracking-widest text-slate-600 uppercase">TAF</span>
-                <span className="font-mono text-[8px] text-slate-700">{showTaf ? '▲' : '▼'}</span>
+                <span className="font-mono text-[12px] tracking-widest text-slate-600 uppercase">TAF</span>
+                <span className="font-mono text-[12px] text-slate-700">{showTaf ? '▲' : '▼'}</span>
               </button>
               {showTaf && (
-                <div className="px-3 pb-2 font-mono text-[9px] text-slate-500 leading-relaxed break-all">
+                <div className="px-3 pb-2 font-mono text-[13px] text-slate-500 leading-relaxed break-all">
                   {t.rawTAF}
                 </div>
               )}
@@ -246,18 +246,18 @@ export default function MetarWidget({ profile, onWind }: Props) {
 
           {/* ── Footer ── */}
           <div className="px-3 pb-2 pt-0 flex items-center justify-between">
-            <span className="font-mono text-[7px] text-slate-700 tracking-wide">
+            <span className="font-mono text-[11px] text-slate-700 tracking-wide">
               NOAA METAR · {fetchedAt ? new Date(fetchedAt).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' }) : '…'}
             </span>
             {error && (
-              <span className="font-mono text-[7px] text-amber-700 tracking-wide" title={error}>
+              <span className="font-mono text-[11px] text-amber-700 tracking-wide" title={error}>
                 ⚠ stale
               </span>
             )}
           </div>
         </>
       ) : (
-        <div className="px-3 py-3 font-mono text-[9px] text-slate-600">
+        <div className="px-3 py-3 font-mono text-[13px] text-slate-600">
           {error ? '⚠ METAR unavailable — retrying' : 'Fetching METAR…'}
         </div>
       )}
