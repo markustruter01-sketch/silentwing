@@ -6,8 +6,9 @@ import AirspaceView3D, { type CameraMode } from '@/components/views/AirspaceView
 import DirectorFocusPanel  from '@/components/panels/DirectorFocusPanel';
 import AlertShell          from '@/components/panels/AlertShell';
 import SequenceLadder, { ARRIVAL_PHASES, DEPARTURE_PHASES } from '@/components/panels/SequenceLadder';
-import ControlsHUD    from '@/components/ui/ControlsHUD';
-import WelcomeModal   from '@/components/ui/WelcomeModal';
+import ControlsHUD         from '@/components/ui/ControlsHUD';
+import WelcomeModal        from '@/components/ui/WelcomeModal';
+import OurAirportsPanel    from '@/components/dev/OurAirportsPanel';
 import WeatherWidget  from '@/components/panels/WeatherWidget';
 import MetarWidget    from '@/components/panels/MetarWidget';
 import NotamWidget    from '@/components/panels/NotamWidget';
@@ -591,6 +592,8 @@ export default function App() {
             >
               {simulateFeedLoss ? '■' : '▶'} feed loss
             </button>
+            {/* OurAirports lookup panel — Alt+Shift+O */}
+            <OurAirportsPanel />
           </>
         )}
       </div>
