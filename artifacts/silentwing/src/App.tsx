@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import TopBar     from '@/components/layout/TopBar';
-import StatusStrip from '@/components/layout/StatusStrip';
+import Header from '@/components/layout/Header';
 import AirfieldView2D from '@/components/views/AirfieldView2D';
 import AirspaceView3D, { type CameraMode } from '@/components/views/AirspaceView3D';
 import DirectorFocusPanel  from '@/components/panels/DirectorFocusPanel';
@@ -448,7 +447,7 @@ export default function App() {
 
   return (
     <div className="flex flex-col w-screen h-screen overflow-hidden bg-[#0A0E14] text-slate-100">
-      <TopBar
+      <Header
         activeView={view}
         onViewChange={setView}
         feedStatus={feedHealth.status}
@@ -456,151 +455,59 @@ export default function App() {
         dataSource={dataSource}
         onDataSourceChange={setDataSource}
         simDisabled={!activeProfile.sim}
-      />
-      <StatusStrip
+        airports={[YBBN, YSSY]}
+        activeProfile={activeProfile}
+        onSwitchAirport={handleSwitchAirport}
         aircraftCount={visibleAircraft.length}
         alertCount={activeAlerts.length || _legacyAlerts.length}
         groundCount={visibleAircraft.filter(ac => !isAirborne(ac)).length}
         sectorLoad={sectorLoad(visibleAircraft.length, activeProfile.sectorCapacity)}
-      />
-
-      {/* ── Display filters ─────────────────────────────────────────────── */}
-      <div className="flex items-center gap-3 px-4 py-[3px] bg-[#060A0F] border-b border-slate-800/30 shrink-0">
-
-        {/* ── Airport switcher ── */}
-        <div
-          className="flex items-center gap-0.5 bg-slate-900 border border-slate-800 rounded p-0.5"
-          title="Switch airport"
-        >
-          {([YBBN, YSSY] as const).map(prof => {
-            const active = activeProfile.icao === prof.icao;
-            return (
-              <button
-                key={prof.icao}
-                onClick={() => handleSwitchAirport(prof)}
-                className={[
-                  'px-2 py-0.5 rounded text-[10px] font-mono tracking-widest uppercase transition-all duration-150',
-                  active
-                    ? 'bg-sky-900/70 text-sky-300 border border-sky-700/50'
-                    : 'text-slate-500 hover:text-slate-300 border border-transparent',
-                ].join(' ')}
-              >
-                {prof.icao}
-              </button>
-            );
-          })}
-        </div>
-        <span className="w-px self-stretch bg-slate-800/60" aria-hidden />
-
-        <span className="text-[8px] tracking-[0.2em] text-slate-600 uppercase select-none">Filters</span>
-        {([
-          ['Hide vehicles',  hideGroundVehicles, setHideGroundVehicles],
-          ['Hide anonymous', hideAnonymous,       setHideAnonymous],
-        ] as [string, boolean, React.Dispatch<React.SetStateAction<boolean>>][]).map(([label, on, set]) => (
-          <button
-            key={label}
-            onClick={() => set(v => !v)}
-            className={[
-              'flex items-center gap-1 px-2 py-[2px] text-[8px] tracking-widest uppercase rounded',
-              'border transition-colors select-none cursor-pointer',
-              on
-                ? 'border-cyan-700/60 text-cyan-400 bg-cyan-900/15'
-                : 'border-slate-700/50 text-slate-500 hover:text-slate-400',
-            ].join(' ')}
-          >
-            <span className={on ? 'text-cyan-500' : 'text-slate-600'}>{on ? '●' : '○'}</span>
-            {label}
-          </button>
-        ))}
-        <span className="ml-auto text-[8px] text-slate-700 tabular-nums select-none">
-          {snapshot.aircraft.length - visibleAircraft.length > 0
-            ? `${snapshot.aircraft.length - visibleAircraft.length} hidden`
-            : ''}
-        </span>
-
-        {/* Director toggle — sits at the right edge of the filter bar */}
-        <button
-          onClick={() => {
-            setDirectorMode(v => {
-              const next = !v;
-              console.log(`[APP] Director mode ${next ? 'ON' : 'OFF'}`);
-              void next; // director state reset handled by directorMode sync effect
-              return next;
-            });
-          }}
-          title="Director Mode — auto-switches camera to the most interesting event"
-          className={[
-            'ml-2 flex items-center gap-1.5 px-3 py-[2px]',
-            'text-[8px] tracking-widest uppercase rounded border',
-            'transition-colors select-none cursor-pointer',
-            directorMode
-              ? 'border-amber-500/70 text-amber-300 bg-amber-900/25'
-              : 'border-slate-600/50 text-slate-400 hover:text-slate-300 hover:border-slate-500',
-          ].join(' ')}
-        >
-          {/* Pulsing dot while active */}
-          <span className={directorMode ? 'relative flex h-2 w-2' : 'text-slate-600'}>
-            {directorMode ? (
-              <>
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-60" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-400" />
-              </>
-            ) : '▶'}
-          </span>
-          Director
-        </button>
-
-        {/* ── DEV-ONLY scaffold buttons — kept in the filter bar so they don't
-            overlap any canvas overlays (color key, ControlsHUD, key hints).
-            Hidden in production builds via import.meta.env.DEV. ── */}
-        {import.meta.env.DEV && (
+        hideGroundVehicles={hideGroundVehicles}
+        onHideGroundVehicles={setHideGroundVehicles}
+        hideAnonymous={hideAnonymous}
+        onHideAnonymous={setHideAnonymous}
+        hiddenCount={snapshot.aircraft.length - visibleAircraft.length}
+        directorMode={directorMode}
+        onDirectorMode={setDirectorMode}
+        devSlot={import.meta.env.DEV ? (
           <>
-            <span className="ml-3 w-px self-stretch bg-slate-800/80" aria-hidden />
+            <span className="ml-2 w-px h-5 bg-slate-800/80 shrink-0" aria-hidden />
             <button
               onClick={() => rebuildGroundRef.current?.(activeProfile)}
-              title="DEV: Dispose current ground geometry + all aircraft and rebuild current airport in-place (tests the airport-swap mechanism without tearing down the scene)"
-              className="flex items-center gap-1 px-2 py-[2px] text-[7px] font-mono tracking-widest uppercase rounded border border-slate-700/40 text-slate-700 hover:text-slate-500 transition-colors select-none cursor-pointer"
-            >
-              ↺ geo
-            </button>
+              title="DEV: Rebuild current airport geometry in-place"
+              className="flex items-center gap-1 px-2 py-[2px] text-[7px] font-mono tracking-widest uppercase rounded border border-slate-700/40 text-slate-700 hover:text-slate-500 transition-colors select-none cursor-pointer shrink-0"
+            >↺ geo</button>
             <button
               onClick={() => setInjectConflict(v => !v)}
-              title="DEV: Inject two converging aircraft to trigger a CRITICAL separation alert"
+              title="DEV: Inject converging aircraft to trigger CRITICAL separation alert"
               className={[
                 'flex items-center gap-1 px-2 py-[2px] text-[7px] font-mono tracking-widest uppercase rounded border',
-                'transition-colors select-none cursor-pointer',
+                'transition-colors select-none cursor-pointer shrink-0',
                 injectConflict
                   ? 'border-red-600/80 text-red-300 bg-red-950/50'
                   : 'border-slate-700/40 text-slate-700 hover:text-slate-500',
               ].join(' ')}
-            >
-              {injectConflict ? '■' : '▶'} conflict
-            </button>
+            >{injectConflict ? '■' : '▶'} conflict</button>
             <button
-              onClick={() => {
-                setSimulateFeedLoss(v => {
-                  const next = !v;
-                  simulateFeedLossRef.current = next;
-                  if (next) feedLossStartRef.current = Date.now();
-                  return next;
-                });
-              }}
-              title="DEV: Simulate feed loss to exercise the lagging / stalled failsafe"
+              onClick={() => setSimulateFeedLoss(v => {
+                const next = !v;
+                simulateFeedLossRef.current = next;
+                if (next) feedLossStartRef.current = Date.now();
+                return next;
+              })}
+              title="DEV: Simulate feed loss to exercise lagging/stalled failsafe"
               className={[
                 'flex items-center gap-1 px-2 py-[2px] text-[7px] font-mono tracking-widest uppercase rounded border',
-                'transition-colors select-none cursor-pointer',
+                'transition-colors select-none cursor-pointer shrink-0',
                 simulateFeedLoss
                   ? 'border-amber-500/80 text-amber-300 bg-amber-950/50'
                   : 'border-slate-700/40 text-slate-700 hover:text-slate-500',
               ].join(' ')}
-            >
-              {simulateFeedLoss ? '■' : '▶'} feed loss
-            </button>
-            {/* OurAirports lookup panel — Alt+Shift+O */}
+            >{simulateFeedLoss ? '■' : '▶'} feed loss</button>
             <OurAirportsPanel />
           </>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       {/* ── Main view area ── */}
       <main className="flex-1 relative overflow-hidden">
