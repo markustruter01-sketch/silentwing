@@ -69,7 +69,7 @@ export default function WelcomeModal({ onDismiss }: Props) {
                 ['Aviation Weather Center', 'METAR observations — wind, visibility, QNH'],
               ].map(([src, desc]) => (
                 <li key={src} className="flex gap-2 text-sm">
-                  <span className="mt-[3px] w-1 h-1 shrink-0 rounded-full bg-amber-400" />
+                  <span className="shrink-0 text-emerald-400 text-[10px] leading-none mt-[2px]">✓</span>
                   <span>
                     <span className="text-slate-200 font-medium">{src}</span>
                     <span className="text-slate-500"> — {desc}</span>
