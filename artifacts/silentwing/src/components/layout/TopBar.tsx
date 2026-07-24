@@ -73,9 +73,12 @@ function FeedHealthIndicator({
 }
 
 /**
- * Data source toggle — swaps between the simulation and the live ADS-B feed.
- * This is the architectural proof-point: the same view components render
- * regardless of which DataFeedAdapter is active.
+ * Data source toggle — three-way selector: SIM / ADS-B Exchange / OpenSky.
+ * SIM and both live sources use the same DataFeedAdapter interface so the
+ * render pipeline never changes when switching.
+ *
+ * LICENSING NOTE: OpenSky data is non-commercial use only.
+ * See https://opensky-network.org/about/terms-of-use
  */
 function DataSourceToggle({
   value,
@@ -86,23 +89,43 @@ function DataSourceToggle({
   onChange: (s: DataSource) => void;
   simDisabled?: boolean;
 }) {
+  const options: { src: DataSource; label: string; title: string }[] = [
+    {
+      src:   'sim',
+      label: 'SIM',
+      title: simDisabled ? 'Simulation not available for this airport' : 'Simulation',
+    },
+    {
+      src:   'live',
+      label: 'ADSBX',
+      title: 'ADS-B Exchange (live feed)',
+    },
+    {
+      src:   'opensky',
+      label: 'OS',
+      title: 'OpenSky Network — non-commercial use only (opensky-network.org)',
+    },
+  ];
+
   return (
     <div
       className="flex items-center gap-0.5 bg-slate-900 border border-slate-800 rounded p-0.5"
       title="Data source"
     >
-      {(['sim', 'live'] as const).map(src => {
-        const active    = value === src;
-        const disabled  = src === 'sim' && simDisabled;
+      {options.map(({ src, label, title }) => {
+        const active   = value === src;
+        const disabled = src === 'sim' && simDisabled;
         const activeClass =
-          src === 'live'
-            ? 'bg-emerald-900/70 text-emerald-300 border border-emerald-700/50'
-            : 'bg-slate-700 text-slate-100 border border-slate-600';
+          src === 'sim'
+            ? 'bg-slate-700 text-slate-100 border border-slate-600'
+            : src === 'live'
+              ? 'bg-emerald-900/70 text-emerald-300 border border-emerald-700/50'
+              : 'bg-sky-900/70 text-sky-300 border border-sky-700/50'; // opensky
         return (
           <button
             key={src}
             onClick={() => !disabled && onChange(src)}
-            title={disabled ? 'Simulation not available for this airport' : undefined}
+            title={title}
             className={[
               'px-2 py-0.5 rounded text-[10px] font-mono tracking-widest uppercase transition-all duration-150',
               disabled
@@ -112,7 +135,7 @@ function DataSourceToggle({
                   : 'text-slate-500 hover:text-slate-300 border border-transparent',
             ].join(' ')}
           >
-            {src === 'sim' ? 'SIM' : 'LIVE'}
+            {label}
           </button>
         );
       })}

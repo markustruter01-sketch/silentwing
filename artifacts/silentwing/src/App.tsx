@@ -15,6 +15,7 @@ import NotamWidget    from '@/components/panels/NotamWidget';
 import { deriveActiveRunwayDirection } from '@/airports/helpers';
 import { getSimAdapter } from '@/sim/engine';
 import { AdsbAdapter, HEALTH_LAGGING_MS, HEALTH_STALLED_MS } from '@/feed/adsbAdapter';
+import { OpenSkyAdapter } from '@/feed/openSkyAdapter';
 import { AlertEngine }  from '@/alerts/engine';
 import { YBBN }         from '@/airports/ybbn';
 import { YSSY }         from '@/airports/yssy';
@@ -26,7 +27,7 @@ import type { DataFeedAdapter, WorldSnapshot, FlightPhase, Aircraft } from '@/ty
 import { isAirborne } from '@/types';
 
 type View = 'airspace' | 'airfield';
-export type DataSource = 'sim' | 'live';
+export type DataSource = 'sim' | 'live' | 'opensky';
 
 // Derive a rough sector-load from aircraft count (≤ 99 %)
 // NOTE: placeholder — will be replaced with a real demand metric in Phase 7.
@@ -72,16 +73,19 @@ export default function App() {
   // Adapter is (re-)created whenever dataSource or activeProfile changes.
   // YSSY is live-only; guard against accidental sim start on an airport with no sim config.
   const adapter = useMemo<DataFeedAdapter>(() => {
+    if (dataSource === 'opensky') return new OpenSkyAdapter(activeProfile);
     if (dataSource === 'live' || !activeProfile.sim) return new AdsbAdapter(activeProfile);
     return getSimAdapter(activeProfile);
   }, [dataSource, activeProfile]);
 
-  // Destroy the ADS-B adapter instance when it's replaced (dataSource change
-  // or component unmount). The sim adapter is a singleton and must NOT be
-  // destroyed — only the ADS-B adapter has a destroy() method.
+  // Destroy live adapter instances when replaced (dataSource change or unmount).
+  // The sim adapter is a singleton and must NOT be destroyed.
+  // Both AdsbAdapter and OpenSkyAdapter implement destroy().
   useEffect(() => {
     return () => {
-      if (adapter instanceof AdsbAdapter) adapter.destroy();
+      if (adapter instanceof AdsbAdapter || adapter instanceof OpenSkyAdapter) {
+        adapter.destroy();
+      }
     };
   }, [adapter]);
 
