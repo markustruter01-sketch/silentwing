@@ -115,7 +115,7 @@ async function fetchWeather(profile: AirportProfile): Promise<WeatherState> {
 }
 
 // ── Wind arrow ─────────────────────────────────────────────────────────────────
-function WindArrow({ deg, size = 10 }: { deg: number; size?: number }) {
+function WindArrow({ deg, size = 5 }: { deg: number; size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 10 10"
          style={{ transform: `rotate(${deg}deg)`, display: 'inline-block' }}>
@@ -131,17 +131,17 @@ function HourCard({ h }: { h: HourlySlice }) {
   const hr   = new Date(h.time).getHours().toString().padStart(2, '0');
   return (
     <div className="flex flex-col items-center gap-0.5 min-w-[40px] px-1">
-      <span className="font-mono text-[12px] text-slate-500">{hr}:00</span>
-      <span style={{ fontSize: 21, lineHeight: 1 }}>{info.icon}</span>
-      <span className="font-mono text-[13px] text-slate-200 font-semibold">
+      <span className="font-mono text-[6px] text-slate-500">{hr}:00</span>
+      <span style={{ fontSize: 11, lineHeight: 1 }}>{info.icon}</span>
+      <span className="font-mono text-[7px] text-slate-200 font-semibold">
         {Math.round(h.temperature_2m)}°
       </span>
       {h.precipitation_probability > 20 && (
-        <span className="font-mono text-[11px] text-sky-400">{h.precipitation_probability}%</span>
+        <span className="font-mono text-[6px] text-sky-400">{h.precipitation_probability}%</span>
       )}
       <div className="flex items-center gap-0.5">
-        <WindArrow deg={h.wind_direction_10m} size={7} />
-        <span className="font-mono text-[11px] text-slate-500">{Math.round(h.wind_speed_10m)}</span>
+        <WindArrow deg={h.wind_direction_10m} size={4} />
+        <span className="font-mono text-[6px] text-slate-500">{Math.round(h.wind_speed_10m)}</span>
       </div>
     </div>
   );
@@ -185,41 +185,41 @@ export default function WeatherWidget({ profile }: { profile: AirportProfile }) 
     >
         {/* ── Location label ── */}
         <div className="flex items-center gap-2 px-3 pt-2 pb-0.5">
-          <span className="font-mono text-[12px] text-slate-600 tracking-[0.2em] uppercase">{profile.icao}</span>
-          <span className="text-slate-700 text-[12px]">·</span>
-          <span className="font-mono text-[12px] text-slate-600 tracking-wider">{profile.nameShort}</span>
+          <span className="font-mono text-[6px] text-slate-600 tracking-[0.2em] uppercase">{profile.icao}</span>
+          <span className="text-slate-700 text-[6px]">·</span>
+          <span className="font-mono text-[6px] text-slate-600 tracking-wider">{profile.nameShort}</span>
         </div>
 
         {/* ── Current conditions ── */}
         {wx ? (
           <div className="flex items-center gap-3 px-3 pb-2 pt-1">
-            <span style={{ fontSize: 30, lineHeight: 1 }}>{info?.icon}</span>
+            <span style={{ fontSize: 15, lineHeight: 1 }}>{info?.icon}</span>
             <div className="flex flex-col">
               <div className="flex items-baseline gap-1.5">
-                <span className="font-mono text-[24px] font-bold text-slate-100 leading-none">
+                <span className="font-mono text-[12px] font-bold text-slate-100 leading-none">
                   {Math.round(wx.current.temperature_2m)}°C
                 </span>
-                <span className="font-mono text-[13px] text-slate-500">
+                <span className="font-mono text-[7px] text-slate-500">
                   feels {Math.round(wx.current.apparent_temperature)}°
                 </span>
               </div>
-              <span className="font-mono text-[13px] text-slate-400 mt-0.5">{info?.label}</span>
+              <span className="font-mono text-[7px] text-slate-400 mt-0.5">{info?.label}</span>
             </div>
             <div className="ml-auto flex flex-col items-end gap-0.5">
               <div className="flex items-center gap-1">
-                <WindArrow deg={wx.current.wind_direction_10m} size={10} />
-                <span className="font-mono text-[13px] text-slate-300">
+                <WindArrow deg={wx.current.wind_direction_10m} size={5} />
+                <span className="font-mono text-[7px] text-slate-300">
                   {bearing(wx.current.wind_direction_10m)} {Math.round(wx.current.wind_speed_10m)} km/h
                 </span>
               </div>
-              <span className="font-mono text-[12px] text-slate-600">
+              <span className="font-mono text-[6px] text-slate-600">
                 RH {wx.current.relative_humidity_2m}%
                 {wx.current.precipitation > 0 ? `  · ${wx.current.precipitation.toFixed(1)} mm` : ''}
               </span>
             </div>
           </div>
         ) : (
-          <div className="px-3 pb-2 pt-1 font-mono text-[13px] text-slate-600">
+          <div className="px-3 pb-2 pt-1 font-mono text-[7px] text-slate-600">
             {error ?? 'Loading…'}
           </div>
         )}
@@ -227,7 +227,7 @@ export default function WeatherWidget({ profile }: { profile: AirportProfile }) 
         {/* ── 12-hour forecast strip ── */}
         {wx && wx.hourly.length > 0 && (
           <>
-            <div className="px-3 pt-1 pb-0.5 font-mono text-[12px] text-slate-700 tracking-[0.2em] uppercase"
+            <div className="px-3 pt-1 pb-0.5 font-mono text-[6px] text-slate-700 tracking-[0.2em] uppercase"
                  style={{ borderTop: '1px solid rgba(100,116,139,0.12)' }}>
               12-Hour Outlook
             </div>
@@ -235,7 +235,7 @@ export default function WeatherWidget({ profile }: { profile: AirportProfile }) 
                  style={{ scrollbarWidth: 'none' }}>
               {wx.hourly.map((h, i) => <HourCard key={i} h={h} />)}
             </div>
-            <div className="px-3 pb-1.5 font-mono text-[11px] text-slate-700 tracking-wide">
+            <div className="px-3 pb-1.5 font-mono text-[6px] text-slate-700 tracking-wide">
               Open-Meteo · {new Date(wx.fetchedAt).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}
             </div>
           </>
