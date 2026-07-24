@@ -9,7 +9,9 @@ import SequenceLadder, { ARRIVAL_PHASES, DEPARTURE_PHASES } from '@/components/p
 import ControlsHUD    from '@/components/ui/ControlsHUD';
 import WelcomeModal   from '@/components/ui/WelcomeModal';
 import WeatherWidget  from '@/components/panels/WeatherWidget';
+import MetarWidget    from '@/components/panels/MetarWidget';
 import NotamWidget    from '@/components/panels/NotamWidget';
+import { deriveActiveRunwayDirection } from '@/airports/helpers';
 import { getSimAdapter } from '@/sim/engine';
 import { AdsbAdapter, HEALTH_LAGGING_MS, HEALTH_STALLED_MS } from '@/feed/adsbAdapter';
 import { AlertEngine }  from '@/alerts/engine';
@@ -93,6 +95,30 @@ export default function App() {
     const unsub = adapter.subscribe(setSnapshot);
     return unsub;
   }, [adapter]);
+
+  // ── METAR wind override — must be declared before effectiveWeather useMemo ─
+  // When MetarWidget receives authoritative METAR data it calls setMetarWind.
+  // We overlay it on the adapter's weather so active-runway selection uses
+  // real tower data instead of Open-Meteo-derived wind.
+  const [metarWind, setMetarWind] = useState<{ dir: number; speed: number } | null>(null);
+  // Reset on airport switch so stale METAR never influences the new airport.
+  useEffect(() => { setMetarWind(null); }, [activeProfile]);
+
+  // ── METAR-overridden weather ─────────────────────────────────────────────
+  // When real METAR wind is available, overlay it on the adapter's weather so
+  // active-runway selection uses authoritative tower data instead of Open-Meteo.
+  const effectiveWeather = useMemo(() => {
+    if (!metarWind) return snapshot.weather;
+    const activeRunwayDirection = deriveActiveRunwayDirection(
+      activeProfile, metarWind.dir, metarWind.speed,
+    );
+    return {
+      ...snapshot.weather,
+      windDir:              metarWind.dir,
+      windSpeed:            metarWind.speed,
+      activeRunwayDirection,
+    };
+  }, [snapshot.weather, metarWind, activeProfile]);
 
   // ── Selection & camera state ─────────────────────────────────────────────
   const [selectedAcId, setSelectedAcId] = useState<string | null>(null);
@@ -639,7 +665,7 @@ export default function App() {
             selectedAcId={selectedAcId}
             cameraMode={cameraMode}
             directorMode={directorMode}
-            weather={snapshot.weather}
+            weather={effectiveWeather}
             alertedIds={alertedIds}
             activeAlerts={activeAlerts}
             alertFocusId={alertFocusId ?? undefined}
@@ -689,6 +715,13 @@ export default function App() {
         {/* ── Info stack — NOTAMs above weather, bottom-left ── */}
         <div className="absolute bottom-6 left-14 z-40 pointer-events-none select-none flex flex-col gap-2" style={{ maxWidth: 420 }}>
           <NotamWidget />
+          {/* NOAA METAR/TAF — authoritative aviation weather; drives runway selection */}
+          <div className="pointer-events-auto">
+            <MetarWidget
+              profile={activeProfile}
+              onWind={(dir, speed) => setMetarWind({ dir, speed })}
+            />
+          </div>
           <WeatherWidget profile={activeProfile} />
         </div>
 
