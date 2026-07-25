@@ -848,8 +848,8 @@ function buildTerrainMesh(
   // Dark, desaturated — reads as landmass without competing with runways.
   const mat = new THREE.MeshLambertMaterial({ color: 0x0D1B28 });
   const mesh = new THREE.Mesh(geo, mat);
-  // 1 m below the runway plane — eliminates z-fighting with the background disc.
-  mesh.position.y = -1;
+  // 5 cm below the runway plane — prevents z-fighting with the background disc.
+  mesh.position.y = -0.05;
   return mesh;
 }
 
