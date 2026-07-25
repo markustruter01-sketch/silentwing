@@ -1,0 +1,94 @@
+# SILENTWING — TERRAIN (coarse elevation mesh, Open-Meteo)
+
+**ENVIRONMENT:** Existing SilentWing dev project. ONE change. Add a coarse
+terrain elevation mesh beneath the airport, from the Open-Meteo Elevation API.
+Accuracy need not be high — a smooth, low-res terrain surface is fine. Do NOT
+remount the scene. Build via the persistent-scene / rebuildGroundGeometry path.
+Test on Brisbane first, stop, report. Do NOT add Sydney terrain yet.
+
+**Apply freeze-safe lessons:** the terrain is ONE merged mesh (a single
+BufferGeometry), built once per airport, added to the existing scene — never
+per-tile objects, never a remount.
+
+## DATA SOURCE — Open-Meteo Elevation API (build-time fetch, then cache)
+
+Endpoint (no API key, non-commercial):
+  GET https://api.open-meteo.com/v1/elevation?latitude={csv}&longitude={csv}
+  → returns { "elevation": [h1, h2, ...] }  (metres, same order as inputs)
+  Batches up to 100 coordinate pairs per request.
+
+allowlist api.open-meteo.com (already used by the weather widget).
+
+**Fetch the grid ONCE and CACHE it (terrain is static — do not poll live):**
+  - For the active airport, build a grid of lat/lon points centered on the
+    profile origin, covering roughly ±0.15° lat / ±0.15° lon (about ±16 km),
+    at a COARSE spacing — a 40 x 40 grid (1600 points) is plenty. Fewer is fine
+    if simpler (e.g. 30 x 30).
+  - Convert the grid to lat/lon arrays, request elevations in batches of 100
+    via the endpoint, assemble the full elevation grid.
+  - CACHE the result to a static JSON file per airport (e.g.
+    src/data/terrain_YBBN.json) so it's fetched only once, not on every load.
+    On subsequent loads, read the cached file. If the cache exists, do NOT
+    re-fetch.
+  - Do this as a build/dev step or a one-time on-first-load fetch that writes
+    the cache. State which you did.
+
+## BUILD THE TERRAIN MESH
+
+  - Project each grid point's lat/lon to the SAME scene-metre frame as the
+    airport geometry (same origin, same equirectangular formula, same y-sign as
+    runways/buildings). The grid becomes scene X/Z positions.
+  - The elevation value becomes the vertical height at that vertex. Apply a
+    modest vertical exaggeration factor (start at 1.0 = true scale; expose a
+    constant TERRAIN_VSCALE so it can be nudged — for flat airports you may
+    exaggerate slightly, e.g. 1.5, so any relief is visible, but keep it subtle
+    and honest).
+  - Build ONE PlaneGeometry / grid BufferGeometry, displace each vertex to its
+    elevation, compute normals for lighting. This is a single mesh.
+  - Position it so the airport (runways at ~0 elevation) sits correctly on the
+    surface — offset the terrain so the airport's local ground level aligns with
+    the runway plane (subtract the airport's base elevation so runways aren't
+    floating above or buried under the terrain).
+
+## STYLING (context, not focus)
+
+  - Dark, desaturated terrain material — a dim ground tone that reads as
+    landmass without competing with runways/aircraft/buildings.
+  - Render BENEATH everything (runways, taxiways, buildings, aircraft all on
+    top). The terrain is the base layer.
+  - Subtle — do not brighten or texture heavily. It should feel like the ground
+    the airport sits on, barely-there for flat airports, more visible if relief
+    exists.
+  - Optionally a faint contour/wireframe overlay, but keep it minimal.
+
+## LIFECYCLE + TOGGLE
+
+  - Build the terrain in the SAME place ground geometry is built
+    (rebuildGroundGeometry / persistent-scene setup), so it clears and rebuilds
+    on airport switch with everything else. Only YBBN has a terrain cache for
+    now; a profile with no terrain cache renders flat (no terrain), no crash.
+  - Dispose the single terrain mesh geometry/material when ground geometry is
+    disposed.
+  - Add a "Terrain" show/hide toggle in settings (default ON).
+
+## HARD RULES
+1. ONE merged terrain mesh, NOT per-tile objects. Freeze guard.
+2. Fetch elevation ONCE, cache to a static file; do NOT poll live every load.
+3. Same projection/y-sign as runways — terrain aligns with the airport.
+4. Terrain renders beneath runways/buildings/aircraft; runways must sit ON the
+   surface, not float or bury.
+5. No scene remount. Persistent-scene / rebuildGroundGeometry path.
+6. Only YBBN for now; profiles without a terrain cache render flat, no crash.
+7. Do NOT touch aircraft, alerts, feed, camera, switch logic, or buildings.
+
+## REPORT (raw)
+1. Files created/modified.
+2. Confirm the elevation fetch succeeded: how many grid points, how many batch
+   requests, and the min/max elevation returned for the Brisbane grid (Brisbane
+   is near sea level, so expect low values — sanity check).
+3. Confirm terrain is ONE mesh (one draw call).
+4. Confirm the airport (runways) sits ON the terrain surface, not floating/
+   buried, and terrain aligns with the airport (same frame).
+5. Confirm NO freeze on Brisbane load, camera keeps rotating.
+6. Confirm terrain renders beneath runways/buildings/aircraft.
+7. Confirm the Terrain toggle works and Sydney (no cache) renders flat, no crash.
