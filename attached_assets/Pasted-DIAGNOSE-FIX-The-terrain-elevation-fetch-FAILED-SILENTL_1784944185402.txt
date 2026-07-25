@@ -1,0 +1,38 @@
+DIAGNOSE + FIX. The terrain elevation fetch FAILED SILENTLY — the cache
+(terrain_YBBN.json, 2290 bytes for 900 points) contains all-zero/sea-level
+values instead of real elevations. Brisbane's western ranges should be 100-600m
+but everything is 0. The mesh pipeline itself is correct (1 draw call, centered,
+no freeze) — only the data is bad. Fix the fetch.
+
+DIAGNOSE the fetch failure first:
+  a. Is api.open-meteo.com/v1/elevation allowlisted in Replit network egress?
+     Make a single test request for 3 known points (e.g. a point in the
+     Brisbane ranges west of the airport ~lat -27.45 lon 152.75 which should be
+     ~200-400m) and show the RAW response. Did it return real elevations, an
+     error, or zeros?
+  b. Quote the exact URL the fetch builds and the code that parses the
+     response into the grid. Is it reading the "elevation" array correctly?
+     Is there a silent try/catch that swallows a failure and writes zeros?
+
+THEN FIX:
+  - Ensure api.open-meteo.com is allowlisted (add it if not).
+  - Fix the fetch so it retrieves REAL elevations. Correct endpoint:
+    GET https://api.open-meteo.com/v1/elevation?latitude=lat1,lat2,...&longitude=lon1,lon2,...
+    returns { "elevation": [h1, h2, ...] } in input order. Batch <=100 points
+    per request (so a 30x30=900 grid needs ~9 batches). Assemble in order.
+  - Remove any silent fallback that writes zeros on failure — if the fetch
+    fails, LOG the error loudly and do NOT write a zero cache (delete/rebuild
+    the bad cache).
+  - Re-fetch and rebuild terrain_YBBN.json with real values.
+  - Also fix the vertical placement: zero the terrain to the runway plane so the
+    airport sits ON the surface (terrain elevation at origin should map to the
+    runway plane height, not 1.5m below).
+
+VERIFY (raw):
+  a. New cache file size (should be several KB, larger than 2290 bytes).
+  b. New MIN/MAX elevation in the grid — MAX should be well above 0 (the ranges
+     west of Brisbane, likely 100m+). If still all zero, the fetch is still
+     failing — report the raw error.
+  c. A test point in the ranges returns a realistic elevation (~200-400m).
+  d. Runways now sit ON the terrain surface.
+  e. No freeze.
