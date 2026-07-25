@@ -3352,8 +3352,10 @@ export default function AirspaceView3D({
         );
         camera.lookAt(st.orbitTarget);
 
-        // Pause auto-orbit while user is rotating manually
-        if (st.cameraMode === 'orbit') {
+        // Pause auto-orbit while user is rotating manually.
+        // When the director is active it owns the camera — left-drag should not
+        // override it or the director will be silently halted.
+        if (!st.directorMode && st.cameraMode === 'orbit') {
           st.cameraMode = 'manual';
           camModeRef.current('manual');
           console.log('[3D CAM] left-drag → manual (resumes after 10 s idle)');
@@ -3362,7 +3364,7 @@ export default function AirspaceView3D({
         // Reset idle-return timer on EVERY drag frame, not just the first mode
         // switch.  Without this the timer fires 30 s after the INITIAL drag that
         // switched to manual, even if the user has been rotating continuously.
-        if (st.cameraMode === 'manual') {
+        if (!st.directorMode && st.cameraMode === 'manual') {
           if (st.panResumeTimer !== null) clearTimeout(st.panResumeTimer);
           st.panResumeTimer = setTimeout(() => {
             if (st.cameraMode !== 'manual') { st.panResumeTimer = null; return; }
@@ -3405,14 +3407,19 @@ export default function AirspaceView3D({
       camera.position.add(panVec);
       st.orbitTarget.add(panVec);
 
-      // Pause auto-orbit during pan
-      if (st.cameraMode === 'orbit') {
+      // Pause auto-orbit during pan.
+      // When the director is active it owns the camera — right-drag should not
+      // override it or the director will be silently halted.
+      if (!st.directorMode && st.cameraMode === 'orbit') {
         st.cameraMode = 'manual';
         camModeRef.current('manual');
         console.log('[3D CAM] right-drag pan → manual (resumes after 10 s idle)');
       }
 
-      // Reset 10 s idle timer — on expiry, re-sync angle and resume orbit
+      // Reset 10 s idle timer — on expiry, re-sync angle and resume orbit.
+      // Only arm the timer when the director is off; when it is on the director
+      // manages the camera and there is nothing to resume.
+      if (st.directorMode) return;
       if (st.panResumeTimer !== null) clearTimeout(st.panResumeTimer);
       st.panResumeTimer = setTimeout(() => {
         if (st.cameraMode !== 'manual') { st.panResumeTimer = null; return; }
@@ -3458,12 +3465,20 @@ export default function AirspaceView3D({
       raycaster.setFromCamera(new THREE.Vector2(mx, my), camera);
       const hits = raycaster.intersectObjects([...st.coneToId.keys()]);
 
-      if (!hits.length) return; // tapped empty space
+      // Empty-canvas click: return without touching camera or director state.
+      // When directorMode is on, this means the director is never interrupted
+      // by accidental taps on blank airspace.
+      if (!hits.length) return;
 
       const hitMesh = hits[0].object as THREE.Mesh;
       const acId    = st.coneToId.get(hitMesh);
       if (!acId) return;
 
+      // Aircraft click: this IS an intentional manual override even when the
+      // director is active.  Spec: "clicking on an aircraft cone while director
+      // is on still flies to that aircraft (inspect mode), which is the
+      // expected manual override — director resumes automatically once the
+      // inspector panel is closed and cameraMode returns to orbit."
       const now = Date.now();
       if (acId === st.lastClickAcId && now - st.lastClickTime < 400) {
         // Double-click — follow mode
