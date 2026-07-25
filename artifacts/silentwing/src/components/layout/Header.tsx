@@ -183,29 +183,29 @@ const Header: React.FC<HeaderProps> = ({
 
       <Sep />
 
-      {/* ── 3. Airport switcher ──────────────────────────────────────────────── */}
-      <div
-        className="flex items-center gap-0.5 bg-slate-900 border border-slate-800 rounded p-0.5 shrink-0"
+      {/* ── 3. Airport selector (dropdown) ───────────────────────────────────── */}
+      <select
+        value={activeProfile.icao}
+        onChange={e => {
+          const p = airports.find(a => a.icao === e.target.value);
+          if (p) onSwitchAirport(p);
+        }}
         title="Switch airport"
+        className="h-7 px-2 pr-6 rounded bg-slate-900 border border-slate-800 text-sky-300
+                   font-mono text-[10px] tracking-widest uppercase shrink-0
+                   appearance-none cursor-pointer
+                   hover:border-slate-700 focus:outline-none focus:border-sky-700/60
+                   transition-colors"
+        style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2364748b'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 6px center' }}
       >
-        {airports.map(prof => {
-          const active = activeProfile.icao === prof.icao;
-          return (
-            <button
-              key={prof.icao}
-              onClick={() => onSwitchAirport(prof)}
-              className={[
-                'px-2 py-0.5 rounded text-[10px] font-mono tracking-widest uppercase transition-all duration-150',
-                active
-                  ? 'bg-sky-900/70 text-sky-300 border border-sky-700/50'
-                  : 'text-slate-500 hover:text-slate-300 border border-transparent',
-              ].join(' ')}
-            >
-              {prof.icao}
-            </button>
-          );
-        })}
-      </div>
+        {airports.map(prof => (
+          <option key={prof.icao} value={prof.icao}
+            style={{ background: '#0f172a', color: '#cbd5e1' }}
+          >
+            {prof.icao} — {prof.name ?? prof.icao}
+          </option>
+        ))}
+      </select>
 
       <Sep />
 
