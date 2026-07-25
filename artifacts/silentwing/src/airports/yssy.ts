@@ -9,6 +9,7 @@
 //     ← data/yssy_real.ts   (derived runway / taxiway / apron / gate geometry)
 
 import { YSSY_RUNWAYS, YSSY_TAXIWAYS, YSSY_APRONS, YSSY_GATES } from '@/data/yssy_real';
+import { YSSY_BUILDINGS } from '@/data/yssy_buildings';
 import type { AirportProfile } from './types';
 
 export const YSSY: AirportProfile = {
@@ -60,6 +61,9 @@ export const YSSY: AirportProfile = {
   // Three.js (x, z) centroid of the combined terminal precinct.
   // z = −real_y (Three.js z-axis is south-positive in this scene).
   terminalLabelPos: { x: 250, z: 100 },
+
+  // ── Building footprints ──────────────────────────────────────────────────────
+  buildings: YSSY_BUILDINGS,
 
   // ── Simulation scaffold ──────────────────────────────────────────────────────
   // YSSY is live-only — no sim configuration.
