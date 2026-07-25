@@ -45,6 +45,16 @@ function nmToBbox(lat: number, lon: number, distNm: number) {
 }
 
 router.get("/opensky", async (req, res) => {
+  const clientId     = process.env["OPENSKY_CLIENT_ID"];
+  const clientSecret = process.env["OPENSKY_CLIENT_SECRET"];
+
+  if (!clientId || !clientSecret) {
+    res.status(500).json({
+      error: "OPENSKY_CLIENT_ID and OPENSKY_CLIENT_SECRET secrets are not configured.",
+    });
+    return;
+  }
+
   const lat  = parseFloat(req.query["lat"]  as string) || YBBN_LAT;
   const lon  = parseFloat(req.query["lon"]  as string) || YBBN_LON;
   const dist = parseFloat(req.query["dist"] as string) || YBBN_DIST_NM;
@@ -56,10 +66,17 @@ router.get("/opensky", async (req, res) => {
     `?lamin=${lamin.toFixed(6)}&lomin=${lomin.toFixed(6)}` +
     `&lamax=${lamax.toFixed(6)}&lomax=${lomax.toFixed(6)}`;
 
+  // Authenticated access: Basic Auth with client credentials.
+  // Benefits over anonymous: 4000 req/day (vs 400), 5 s resolution (vs 10 s).
+  const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+
   try {
     const upstream = await fetch(upstreamUrl, {
-      headers: { Accept: "application/json" },
-      signal:  AbortSignal.timeout(20_000), // OpenSky can be slow
+      headers: {
+        Accept:        "application/json",
+        Authorization: `Basic ${basicAuth}`,
+      },
+      signal: AbortSignal.timeout(20_000),
     });
 
     if (!upstream.ok) {
@@ -73,7 +90,6 @@ router.get("/opensky", async (req, res) => {
     }
 
     const json = await upstream.json();
-    // Forward as-is; OpenSkyAdapter on the client normalises the state vectors.
     res.status(200).json(json);
   } catch (err) {
     res.status(502).json({
