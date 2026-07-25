@@ -112,18 +112,16 @@ function ArrivalRow({
   onClick: () => void;
   onPin: (e: React.MouseEvent) => void;
 }) {
-  // ETA proxy: format altitude as a rough "distance to threshold" indicator.
-  // Lower altitude → closer to runway.  Displayed as "FLxxx" or "≤1000 ft".
   const altFt = Math.round(ac.position.alt);
   const etaLabel =
-    altFt < 1000 ? '≤1k ft' :
+    altFt < 1000 ? '<1k ft' :
     altFt < 5000 ? `${(altFt / 1000).toFixed(1)}k ft` :
     `FL${Math.round(altFt / 100).toString().padStart(3, '0')}`;
 
   return (
     <div
       className={[
-        'flex items-center gap-0.5 px-1.5 py-0.5 rounded transition-colors',
+        'flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors',
         pinned ? 'bg-cyan-950/40 border-l border-cyan-600/50' : 'hover:bg-slate-700/20',
       ].join(' ')}
     >
@@ -134,13 +132,12 @@ function ArrivalRow({
       >
         <PhaseBadge phase={ac.phase} />
         <span className={[
-          'font-mono text-[10px] tracking-wide flex-1 truncate',
+          'font-mono text-[10px] tracking-wide flex-1 min-w-0 truncate',
           pinned ? 'text-cyan-200' : 'text-slate-200 group-hover:text-white',
         ].join(' ')}>
           {ac.callsign}
         </span>
-        <span className="font-mono text-[9px] text-slate-500 shrink-0">{ac.type}</span>
-        <span className="font-mono text-[9px] text-sky-400/70 tabular-nums shrink-0">{etaLabel}</span>
+        <span className="font-mono text-[9px] text-sky-400/70 tabular-nums shrink-0 w-[42px] text-right">{etaLabel}</span>
       </button>
     </div>
   );
@@ -158,13 +155,12 @@ function DepartureRow({
   onClick: () => void;
   onPin: (e: React.MouseEvent) => void;
 }) {
-  // For departures show ground speed as activity indicator
   const gsLabel = ac.groundSpeed > 0 ? `${ac.groundSpeed}kt` : 'GND';
 
   return (
     <div
       className={[
-        'flex items-center gap-0.5 px-1.5 py-0.5 rounded transition-colors',
+        'flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors',
         pinned ? 'bg-cyan-950/40 border-l border-cyan-600/50' : 'hover:bg-slate-700/20',
       ].join(' ')}
     >
@@ -175,13 +171,12 @@ function DepartureRow({
       >
         <PhaseBadge phase={ac.phase} />
         <span className={[
-          'font-mono text-[10px] tracking-wide flex-1 truncate',
+          'font-mono text-[10px] tracking-wide flex-1 min-w-0 truncate',
           pinned ? 'text-cyan-200' : 'text-slate-200 group-hover:text-white',
         ].join(' ')}>
           {ac.callsign}
         </span>
-        <span className="font-mono text-[9px] text-slate-500 shrink-0">{ac.type}</span>
-        <span className="font-mono text-[9px] text-orange-400/70 tabular-nums shrink-0">{gsLabel}</span>
+        <span className="font-mono text-[9px] text-orange-400/70 tabular-nums shrink-0 w-[42px] text-right">{gsLabel}</span>
       </button>
     </div>
   );
@@ -216,7 +211,7 @@ export default function SequenceLadder({
 
   return (
     <div
-      className="absolute right-4 w-64 z-40 pointer-events-auto select-none overflow-hidden rounded-lg shadow-2xl"
+      className="absolute right-4 w-[300px] z-40 pointer-events-auto select-none overflow-hidden rounded-lg shadow-2xl"
       style={{
         top:            topOffset,
         background:     'rgba(7,10,22,0.92)',
