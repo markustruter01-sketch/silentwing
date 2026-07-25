@@ -778,89 +778,6 @@ function buildApproachCone(corr: { cx: number; cz: number; dz: 1 | -1 }): THREE.
   return g;
 }
 
-// ── Wind direction indicator — windsock ───────────────────────────────────────
-// A 3-D windsock grounded NW of airport.  The sock droops under gravity at
-// calm wind and extends horizontally downwind as speed increases.
-// Traditional alternating orange / near-white bands; open end faces INTO wind.
-function buildWindIndicator(windDir: number, windSpeed: number): THREE.Group {
-  const g = new THREE.Group();
-  // Base sits at ground level; the group is placed NW of the airport origin.
-  g.position.set(-2200, 0, -1800);
-
-  // ── Pole ──────────────────────────────────────────────────────────────────
-  const POLE_H  = 380;
-  const poleGeo = new THREE.CylinderGeometry(5, 7, POLE_H, 6);
-  const poleMat = new THREE.MeshBasicMaterial({ color: 0x64748b, transparent: true, opacity: 0.85 });
-  const pole    = new THREE.Mesh(poleGeo, poleMat);
-  pole.position.set(0, POLE_H / 2, 0);
-  g.add(pole);
-
-  // ── Sock orientation ──────────────────────────────────────────────────────
-  // Wind FROM windDir → sock tail points downwind (TO direction).
-  // Droop: calm = straight down; ≥ 25 kt = fully horizontal downwind.
-  const speedKt = Math.max(0, Math.min(windSpeed, 30));
-  // angle from horizontal: 90° at 0 kt, 0° at ≥ 25 kt
-  const droopRad = (Math.PI / 2) * Math.max(0, 1 - speedKt / 25);
-
-  const rad      = (windDir * Math.PI) / 180;
-  // Downwind horizontal unit vector (direction wind blows TO)
-  const downwindX = -Math.sin(rad);
-  const downwindZ =  Math.cos(rad);
-  const isCalm    = speedKt < 1;
-
-  // Target direction for sock axis (from wide/open end → narrow tail)
-  // At full droop this is straight down; at full extension it is horizontal downwind.
-  const sockDir = isCalm
-    ? new THREE.Vector3(0, -1, 0)
-    : new THREE.Vector3(
-        downwindX * Math.cos(droopRad),
-        -Math.sin(droopRad),
-        downwindZ * Math.cos(droopRad),
-      ).normalize();
-
-  // ── Sock bands ────────────────────────────────────────────────────────────
-  // Five tapered frustum sections built along local +Y axis, then the whole
-  // group is rotated so local +Y → sockDir.
-  const BAND_COUNT = 5;
-  const BAND_LEN   = 70;
-  const R_OPEN     = 72;   // wide end (open, catches wind)
-  const R_TAIL     = 10;   // narrow tail end
-  const COLORS     = [0xf97316, 0xe2e8f0] as const; // orange / near-white
-
-  const sockGrp = new THREE.Group();
-  sockGrp.position.set(0, POLE_H, 0); // attach at pole top
-
-  for (let i = 0; i < BAND_COUNT; i++) {
-    const t0   = i       / BAND_COUNT;
-    const t1   = (i + 1) / BAND_COUNT;
-    const rTop = R_OPEN + (R_TAIL - R_OPEN) * t0; // wider toward open end
-    const rBot = R_OPEN + (R_TAIL - R_OPEN) * t1;
-    const bandGeo = new THREE.CylinderGeometry(rBot, rTop, BAND_LEN, 10, 1, true);
-    const bandMat = new THREE.MeshBasicMaterial({
-      color:      COLORS[i % 2],
-      side:       THREE.DoubleSide,
-      transparent: true,
-      opacity:     0.88,
-      depthWrite:  false,
-    });
-    const band = new THREE.Mesh(bandGeo, bandMat);
-    // Stack along local +Y (band 0 starts at y=0, extends to y=-BAND_LEN etc.)
-    band.position.set(0, -(i * BAND_LEN + BAND_LEN / 2), 0);
-    sockGrp.add(band);
-  }
-
-  // Rotate group so its local –Y axis aligns with sockDir
-  sockGrp.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), sockDir);
-  g.add(sockGrp);
-
-  // ── Label (wind info text, above pole top) ────────────────────────────────
-  const dirStr = isCalm ? 'CALM' : `${Math.round(windDir).toString().padStart(3, '0')}°`;
-  const sp = makeRingLabel(`WIND  ${dirStr} / ${Math.round(windSpeed)} kt`);
-  sp.position.set(0, POLE_H + 230, 0);
-  g.add(sp);
-
-  return g;
-}
 
 // ── SID/STAR route group builder ─────────────────────────────────────────────
 //
@@ -1961,6 +1878,11 @@ export default function AirspaceView3D({
     if (!st) return;
     st.directorMode = directorMode;
     if (directorMode) {
+      // Force cameraMode back to 'orbit' immediately so the director rAF branch
+      // fires on the very next frame — without this, a camera in 'follow' /
+      // 'inspect' / 'manual' would silently block the director until the user
+      // pressed Esc or the camera drifted back to orbit on its own.
+      st.cameraMode     = 'orbit';
       st.dir.phase      = 'orbit';
       st.dir.alertId    = null;
       st.dir.acId       = null;
@@ -2198,7 +2120,6 @@ export default function AirspaceView3D({
       profileRef.current.geometry.runways,
       weather.activeRunwayDirection,
     );
-    wg.add(buildWindIndicator(weather.windDir, weather.windSpeed));
     st.scene.add(wg);
     weatherGrpRef.current = wg;
   }, [weather?.activeRunwayDirection, weather?.windDir, weather?.windSpeed]);
