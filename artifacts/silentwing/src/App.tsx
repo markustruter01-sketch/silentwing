@@ -345,6 +345,8 @@ export default function App() {
   const [hideGroundVehicles, setHideGroundVehicles] = useState(true);
   /** Hide contacts whose callsign is just their hex code — no real flight ID. */
   const [hideAnonymous, setHideAnonymous] = useState(false);
+  /** Show extruded building footprints in the 3D view (default ON). */
+  const [showBuildings, setShowBuildings] = useState(true);
 
   // Welcome modal — shown on every load / refresh, no persistence
   const [showWelcome, setShowWelcome] = useState(true);
@@ -467,6 +469,8 @@ export default function App() {
         hideAnonymous={hideAnonymous}
         onHideAnonymous={setHideAnonymous}
         hiddenCount={snapshot.aircraft.length - visibleAircraft.length}
+        showBuildings={showBuildings}
+        onShowBuildings={setShowBuildings}
         directorMode={directorMode}
         onDirectorMode={setDirectorMode}
         devSlot={import.meta.env.DEV ? (
@@ -585,6 +589,7 @@ export default function App() {
             alertFocusId={alertFocusId ?? undefined}
             onAlertFocusDone={handleAlertFocusDone}
             showPaths={showPredictedPaths}
+            showBuildings={showBuildings}
             pinnedAcIds={pinnedAcIds}
             rebuildGroundRef={rebuildGroundRef}
             onSelectAircraft={(id) => {

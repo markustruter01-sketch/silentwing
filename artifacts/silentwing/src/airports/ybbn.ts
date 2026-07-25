@@ -13,6 +13,7 @@
 import { REAL_RUNWAYS, REAL_TAXIWAYS, REAL_APRONS, REAL_GATES } from '@/data/ybbn_real';
 import { GEO_POLYGONS, VIEWBOX, AIRSPACE_RADIUS_M } from '@/data/ybbn';
 import { DOM_GATE_Y, INTL_GATE_Y, domGateX, intlGateX } from '@/sim/constants';
+import { YBBN_BUILDINGS } from '@/data/ybbn_buildings';
 import type { AirportProfile } from './types';
 
 export const YBBN: AirportProfile = {
@@ -73,4 +74,7 @@ export const YBBN: AirportProfile = {
     defaultWindDir:   190,
     defaultWindSpeed: 12,
   },
+
+  // ── Building footprints (OSM ODbL) ──────────────────────────────────────────
+  buildings: YBBN_BUILDINGS,
 };

@@ -98,6 +98,9 @@ interface HeaderProps {
   hideAnonymous: boolean;
   onHideAnonymous: React.Dispatch<React.SetStateAction<boolean>>;
   hiddenCount: number;
+  // Buildings toggle (3D only)
+  showBuildings: boolean;
+  onShowBuildings: React.Dispatch<React.SetStateAction<boolean>>;
   // Director
   directorMode: boolean;
   onDirectorMode: React.Dispatch<React.SetStateAction<boolean>>;
@@ -127,6 +130,8 @@ const Header: React.FC<HeaderProps> = ({
   hideAnonymous,
   onHideAnonymous,
   hiddenCount,
+  showBuildings,
+  onShowBuildings,
   directorMode,
   onDirectorMode,
   devSlot,
@@ -240,6 +245,7 @@ const Header: React.FC<HeaderProps> = ({
         {([
           ['Vehicles', hideGroundVehicles, onHideGroundVehicles],
           ['Anon',     hideAnonymous,       onHideAnonymous],
+          ['Bldgs',    showBuildings,        onShowBuildings],
         ] as [string, boolean, React.Dispatch<React.SetStateAction<boolean>>][]).map(([label, on, set]) => (
           <button
             key={label}

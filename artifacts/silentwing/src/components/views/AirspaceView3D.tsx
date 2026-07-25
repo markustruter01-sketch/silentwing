@@ -11,6 +11,7 @@
 // and fires callbacks so App can update the panel overlay.
 
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { useEffect, useRef } from 'react';
 import type { Aircraft, WorldSnapshot } from '@/types';
 import { isAirborne } from '@/types';
@@ -724,6 +725,71 @@ function buildAirportAnnotations(
   g.add(term);
 
   return g;
+}
+
+// ── Building footprint extrusion ──────────────────────────────────────────────
+// Merges all footprints into ≤2 draw calls (terminals + everything else).
+// Coordinate convention: footprint [x, rawY] shares the same origin as
+// ybbn_real.ts.  ExtrudeGeometry builds the shape in the XY plane with
+// extrusion along +Z; rotateX(-π/2) maps X→X, extrusion→+Y (up), Y→-Z
+// (which matches flipRealY: 3D Z = -rawY).  No manual y-flip required.
+function buildBuildingGeometry(
+  buildings: Array<{ name: string; kind: string; height: number; footprint: [number, number][] }>,
+): THREE.Group | null {
+  if (!buildings.length) return null;
+
+  const termGeos: THREE.BufferGeometry[]  = [];
+  const otherGeos: THREE.BufferGeometry[] = [];
+
+  for (const b of buildings) {
+    const fp = b.footprint;
+    if (fp.length < 3) continue;
+
+    const h =
+      b.kind === 'terminal' ? Math.max(b.height, 15) :
+      b.kind === 'hangar'   ? Math.max(b.height, 12) :
+      Math.max(b.height, 6);
+
+    const shape = new THREE.Shape();
+    shape.moveTo(fp[0][0], fp[0][1]);
+    for (let i = 1; i < fp.length - 1; i++) {
+      shape.lineTo(fp[i][0], fp[i][1]);
+    }
+    shape.closePath();
+
+    const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false });
+    // Place base on y=0 ground plane; extrusion rises upward (+Y).
+    geo.rotateX(-Math.PI / 2);
+
+    if (b.kind === 'terminal') termGeos.push(geo);
+    else otherGeos.push(geo);
+  }
+
+  const g = new THREE.Group();
+
+  if (otherGeos.length) {
+    const merged = mergeGeometries(otherGeos, false);
+    if (merged) {
+      g.add(new THREE.Mesh(
+        merged,
+        new THREE.MeshBasicMaterial({ color: 0x0E1A26, transparent: true, opacity: 0.78 }),
+      ));
+    }
+    for (const geo of otherGeos) geo.dispose();
+  }
+
+  if (termGeos.length) {
+    const merged = mergeGeometries(termGeos, false);
+    if (merged) {
+      g.add(new THREE.Mesh(
+        merged,
+        new THREE.MeshBasicMaterial({ color: 0x182840, transparent: true, opacity: 0.88 }),
+      ));
+    }
+    for (const geo of termGeos) geo.dispose();
+  }
+
+  return g.children.length ? g : null;
 }
 
 // ── ILS approach corridor ──────────────────────────────────────────────────────
@@ -1637,6 +1703,8 @@ export interface AirspaceView3DProps {
    *  The function removes/disposes existing ground groups, builds new geometry
    *  from the given profile, clears all aircraft, and resets the orbit camera. */
   rebuildGroundRef?: { current: ((profile: AirportProfile) => void) | null };
+  /** When true, extruded OSM building footprints are visible (default true). */
+  showBuildings?: boolean;
 }
 
 // ── Deferred aircraft spawn ───────────────────────────────────────────────────
@@ -1831,6 +1899,7 @@ export default function AirspaceView3D({
   showPaths = false,
   pinnedAcIds,
   rebuildGroundRef,
+  showBuildings = true,
 }: AirspaceView3DProps) {
   const mountRef       = useRef<HTMLDivElement>(null);
   const sceneRef       = useRef<SceneState | null>(null);
@@ -1843,6 +1912,8 @@ export default function AirspaceView3D({
   const routeGroupRef      = useRef<THREE.Group | null>(null);
   /** Flat array of RouteLine entries driving per-frame opacity in the rAF loop. */
   const routeLineEntriesRef = useRef<RouteLine[]>([]);
+  /** Merged building mesh group for the current airport (null = no building data). */
+  const bldGrpRef = useRef<THREE.Group | null>(null);
 
   // Stable callback refs — updated every render so event handlers always call
   // the latest versions without needing to be re-registered.
@@ -1899,6 +1970,11 @@ export default function AirspaceView3D({
     if (routeGroupRef.current) routeGroupRef.current.visible = showPaths;
   }, [showPaths]);
 
+  // Sync showBuildings prop → building group visibility.
+  useEffect(() => {
+    if (bldGrpRef.current) bldGrpRef.current.visible = showBuildings;
+  }, [showBuildings]);
+
   // Sync alertedIds prop so the rAF loop highlights alerted aircraft.
   useEffect(() => {
     const st = sceneRef.current;
@@ -1949,6 +2025,12 @@ export default function AirspaceView3D({
       const annoGrp    = buildAirportAnnotations(thresholds, profile.terminalLabelPos);
       scene.add(geoGrp, altGrp, annoGrp);
       groundGrpsRef.current = [geoGrp, altGrp, annoGrp];
+      // Buildings — YBBN only; Sydney (no buildings field) renders none silently.
+      const bldGrp = profile.buildings?.length
+        ? buildBuildingGeometry(profile.buildings)
+        : null;
+      if (bldGrp) { scene.add(bldGrp); groundGrpsRef.current.push(bldGrp); }
+      bldGrpRef.current = bldGrp;
       // Update threshold cache used by the glide-slope rAF pass.
       st.allThresholds = thresholds;
 
@@ -2185,6 +2267,12 @@ export default function AirspaceView3D({
     const annoGrp = buildAirportAnnotations(thresholds, prof.terminalLabelPos);
     scene.add(geoGrp, altGrp, annoGrp);
     groundGrpsRef.current = [geoGrp, altGrp, annoGrp];
+    // Buildings — YBBN only; profiles without buildings field render none silently.
+    const bldGrp0 = prof.buildings?.length
+      ? buildBuildingGeometry(prof.buildings)
+      : null;
+    if (bldGrp0) { scene.add(bldGrp0); groundGrpsRef.current.push(bldGrp0); }
+    bldGrpRef.current = bldGrp0;
 
     // Initialise mutable state
     const st: SceneState = {

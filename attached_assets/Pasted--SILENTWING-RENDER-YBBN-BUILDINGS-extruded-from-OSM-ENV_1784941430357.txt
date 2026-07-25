@@ -1,0 +1,80 @@
+# SILENTWING — RENDER YBBN BUILDINGS (extruded from OSM)
+
+**ENVIRONMENT:** Existing SilentWing dev project. ONE change. A file
+`ybbn_buildings.ts` is uploaded in src/data/. Render Brisbane's building
+footprints as extruded 3D blocks in the EXISTING scene. Do NOT add Sydney
+buildings yet. Do NOT remount the scene. Do NOT batch other changes. Test on
+Brisbane, stop, report.
+
+**Apply the freeze-safe lessons:** merged geometry (few draw calls, NOT one mesh
+per building), buildings added to the existing scene via the same
+rebuildGroundGeometry / persistent-scene path — never a remount.
+
+## THE DATA
+`ybbn_buildings.ts` exports:
+```ts
+interface Building { name: string; kind: string; height: number; footprint: [number, number][]; }
+export const YBBN_BUILDINGS: Building[];  // ~293 buildings, projected to YBBN scene metres
+```
+`footprint` is a closed polygon in the SAME scene-metre frame as ybbn_real.ts
+(same origin, same projection). `height` is metres. `kind` is "terminal",
+"hangar", or a generic type.
+
+## TASKS
+
+1. **Extrude each footprint** into a 3D block:
+   - Build a THREE.Shape from the footprint (x, y) points, then ExtrudeGeometry
+     to the building's height (extrude along the scene's vertical axis).
+   - Apply the SAME y-sign handling that runways/taxiways use (the flipRealY /
+     +y=south convention) so buildings sit correctly relative to the runways and
+     aircraft. This is critical — buildings must align with the taxiways.
+   - Position each block flat on the ground plane (base at y=0 height), rising up.
+
+2. **Height minimums by kind** (OSM levels underestimate terminal height):
+   - kind "terminal": height = max(building.height, 15)
+   - kind "hangar": height = max(building.height, 12)
+   - otherwise: height = max(building.height, 6)
+
+3. **Merge for performance** — do NOT create one mesh per building (that risks
+   the freeze). Merge all building geometries into ONE (or a few) merged
+   BufferGeometry / use a single material, so it's a handful of draw calls total.
+   Use BufferGeometryUtils.mergeGeometries or equivalent.
+
+4. **Styling** — buildings are CONTEXT, not the focus:
+   - Dim, desaturated material (dark slate/grey), subtly lit so edges read.
+   - Render BENEATH aircraft (aircraft always draw on top / higher).
+   - A slightly brighter or distinct shade for kind "terminal" so the terminals
+     are recognizable vs hangars/cargo.
+   - Semi-transparent or solid — pick whatever reads as clean massing without
+     obscuring taxiing aircraft. Buildings should not hide ground traffic.
+
+5. **Lifecycle** — buildings belong to the airport, same as ground geometry:
+   - Build them in the SAME place ground geometry is built (rebuildGroundGeometry
+     / the persistent-scene setup), so on airport switch they're cleared and
+     rebuilt with the rest. For now only YBBN has a buildings file; guard so a
+     profile with no buildings file simply renders none (Sydney = none for now).
+   - Dispose the merged building geometry/material when ground geometry is
+     disposed. Never dispose in a per-building loop (there are no per-building
+     objects — it's merged).
+
+6. **Toggle** — add a "Buildings" show/hide toggle in settings (default ON).
+
+## HARD RULES
+1. ONE merged geometry (or a few), NOT one mesh per building. This is the freeze
+   guard.
+2. Same projection/y-sign as runways — buildings MUST align with taxiways.
+3. No scene remount. Build via the persistent-scene / rebuildGroundGeometry path.
+4. Buildings render beneath aircraft, must not obscure ground traffic.
+5. Only YBBN has buildings now; profiles without a buildings file render none,
+   no crash.
+6. Do NOT touch aircraft, alerts, feed, camera, or the airport switch logic.
+
+## REPORT (raw)
+1. Files created/modified.
+2. Confirm buildings are merged into how many draw calls (should be very few).
+3. Confirm the y-sign matches runways — do the terminal blocks sit correctly
+   between/beside the runways, aligned with taxiways? (Describe or screenshot.)
+4. Confirm NO freeze on Brisbane load with ~293 buildings, camera keeps rotating.
+5. Confirm buildings render beneath aircraft (ground traffic still visible).
+6. Confirm the Buildings toggle works and Sydney (no buildings file) renders
+   none without error.

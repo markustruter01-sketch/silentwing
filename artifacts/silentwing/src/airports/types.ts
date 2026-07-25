@@ -84,4 +84,12 @@ export interface AirportProfile {
 
   // ── Simulation scaffold ──────────────────────────────────────────────────────
   sim?: SimAirportConfig;
+
+  // ── Extruded building footprints (optional — only airports with OSM data) ────
+  buildings?: Array<{
+    name:      string;
+    kind:      string;
+    height:    number;
+    footprint: [number, number][];
+  }>;
 }
