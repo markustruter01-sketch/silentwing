@@ -92,4 +92,18 @@ export interface AirportProfile {
     height:    number;
     footprint: [number, number][];
   }>;
+
+  // ── Coarse terrain elevation mesh (optional — fetched once from Open-Meteo) ──
+  terrain?: TerrainGrid;
+}
+
+/** 30×30 grid of elevation values for a coarse terrain mesh (from Open-Meteo). */
+export interface TerrainGrid {
+  rows:       number;
+  cols:       number;
+  originLat:  number;
+  originLon:  number;
+  spanLat:    number;   // degrees north/south from origin
+  spanLon:    number;   // degrees east/west from origin
+  elevations: number[]; // rows*cols values, row-major (south→north)
 }

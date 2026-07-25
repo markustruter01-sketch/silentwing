@@ -347,6 +347,8 @@ export default function App() {
   const [hideAnonymous, setHideAnonymous] = useState(false);
   /** Show extruded building footprints in the 3D view (default ON). */
   const [showBuildings, setShowBuildings] = useState(true);
+  /** Show coarse terrain elevation mesh in the 3D view (default ON). */
+  const [showTerrain, setShowTerrain] = useState(true);
 
   // Welcome modal — shown on every load / refresh, no persistence
   const [showWelcome, setShowWelcome] = useState(true);
@@ -471,6 +473,8 @@ export default function App() {
         hiddenCount={snapshot.aircraft.length - visibleAircraft.length}
         showBuildings={showBuildings}
         onShowBuildings={setShowBuildings}
+        showTerrain={showTerrain}
+        onShowTerrain={setShowTerrain}
         directorMode={directorMode}
         onDirectorMode={setDirectorMode}
         devSlot={import.meta.env.DEV ? (
@@ -590,6 +594,7 @@ export default function App() {
             onAlertFocusDone={handleAlertFocusDone}
             showPaths={showPredictedPaths}
             showBuildings={showBuildings}
+            showTerrain={showTerrain}
             pinnedAcIds={pinnedAcIds}
             rebuildGroundRef={rebuildGroundRef}
             onSelectAircraft={(id) => {

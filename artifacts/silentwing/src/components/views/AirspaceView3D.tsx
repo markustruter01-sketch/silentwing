@@ -19,7 +19,7 @@ import { wakeCategory } from '@/utils/wakeCategory';
 import type { Polyline } from '@/data/ybbn_real';
 import type { SWAlert, SWAlertSeverity } from '@/alerts/types';
 import { useAirport } from '@/airports/context';
-import type { AirportProfile } from '@/airports/types';
+import type { AirportProfile, TerrainGrid } from '@/airports/types';
 import { computeRunwayThresholds, computeApproachCorridors } from '@/airports/helpers';
 import { ROUTES } from '@/data/routes';
 import type { Route } from '@/data/routes';
@@ -790,6 +790,67 @@ function buildBuildingGeometry(
   }
 
   return g.children.length ? g : null;
+}
+
+// ── Terrain mesh ──────────────────────────────────────────────────────────────
+// One merged BufferGeometry, built once per airport switch, added before all
+// ground geometry so it renders beneath runways/buildings/aircraft.
+const TERRAIN_VSCALE = 1.5; // vertical exaggeration — nudge for subtle relief
+
+function buildTerrainMesh(
+  grid: TerrainGrid,
+  airportOrigin: { lat: number; lon: number },
+): THREE.Mesh {
+  const { rows, cols, originLat, originLon, spanLat, spanLon, elevations } = grid;
+  const LAT_M = 111_320;
+  const LON_M = Math.cos(originLat * Math.PI / 180) * 111_320;
+
+  // Centre-cell elevation — subtracted from all vertices so the airport ground
+  // plane sits at y = 0 (runway plane).  The mesh is then offset -1 m so it
+  // always renders fractionally below the disc/runways, preventing z-fighting.
+  const cR = Math.floor(rows / 2);
+  const cC = Math.floor(cols / 2);
+  const baseElev = elevations[cR * cols + cC];
+
+  const vtx = rows * cols;
+  const pos = new Float32Array(vtx * 3);
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const lat = originLat - spanLat + (2 * spanLat / (rows - 1)) * r;
+      const lon = originLon - spanLon + (2 * spanLon / (cols - 1)) * c;
+      // Same equirectangular projection / y-sign as runways and buildings.
+      const sx =  (lon - airportOrigin.lon) * LON_M;
+      const sz = -(lat - airportOrigin.lat) * LAT_M;
+      const sy =  (elevations[r * cols + c] - baseElev) * TERRAIN_VSCALE;
+      const i = (r * cols + c) * 3;
+      pos[i] = sx; pos[i + 1] = sy; pos[i + 2] = sz;
+    }
+  }
+
+  const idxCount = (rows - 1) * (cols - 1) * 6;
+  const idx = new Uint32Array(idxCount);
+  let ii = 0;
+  for (let r = 0; r < rows - 1; r++) {
+    for (let c = 0; c < cols - 1; c++) {
+      const a = r * cols + c, b = a + 1;
+      const d = (r + 1) * cols + c, e = d + 1;
+      idx[ii++] = a; idx[ii++] = d; idx[ii++] = b;
+      idx[ii++] = b; idx[ii++] = d; idx[ii++] = e;
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  geo.computeVertexNormals();
+
+  // Dark, desaturated — reads as landmass without competing with runways.
+  const mat = new THREE.MeshLambertMaterial({ color: 0x0D1B28 });
+  const mesh = new THREE.Mesh(geo, mat);
+  // 1 m below the runway plane — eliminates z-fighting with the background disc.
+  mesh.position.y = -1;
+  return mesh;
 }
 
 // ── ILS approach corridor ──────────────────────────────────────────────────────
@@ -1705,6 +1766,8 @@ export interface AirspaceView3DProps {
   rebuildGroundRef?: { current: ((profile: AirportProfile) => void) | null };
   /** When true, extruded OSM building footprints are visible (default true). */
   showBuildings?: boolean;
+  /** When true, the coarse terrain elevation mesh is visible (default true). */
+  showTerrain?: boolean;
 }
 
 // ── Deferred aircraft spawn ───────────────────────────────────────────────────
@@ -1900,6 +1963,7 @@ export default function AirspaceView3D({
   pinnedAcIds,
   rebuildGroundRef,
   showBuildings = true,
+  showTerrain   = true,
 }: AirspaceView3DProps) {
   const mountRef       = useRef<HTMLDivElement>(null);
   const sceneRef       = useRef<SceneState | null>(null);
@@ -1914,6 +1978,8 @@ export default function AirspaceView3D({
   const routeLineEntriesRef = useRef<RouteLine[]>([]);
   /** Merged building mesh group for the current airport (null = no building data). */
   const bldGrpRef = useRef<THREE.Group | null>(null);
+  /** Single terrain mesh for the current airport (null = no terrain data). */
+  const terrainMeshRef = useRef<THREE.Mesh | null>(null);
 
   // Stable callback refs — updated every render so event handlers always call
   // the latest versions without needing to be re-registered.
@@ -1975,6 +2041,11 @@ export default function AirspaceView3D({
     if (bldGrpRef.current) bldGrpRef.current.visible = showBuildings;
   }, [showBuildings]);
 
+  // Sync showTerrain prop → terrain mesh visibility.
+  useEffect(() => {
+    if (terrainMeshRef.current) terrainMeshRef.current.visible = showTerrain;
+  }, [showTerrain]);
+
   // Sync alertedIds prop so the rAF loop highlights alerted aircraft.
   useEffect(() => {
     const st = sceneRef.current;
@@ -2025,12 +2096,18 @@ export default function AirspaceView3D({
       const annoGrp    = buildAirportAnnotations(thresholds, profile.terminalLabelPos);
       scene.add(geoGrp, altGrp, annoGrp);
       groundGrpsRef.current = [geoGrp, altGrp, annoGrp];
-      // Buildings — YBBN only; Sydney (no buildings field) renders none silently.
+      // Buildings — optional; profiles without OSM data render none silently.
       const bldGrp = profile.buildings?.length
         ? buildBuildingGeometry(profile.buildings)
         : null;
       if (bldGrp) { scene.add(bldGrp); groundGrpsRef.current.push(bldGrp); }
       bldGrpRef.current = bldGrp;
+      // Terrain — one mesh; profiles without cached elevation data render flat.
+      const terrainMesh = profile.terrain
+        ? buildTerrainMesh(profile.terrain, profile.origin)
+        : null;
+      if (terrainMesh) { scene.add(terrainMesh); groundGrpsRef.current.push(terrainMesh as unknown as THREE.Group); }
+      terrainMeshRef.current = terrainMesh;
       // Update threshold cache used by the glide-slope rAF pass.
       st.allThresholds = thresholds;
 
@@ -2267,12 +2344,18 @@ export default function AirspaceView3D({
     const annoGrp = buildAirportAnnotations(thresholds, prof.terminalLabelPos);
     scene.add(geoGrp, altGrp, annoGrp);
     groundGrpsRef.current = [geoGrp, altGrp, annoGrp];
-    // Buildings — YBBN only; profiles without buildings field render none silently.
+    // Buildings — optional; profiles without OSM data render none silently.
     const bldGrp0 = prof.buildings?.length
       ? buildBuildingGeometry(prof.buildings)
       : null;
     if (bldGrp0) { scene.add(bldGrp0); groundGrpsRef.current.push(bldGrp0); }
     bldGrpRef.current = bldGrp0;
+    // Terrain — one mesh; profiles without cached elevation data render flat.
+    const terrainMesh0 = prof.terrain
+      ? buildTerrainMesh(prof.terrain, prof.origin)
+      : null;
+    if (terrainMesh0) { scene.add(terrainMesh0); groundGrpsRef.current.push(terrainMesh0 as unknown as THREE.Group); }
+    terrainMeshRef.current = terrainMesh0;
 
     // Initialise mutable state
     const st: SceneState = {

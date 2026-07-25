@@ -101,6 +101,9 @@ interface HeaderProps {
   // Buildings toggle (3D only)
   showBuildings: boolean;
   onShowBuildings: React.Dispatch<React.SetStateAction<boolean>>;
+  // Terrain toggle (3D only)
+  showTerrain: boolean;
+  onShowTerrain: React.Dispatch<React.SetStateAction<boolean>>;
   // Director
   directorMode: boolean;
   onDirectorMode: React.Dispatch<React.SetStateAction<boolean>>;
@@ -132,6 +135,8 @@ const Header: React.FC<HeaderProps> = ({
   hiddenCount,
   showBuildings,
   onShowBuildings,
+  showTerrain,
+  onShowTerrain,
   directorMode,
   onDirectorMode,
   devSlot,
@@ -246,6 +251,7 @@ const Header: React.FC<HeaderProps> = ({
           ['Vehicles', hideGroundVehicles, onHideGroundVehicles],
           ['Anon',     hideAnonymous,       onHideAnonymous],
           ['Bldgs',    showBuildings,        onShowBuildings],
+          ['Terrain',  showTerrain,          onShowTerrain],
         ] as [string, boolean, React.Dispatch<React.SetStateAction<boolean>>][]).map(([label, on, set]) => (
           <button
             key={label}
