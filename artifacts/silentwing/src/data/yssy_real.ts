@@ -24,10 +24,10 @@ export const YSSY_ORIGIN = { lat: -33.9461, lon: 151.1772 };
 // ybbn_real.ts).  Ten evenly-spaced points along each centreline.
 //
 // Threshold sources (AIP ERSA, projected with formula above):
-//   34R: lat=-33.9286, lon=151.1708  →  x=−591, y=+1934
-//   16L: lat=-33.9619, lon=151.1797  →  x=+231, y=−1746
-//   34L: lat=-33.9281, lon=151.1827  →  x=+505, y=+1990   (AIP ERSA 2024: 33°55′41.3″S 151°10′57.6″E)
-//   16R: lat=-33.9617, lon=151.1916  →  x=+1327, y=−1724  (derived: 34L + same runway heading/length)
+//   34R: lat=-33.9286, lon=151.1708  →  x=−591,  y=+1934  (AIP ERSA 2024)
+//   16L: lat=-33.9636, lon=151.1802  →  x=+273,  y=−1933  (3 962 m from 34R, same heading)
+//   34L: lat=-33.9281, lon=151.1827  →  x=+505,  y=+1990  (AIP ERSA 2024: 33°55′41.3″S 151°10′57.6″E)
+//   16R: lat=-33.9631, lon=151.1919  →  x=+1361, y=−1878  (3 962 m from 34L, same heading)
 //   25:  lat=-33.9433, lon=151.1933  →  x=+1487, y=+310
 //   07:  lat=-33.9481, lon=151.1647  →  x=−1154, y=−221
 
@@ -37,16 +37,16 @@ export const YSSY_RUNWAYS: Polyline[] = [
     // HIGH (34R) at NW end, LOW (16L) at SE end.
     ref: '16L/34R',
     coords: [
-      [ -591,  1934],  // 34R threshold
-      [ -500,  1525],
-      [ -409,  1116],
-      [ -317,   707],
-      [ -226,   298],
-      [ -134,  -110],
-      [  -43,  -519],
-      [   48,  -928],
-      [  140, -1337],
-      [  231, -1746],  // 16L threshold
+      [ -591,  1934],  // 34R threshold (AIP ERSA 2024)
+      [ -495,  1504],
+      [ -399,  1075],
+      [ -303,   645],
+      [ -207,   215],
+      [ -111,  -214],
+      [  -15,  -644],
+      [   81, -1073],
+      [  177, -1503],
+      [  273, -1933],  // 16L threshold (3 962 m from 34R)
     ],
   },
   {
@@ -54,16 +54,16 @@ export const YSSY_RUNWAYS: Polyline[] = [
     // HIGH (34L) at NE end, LOW (16R) at SE end.
     ref: '16R/34L',
     coords: [
-      [  505,  1990],  // 34L threshold
-      [  596,  1577],
-      [  688,  1165],
-      [  779,   752],
-      [  870,   339],
-      [  962,   -73],
-      [ 1053,  -486],
-      [ 1144,  -899],
-      [ 1236, -1311],
-      [ 1327, -1724],  // 16R threshold
+      [  505,  1990],  // 34L threshold (AIP ERSA 2024)
+      [  600,  1560],
+      [  695,  1130],
+      [  790,   701],
+      [  886,   271],
+      [  981,  -159],
+      [ 1076,  -589],
+      [ 1171, -1019],
+      [ 1266, -1449],
+      [ 1361, -1878],  // 16R threshold (3 962 m from 34L)
     ],
   },
   {

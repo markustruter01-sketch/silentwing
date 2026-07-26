@@ -1,0 +1,40 @@
+The runways are displaced ALONG their own axis (slid lengthwise). Evidence:
+aircraft touch down before the drawn runway begins, lift off far into it, and a
+building overlaps the drawn 16R runway end. Perpendicular distance cannot detect
+along-axis displacement — every previous check measured the wrong thing. Fix the
+runway ENDPOINTS.
+
+DIAGNOSE with along-axis measurement:
+  a. Collect the last 10 polled positions of aircraft that LANDED or DEPARTED
+     on 16R/34L and 16L/34R (their ground-roll tracks). Project each track onto
+     the runway's axis and find where ground rolls actually START and END along
+     that axis (real thresholds are where planes consistently touch down /
+     rotate). Compare those real-world along-axis positions to the drawn runway
+     polyline's endpoints. Report the ALONG-AXIS displacement in metres for each
+     runway end. (Lateral was already verified fine — measure LONGITUDINAL.)
+
+  b. Cross-check with authoritative threshold coordinates: official published
+     YSSY thresholds are approximately:
+       16R: -33.9465, 151.1798    34L: -33.9707, 151.1930  (eastern 16R/34L)
+       16L: -33.9564, 151.1848    34R: -33.9370, 151.1745  (western... verify
+       designator pairing against AIP — do not trust these blindly, verify)
+     Project the OFFICIAL thresholds with the verified formula and compare to
+     the drawn endpoints. Report the delta PER ENDPOINT, split into along-axis
+     and lateral components.
+
+  c. The building overlapping the 16R runway end (visible on screen): show that
+     building's footprint coords vs the drawn runway-end coords vs the OFFICIAL
+     runway-end position. If the building is correctly placed (OSM) and the
+     drawn runway end extends past the official threshold into the building,
+     that confirms the lengthwise slide.
+
+FIX: correct the runway polyline ENDPOINTS so thresholds sit at the official
+positions (verified against the aircraft ground-roll evidence from (a)).
+Buildings and taxiways are correctly placed — move ONLY the runway endpoints.
+
+VERIFY (the test that matches what the user sees):
+  1. Landing aircraft's first ground-contact position falls within the first
+     ~600m of the drawn runway (touchdown zone), not before the runway starts.
+  2. No building footprint intersects any drawn runway polyline — check all
+     three runways, report any intersection.
+  3. Show before/after drawn endpoints vs official thresholds.
