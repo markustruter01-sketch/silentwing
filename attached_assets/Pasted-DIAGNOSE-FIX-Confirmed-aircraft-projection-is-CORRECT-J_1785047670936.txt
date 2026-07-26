@@ -1,0 +1,34 @@
+DIAGNOSE + FIX. Confirmed: aircraft projection is CORRECT (JST745 math verified).
+Real aircraft sit ~430m EAST of where yssy_real.ts places the runways. Since
+aircraft positions are ground truth, the RUNWAY GEOMETRY in yssy_real.ts is
+misplaced. Fix the geometry to match reality.
+
+DIAGNOSE:
+  a. Get the OFFICIAL AIP/authoritative lat/lon coordinates for Sydney's runway
+     thresholds (16R/34L, 16L/34R, 07/25). Project them with the SAME verified
+     formula (origin -33.9461/151.1772, xscale 92346.982, y=-(lat-lat0)*110540).
+     Show the projected scene coords for each threshold.
+  b. Compare those OFFICIAL projected coords to what's currently in yssy_real.ts
+     for the same runways. Show the delta. I expect ~430m offset if the current
+     geometry is wrong.
+  c. Confirm which is right by cross-checking against the live aircraft: JST745
+     on takeoff on 34L/34R at scene (1383.7, 2038.6) — do the OFFICIAL runway
+     coords put a 34 runway centreline near x=1383, or does the current
+     yssy_real.ts (which puts it at x=129-951)? The official coords should
+     bracket the aircraft.
+
+THEN FIX:
+  - Replace the runway coordinates in yssy_real.ts with the correctly-projected
+    OFFICIAL AIP coordinates so runways sit where real aircraft actually are.
+  - CRITICALLY: the taxiways, aprons, gates, and buildings in the Sydney files
+    were projected/stitched in the SAME (wrong) frame as the old runways — if
+    only the runways move, everything else will now be offset from them. Check:
+    are the taxiways/buildings consistent with the OLD runway coords or with the
+    aircraft? Whatever frame the rest of the geometry is in, ALL Sydney geometry
+    (runways, taxiways, aprons, gates, buildings) must end up in ONE frame that
+    matches the real aircraft positions. State how you reconciled them.
+
+VERIFY:
+  - JST745 (and QLK1514) now sit within ~25m of the runway centreline they're
+    physically on. Show both perpendicular distances after the fix — both should
+    be small.
