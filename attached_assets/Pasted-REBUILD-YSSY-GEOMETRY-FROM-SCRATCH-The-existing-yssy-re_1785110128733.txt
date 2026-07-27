@@ -1,0 +1,46 @@
+REBUILD YSSY GEOMETRY FROM SCRATCH. The existing yssy_real.ts has been patched
+four times and cannot be trusted. Do not patch it again. Generate a completely
+new file from authoritative data. Do not reuse ANY coordinate from the old file.
+
+STEP 1 — Authoritative runway thresholds:
+Get the official published threshold coordinates for all six YSSY thresholds
+(16R, 34L, 16L, 34R, 07, 25) from AIP ERSA / official sources. Runway facts to
+validate against: 16R/34L is 3962m, 16L/34R is 2438m, 07/25 is 2530m; the
+parallels are ~1037m apart; all at the published true bearings. If any sourced
+threshold produces a runway length that disagrees with these published lengths
+by more than 20m, the coordinate is wrong — re-source it. Do NOT proceed with
+thresholds that fail the length check.
+
+STEP 2 — Project and build runways:
+Project all six thresholds with the standard formula (origin -33.9461/151.1772,
+x=(lon-lon0)*111320*cos(lat0), y=(lat-lat0)*110540, +y north). Each runway is a
+straight line between its two thresholds. Write a NEW file yssy_real_v2.ts.
+
+STEP 3 — Ground-truth verification BEFORE going further (hard gate):
+Watch live traffic for a few polls. For at least 2 aircraft on ground roll
+(gs > 60kt on a runway): perpendicular distance to the new centreline must be
+< 25m, AND their along-axis ground-roll positions must fall INSIDE the drawn
+runway (not before its start or past its end). For 1 landing aircraft:
+touchdown must fall within the drawn runway. If ANY check fails, STOP and
+report — do not build taxiways on a failed base.
+
+STEP 4 — Taxiways, re-projected against the verified base:
+Re-stitch the taxiways from the raw OSM data (the stitching pipeline was fine)
+projected with the same formula. Sanity gate: taxiway network must sit BETWEEN
+and ALONGSIDE the verified runways, connectors must reach within 40m of runway
+edges.
+
+STEP 5 — Buildings, with a hard exclusion rule:
+Re-project buildings from the OSM data. Then DELETE every building whose
+footprint intersects or comes within 80m of any runway centreline — no real
+building is that close to a runway; anything closer is bad data. List what was
+deleted. Geometric check: ZERO building-runway intersections. This rule is
+non-negotiable.
+
+STEP 6 — Swap and verify:
+Replace the old file with v2 in the YSSY profile. Verify on screen: aircraft
+land ON runways, take off FROM runway starts, no building touches any runway,
+taxiways connect. Report the STEP 3 numbers and the STEP 5 deletion list.
+
+The gates in steps 1, 3 and 5 are hard stops. A runway that fails the length
+check or the aircraft check does not proceed. Nothing renders on a runway.

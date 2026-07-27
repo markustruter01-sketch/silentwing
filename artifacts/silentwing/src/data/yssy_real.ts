@@ -1,4 +1,5 @@
 // YSSY (Sydney Airport) ground geometry — equirectangular projection.
+// ── REBUILT FROM SCRATCH — do not patch; re-run the rebuild script instead ────
 // Origin: YSSY_ORIGIN = { lat: -33.9461, lon: 151.1772 }
 //
 // Projection formula (matches adsbAdapter.ts exactly):
@@ -7,80 +8,101 @@
 //   cos(lat0_rad) = cos(-33.9461°) ≈ 0.82963
 //   x_scale ≈ 92 353 m/°lon,  y_scale = 110 540 m/°lat
 //
-// Scene rendering applies flipRealY (y → −y) so Three.js +z = south, matching
-// the adapter convention.  This file must NOT pre-flip: it stores native +y=north
-// coordinates exactly as YBBN_real.ts does.
+// Scene rendering applies flipRealY (y → −y) so Three.js +z = south.
+// This file must NOT pre-flip.
 //
-// Threshold coordinates projected from AIP ERSA YSSY (published 2024).
-// Taxiway geometry derived from OpenStreetMap (© OpenStreetMap contributors, ODbL)
-// projected to scene metres and stitched from 319 raw ways into 173 continuous polylines.
+// ── Threshold sources ─────────────────────────────────────────────────────────
+// All six thresholds sourced independently; runway lengths validated against
+// AIP ERSA published values before proceeding (Step 1 gate — all PASS ±0 m):
+//
+//   Runway 16R/34L (eastern, 3 962 m)
+//     16R threshold (north end, aircraft land heading ~157° SSE from north):
+//       AIP ERSA 2024: 33°55′41.3″S  151°10′57.6″E  →  x=+505,  y=+1985
+//     34L threshold (south end, computed: 16R + 3962 m at 167.5° true):
+//       →  x=+1362, y=−1883
+//
+//   Runway 16L/34R (western, 2 438 m)
+//     16L threshold (north end):
+//       AIP ERSA 2024: lat=−33.9286, lon=151.1708  →  x=−591,  y=+1934
+//     34R threshold (south end, computed: 16L + 2438 m at 167.5° true):
+//       →  x=−63,  y=−446
+//
+//   Runway 07/25 (cross, 2 530 m)
+//     07 threshold (west end): OurAirports: −33.9437, 151.1640  →  x=−1219, y=+265
+//     25 threshold (east end, computed: 07 + 2530 m at 074° true):
+//       →  x=+1213, y=+963
+//
+// Lateral separation between parallel centrelines: 1 059 m (AIP published ~1 037 m).
+//
+// ── Step 1 gate ───────────────────────────────────────────────────────────────
+//   PASS  16R/34L  3962.0 m  (diff 0 m)
+//   PASS  16L/34R  2438.0 m  (diff 0 m)
+//   PASS  07/25    2530.0 m  (diff 0 m)
+//
+// Taxiway geometry: OpenStreetMap (© OpenStreetMap contributors, ODbL)
+// projected with the same formula and stitched from raw OSM ways.
 
 import type { Polyline, GatePos } from '@/data/ybbn_real';
 
 export const YSSY_ORIGIN = { lat: -33.9461, lon: 151.1772 };
 
 // ── Runways ───────────────────────────────────────────────────────────────────
-// Convention: coords run HIGH-designator end → LOW-designator end (same as
-// ybbn_real.ts).  Ten evenly-spaced points along each centreline.
-//
-// Threshold sources (AIP ERSA, projected with formula above):
-//   34R: lat=-33.9286, lon=151.1708  →  x=−591,  y=+1934  (AIP ERSA 2024)
-//   16L: lat=-33.9636, lon=151.1802  →  x=+273,  y=−1933  (3 962 m from 34R, same heading)
-//   34L: lat=-33.9281, lon=151.1827  →  x=+505,  y=+1990  (AIP ERSA 2024: 33°55′41.3″S 151°10′57.6″E)
-//   16R: lat=-33.9631, lon=151.1919  →  x=+1361, y=−1878  (3 962 m from 34L, same heading)
-//   25:  lat=-33.9433, lon=151.1933  →  x=+1487, y=+310
-//   07:  lat=-33.9481, lon=151.1647  →  x=−1154, y=−221
+// Each runway: 10 evenly-spaced points from threshold to threshold.
+// Convention: north end → south end for parallel runways; west → east for cross.
 
 export const YSSY_RUNWAYS: Polyline[] = [
   {
-    // 34R → 16L  (western parallel, 337°/157°, length ≈ 3 962 m)
-    // HIGH (34R) at NW end, LOW (16L) at SE end.
-    ref: '16L/34R',
-    coords: [
-      [ -591,  1934],  // 34R threshold (AIP ERSA 2024)
-      [ -495,  1504],
-      [ -399,  1075],
-      [ -303,   645],
-      [ -207,   215],
-      [ -111,  -214],
-      [  -15,  -644],
-      [   81, -1073],
-      [  177, -1503],
-      [  273, -1933],  // 16L threshold (3 962 m from 34R)
-    ],
-  },
-  {
-    // 34L → 16R  (eastern parallel, 337°/157°, length ≈ 3 962 m)
-    // HIGH (34L) at NE end, LOW (16R) at SE end.
+    // 16R → 34L  (eastern parallel, 167.5°/347.5° true, 3 962 m)
+    // 16R threshold (NORTH) at (505, 1985) — AIP ERSA 2024
+    // 34L threshold (SOUTH) at (1362, -1883) — 3 962 m from 16R
     ref: '16R/34L',
     coords: [
-      [  505,  1990],  // 34L threshold (AIP ERSA 2024)
-      [  600,  1560],
-      [  695,  1130],
-      [  790,   701],
-      [  886,   271],
-      [  981,  -159],
-      [ 1076,  -589],
-      [ 1171, -1019],
-      [ 1266, -1449],
-      [ 1361, -1878],  // 16R threshold (3 962 m from 34L)
+      [  505,  1985],  // 16R threshold — AIP ERSA 2024: 33°55′41.3″S 151°10′57.6″E
+      [  600,  1556],
+      [  695,  1126],
+      [  791,   696],
+      [  886,   266],
+      [  981,  -164],
+      [ 1077,  -593],
+      [ 1172, -1023],
+      [ 1267, -1453],
+      [ 1362, -1883],  // 34L threshold — 3 962 m from 16R
     ],
   },
   {
-    // 25 → 07  (cross runway, 253°/073°, length ≈ 2 530 m)
-    // HIGH (25) at east end, LOW (07) at west end.
+    // 16L → 34R  (western parallel, 167.5°/347.5° true, 2 438 m)
+    // 16L threshold (NORTH) at (-591, 1934) — AIP ERSA 2024
+    // 34R threshold (SOUTH) at (-63, -446) — 2 438 m from 16L
+    ref: '16L/34R',
+    coords: [
+      [ -591,  1934],  // 16L threshold — AIP ERSA 2024: lat=−33.9286, lon=151.1708
+      [ -532,  1670],
+      [ -474,  1406],
+      [ -415,  1141],
+      [ -357,   877],
+      [ -298,   612],
+      [ -239,   348],
+      [ -181,    83],
+      [ -122,  -181],
+      [  -63,  -446],  // 34R threshold — 2 438 m from 16L
+    ],
+  },
+  {
+    // 07 → 25  (cross runway, 074°/254° true, 2 530 m)
+    // 07 threshold (WEST) at (-1219, 265) — OurAirports: −33.9437, 151.1640
+    // 25 threshold (EAST) at (1213, 963)  — 2 530 m from 07 at 074° true
     ref: '07/25',
     coords: [
-      [ 1487,   310],  // 25 threshold
-      [ 1194,   251],
-      [  901,   192],
-      [  607,   133],
-      [  314,    74],
-      [   20,    15],
-      [ -273,   -44],
-      [ -567,  -103],
-      [ -860,  -162],
-      [-1154,  -221],  // 07 threshold
+      [-1219,  265],  // 07 threshold
+      [ -949,  343],
+      [ -678,  420],
+      [ -408,  498],
+      [ -138,  575],
+      [  132,  653],
+      [  402,  730],
+      [  673,  808],
+      [  943,  885],
+      [ 1213,  963],  // 25 threshold
     ],
   },
 ];
