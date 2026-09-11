@@ -1,0 +1,72 @@
+GOAL
+Remove the non-functional NOTAM panel from the SilentWing interface. It is
+currently a duplicate weather panel that shows no useful data, and there is
+no NOTAM data source available for Australian airports.
+
+RISK CLASS
+[BEHAVIOR-CHANGING]
+
+DONE WHEN
+The app's bottom-left stack shows only two panels: the METAR panel and the
+weather forecast panel. The panel headed "WX · YBBN" is gone. pnpm typecheck
+passes.
+
+SCOPE
+artifacts/silentwing/src/App.tsx
+artifacts/silentwing/src/components/panels/NotamWidget.tsx
+
+DO NOT
+- Do not touch MetarWidget.tsx or WeatherWidget.tsx. Both work correctly.
+- Do not touch the server route artifacts/api-server/src/routes/notam.ts or
+  its registration. The server side stays exactly as it is.
+- Do not change the layout, spacing, positioning or styling of the container
+  div that holds the panels. Only remove one child from it.
+- Do not add, remove or upgrade any package.
+- Do not fix anything else you notice. Report it instead.
+
+STEPS
+1. First, find every place NotamWidget is used. Run:
+
+     grep -rn "NotamWidget" artifacts/ --include=*.ts --include=*.tsx
+
+   Paste the raw result.
+
+2. If that grep shows any importer OTHER than
+   artifacts/silentwing/src/App.tsx, STOP. Do not delete anything. Report
+   what you found and end the task.
+
+3. If App.tsx is the only importer, continue.
+
+4. In artifacts/silentwing/src/App.tsx, delete this import line:
+
+     import NotamWidget    from '@/components/panels/NotamWidget';
+
+5. In artifacts/silentwing/src/App.tsx, find the bottom-left info stack. It
+   currently looks like this:
+
+     <NotamWidget />
+     {/* NOAA METAR/TAF — authoritative aviation weather; drives runway selection */}
+     <div className="pointer-events-auto">
+
+   Delete only the <NotamWidget /> line. Leave everything around it exactly
+   as it is, including the comment and the div.
+
+6. Update the comment on the container div above it. It currently reads:
+
+     {/* ── Info stack — NOTAMs above weather, bottom-left ── */}
+
+   Change it to:
+
+     {/* ── Info stack — weather, bottom-left ── */}
+
+7. Delete the file:
+   artifacts/silentwing/src/components/panels/NotamWidget.tsx
+
+8. Run: pnpm typecheck
+   Paste the full raw output.
+
+REPORT
+- The raw grep result from step 1.
+- The raw output of pnpm typecheck.
+- Every file you touched or deleted.
+- Anything else you noticed, described but NOT changed.

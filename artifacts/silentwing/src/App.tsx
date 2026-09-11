@@ -10,7 +10,6 @@ import WelcomeModal        from '@/components/ui/WelcomeModal';
 import OurAirportsPanel    from '@/components/dev/OurAirportsPanel';
 import WeatherWidget  from '@/components/panels/WeatherWidget';
 import MetarWidget    from '@/components/panels/MetarWidget';
-import NotamWidget    from '@/components/panels/NotamWidget';
 import { deriveActiveRunwayDirection } from '@/airports/helpers';
 import { getSimAdapter } from '@/sim/engine';
 import { AdsbAdapter, HEALTH_LAGGING_MS, HEALTH_STALLED_MS } from '@/feed/adsbAdapter';
@@ -636,9 +635,8 @@ export default function App() {
           }
         />
 
-        {/* ── Info stack — NOTAMs above weather, bottom-left ── */}
+        {/* ── Info stack — weather, bottom-left ── */}
         <div className="absolute bottom-6 left-14 z-40 pointer-events-none select-none flex flex-col gap-2" style={{ maxWidth: 420 }}>
-          <NotamWidget />
           {/* NOAA METAR/TAF — authoritative aviation weather; drives runway selection */}
           <div className="pointer-events-auto">
             <MetarWidget
