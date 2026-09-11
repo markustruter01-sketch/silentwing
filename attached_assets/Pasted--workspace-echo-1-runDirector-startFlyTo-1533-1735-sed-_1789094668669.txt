@@ -1,0 +1,489 @@
+~/workspace$ echo "=== 1. runDirector + startFlyTo (1533-1735) ==="
+sed -n '1533,1735p' artifacts/silentwing/src/components/views/AirspaceView3D.tsx
+
+echo "=== 2. Pointer + keyboard handlers (3440-3600) ==="
+sed -n '3440,3600p' artifacts/silentwing/src/components/views/AirspaceView3D.tsx
+
+echo "=== 3. SceneState director fields (1370-1480) ==="
+sed -n '1370,1480p' artifacts/silentwing/src/components/views/AirspaceView3D.tsx
+
+echo "=== DONE ==="
+=== 1. runDirector + startFlyTo (1533-1735) ===
+function runDirector(st: SceneState, camera: THREE.PerspectiveCamera, nowMs: number): void {
+  const d = st.dir;
+
+  // ── 1. Check for a new alert (always highest priority) ───────────────────
+  // Guard: only start the fly when we can resolve a real conflict midpoint.
+  // If the alert's aircraft haven't been spawned into acMap yet, alertMidpoint
+  // returns orbitTarget as a fallback — flying there produces an invisible focus
+  // on empty airspace, so we retry the check every frame until a real position
+  // is available.  d.alertId is NOT set here, keeping the retry alive.
+  if (st.alertFocusId && st.alertFocusId !== d.alertId && d.phase !== 'hold_alert') {
+    const mp        = alertMidpoint(st, st.alertFocusId);
+    const horizDist = Math.hypot(mp.x - st.orbitTarget.x, mp.z - st.orbitTarget.z);
+    // hasTarget: aircraft are in the scene (> 100 m from origin) AND within the
+    // airport's footprint (< DIRECTOR_MAX_ALERT_DIST from centre).  Alerts beyond
+    // that radius are distant enroute traffic — skip them and wait for a closer one.
+    const hasTarget = horizDist > 100 && horizDist < DIRECTOR_MAX_ALERT_DIST;
+
+    if (hasTarget) {
+      const horiz = new THREE.Vector3(camera.position.x - mp.x, 0, camera.position.z - mp.z);
+      if (horiz.length() < 1) horiz.set(0, 0, 1);
+      horiz.normalize().multiplyScalar(900);
+
+      const camTo = new THREE.Vector3(mp.x + horiz.x, mp.y + 700, mp.z + horiz.z);
+      const fwd   = new THREE.Vector3();
+      camera.getWorldDirection(fwd);
+
+      d.flyFrom.copy(camera.position);
+      d.flyTo.copy(camTo);
+      d.lookFrom.copy(camera.position.clone().addScaledVector(fwd, 2000));
+      d.lookTo.copy(mp);
+      d.flyStartMs = nowMs;
+      d.flyMs      = 2_000;
+      d.alertId    = st.alertFocusId;
+      d.phase      = 'fly_alert';
+      d.lookAt.copy(d.lookFrom);
+      console.log(`[DIRECTOR] alert interrupt → ${d.alertId}`);
+    }
+    // else: aircraft not yet in scene — d.alertId stays null, retry next frame
+  }
+
+  // ── 2. State machine ─────────────────────────────────────────────────────
+  switch (d.phase) {
+
+    case 'orbit': {
+      st.angle += ORBIT_SPEED;
+      camera.position.set(
+        st.orbitTarget.x + st.orbitRadius * Math.cos(st.angle),
+        st.orbitElevation,
+        st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle),
+      );
+      camera.lookAt(st.orbitTarget);
+
+      const subject = pickDirectorAircraft(st);
+      if (subject) {
+        const b = st.acMap.get(subject.id);
+        if (b) {
+          const lookTarget = b.renderPos.clone();
+          lookTarget.y = Math.max(MIN_LOOK_Y, lookTarget.y);
+          const camTo  = lookTarget.clone().add(DIRECTOR_CAM_OFFSET);
+          const fwd2   = new THREE.Vector3();
+          camera.getWorldDirection(fwd2);
+
+          d.flyFrom.copy(camera.position);
+          d.flyTo.copy(camTo);
+          d.lookFrom.copy(camera.position.clone().addScaledVector(fwd2, 2000));
+          d.lookTo.copy(lookTarget);
+          d.flyStartMs = nowMs;
+          d.flyMs      = 3_000;
+          d.acId       = subject.id;
+          d.phase      = 'fly_ac';
+          d.lookAt.copy(d.lookFrom);
+          console.log(`[DIRECTOR] → ${subject.kind} ${d.acId}`);
+        }
+      }
+      break;
+    }
+
+    case 'fly_alert': {
+      const t  = Math.min((nowMs - d.flyStartMs) / d.flyMs, 1);
+      const et = easeInOut(t);
+      camera.position.lerpVectors(d.flyFrom, d.flyTo, et);
+      const lk = new THREE.Vector3().lerpVectors(d.lookFrom, d.lookTo, et);
+      lk.y = Math.max(MIN_LOOK_Y, lk.y);
+      camera.lookAt(lk);
+      d.lookAt.copy(lk);
+      if (t >= 1) {
+        d.phase       = 'hold_alert';
+        d.holdUntilMs = nowMs + 10_000;
+        console.log(`[DIRECTOR] alert ${d.alertId} — hold 10 s`);
+      }
+      break;
+    }
+
+    case 'hold_alert': {
+      if (d.alertId) {
+        const mp = alertMidpoint(st, d.alertId);
+        d.lookAt.lerp(mp, 0.03);
+      }
+      camera.position.copy(d.flyTo);
+      camera.lookAt(d.lookAt);
+      if (nowMs >= d.holdUntilMs) {
+        console.log(`[DIRECTOR] alert ${d.alertId} done — returning to orbit`);
+        d.alertId = null;
+        d.phase   = 'orbit';
+        const done = st.alertFocusDone;
+        st.alertFocusDone = null;
+        st.alertFocusId   = null;
+        // Glide camera back to orbit position instead of snapping.
+        // Switch into the shared 'returning' animation so the director
+        // picks up the next alert as soon as the camera re-enters orbit.
+        const tx = st.orbitTarget.x + st.orbitRadius * Math.cos(st.angle);
+        const tz = st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle);
+        const fwdV = new THREE.Vector3();
+        camera.getWorldDirection(fwdV);
+        st.flyFrom.copy(camera.position);
+        st.flyTo.set(tx, st.orbitElevation, tz);
+        st.flyLookFrom.copy(camera.position).addScaledVector(fwdV, 2000);
+        st.flyLookTo.copy(st.orbitTarget);
+        st.flyProgress = 0;
+        st.cameraMode  = 'returning';
+        done?.();
+      }
+      break;
+    }
+
+    case 'fly_ac': {
+      const b = d.acId ? st.acMap.get(d.acId) : null;
+      if (!b) { d.acId = null; d.phase = 'orbit'; break; }
+
+      const t  = Math.min((nowMs - d.flyStartMs) / d.flyMs, 1);
+      const et = easeInOut(t);
+
+      // Track moving aircraft continuously during the fly.
+      const lookTarget = b.renderPos.clone();
+      lookTarget.y = Math.max(MIN_LOOK_Y, lookTarget.y);
+      d.flyTo.copy(lookTarget.clone().add(DIRECTOR_CAM_OFFSET));
+      d.lookTo.copy(lookTarget);
+
+      camera.position.lerpVectors(d.flyFrom, d.flyTo, et);
+      const lk = new THREE.Vector3().lerpVectors(d.lookFrom, d.lookTo, et);
+      lk.y = Math.max(MIN_LOOK_Y, lk.y);
+      camera.lookAt(lk);
+      d.lookAt.copy(lk);
+
+      if (t >= 1) {
+        d.phase = 'hold_ac';
+        d.lookAt.copy(lookTarget);
+        console.log(`[DIRECTOR] arrived at ${d.acId}`);
+      }
+      break;
+    }
+
+    case 'hold_ac': {
+      const b            = d.acId ? st.acMap.get(d.acId) : null;
+      const stillPriority = b && !b.isGroundVehicle &&
+        (b.phase === 'approach' || b.phase === 'landing' || b.phase === 'takeoff');
+
+      if (!stillPriority) {
+        console.log(`[DIRECTOR] ${d.acId} left priority phase — orbit`);
+        d.acId = null; d.phase = 'orbit';
+        break;
+      }
+
+      const lookTarget = b!.renderPos.clone();
+      lookTarget.y = Math.max(MIN_LOOK_Y, lookTarget.y);
+      camera.position.lerp(lookTarget.clone().add(DIRECTOR_CAM_OFFSET), 0.04);
+      d.lookAt.lerp(lookTarget, 0.06);
+      camera.lookAt(d.lookAt);
+      break;
+    }
+  }
+}
+
+// ── Helper: begin fly-to animation toward an aircraft ────────────────────────
+function startFlyTo(st: SceneState, acId: string): void {
+  const ac = st.latestAircraftMap.get(acId);
+  const acPos = ac
+    ? toV3(ac.position.x, ac.position.y, ac.position.alt)
+    : new THREE.Vector3(0, 0, 0);
+
+  // Always look at a point at least MIN_LOOK_Y above the ground so the camera
+  // never aims into the tarmac when following ground / low-altitude aircraft.
+  const lookPos = acPos.clone();
+  lookPos.y = Math.max(MIN_LOOK_Y, lookPos.y);
+
+  const targetCamPos = lookPos.clone().add(INSPECT_OFFSET);
+
+  // Derive current camera lookAt from its forward direction
+  const dir = new THREE.Vector3();
+  st.camera.getWorldDirection(dir);
+  const currentLookAt = st.camera.position.clone().add(dir.multiplyScalar(2000));
+
+  st.cameraMode    = 'inspect';
+  st.selectedAcId  = acId;
+  st.flyFrom.copy(st.camera.position);
+  st.flyTo.copy(targetCamPos);
+  st.flyLookFrom.copy(currentLookAt);
+  st.flyLookTo.copy(lookPos);
+  st.flyProgress   = 0;
+}
+
+// ── Props ─────────────────────────────────────────────────────────────────────
+export interface AirspaceView3DProps {
+=== 2. Pointer + keyboard handlers (3440-3600) ===
+        camModeRef.current('orbit');
+        console.log('[3D CAM] pan idle 10 s → returning (smooth fly-back to orbit)');
+      }, 10_000);
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      if (e.button === 2) {
+        st.rightDragActive = false;
+        return;
+      }
+      if (e.button !== 0) return;
+
+      st.leftDragActive = false;
+
+      const dx   = e.clientX - st.mouseDownX;
+      const dy   = e.clientY - st.mouseDownY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      // If the pointer moved more than 6 px it was a rotate drag — don't raycast
+      if (dist > 6) return;
+
+      // Short tap — raycast against aircraft cones
+      const rect = canvas.getBoundingClientRect();
+      const mx   = ((e.clientX - rect.left) / rect.width)  *  2 - 1;
+      const my   = ((e.clientY - rect.top)  / rect.height) * -2 + 1;
+      raycaster.setFromCamera(new THREE.Vector2(mx, my), camera);
+      const hits = raycaster.intersectObjects([...st.coneToId.keys()]);
+
+      // Empty-canvas click: return without touching camera or director state.
+      // When directorMode is on, this means the director is never interrupted
+      // by accidental taps on blank airspace.
+      if (!hits.length) return;
+
+      const hitMesh = hits[0].object as THREE.Mesh;
+      const acId    = st.coneToId.get(hitMesh);
+      if (!acId) return;
+
+      // Aircraft click: this IS an intentional manual override even when the
+      // director is active.  Spec: "clicking on an aircraft cone while director
+      // is on still flies to that aircraft (inspect mode), which is the
+      // expected manual override — director resumes automatically once the
+      // inspector panel is closed and cameraMode returns to orbit."
+      const now = Date.now();
+      if (acId === st.lastClickAcId && now - st.lastClickTime < 400) {
+        // Double-click — follow mode
+        st.cameraMode = 'follow';
+        camModeRef.current('follow');
+        console.log(`[3D CAM] dblclick ${acId} → follow`);
+      } else {
+        // Single click — fly to aircraft, open panel
+        startFlyTo(st, acId);
+        selectRef.current(acId);
+        camModeRef.current('inspect');
+        console.log(`[3D CAM] click ${acId} → inspect (fly-to progress=0)`);
+      }
+      st.lastClickAcId = acId;
+      st.lastClickTime = now;
+    };
+
+    canvas.addEventListener('pointerdown', onPointerDown);
+    canvas.addEventListener('pointermove', onPointerMove);
+    canvas.addEventListener('pointerup',   onPointerUp);
+
+    // ── Keyboard handler: O = snap to orbit, Esc = back-out chain ───────────
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+      // O — direct jump to auto-orbit from any state, clears selection
+      if (e.key.toUpperCase() === 'O') {
+        const prev = st.cameraMode;
+        st.cameraMode   = 'orbit';
+        st.selectedAcId = null;
+        st.flyProgress  = 1;
+        selectRef.current(null);
+        camModeRef.current('orbit');
+        console.log(`[3D CAM] O: ${prev} → orbit  [snap; selection cleared]`);
+        return;
+      }
+
+      if (e.key !== 'Escape') return;
+
+      const prev = st.cameraMode;
+
+      // Director: Esc during aircraft-hold drops back to orbit.
+      if (st.directorMode && (st.dir.phase === 'hold_ac' || st.dir.phase === 'fly_ac')) {
+        st.dir.phase = 'orbit';
+        st.dir.acId  = null;
+        console.log('[3D CAM] Esc: director → orbit');
+        return;
+      }
+
+      if (prev === 'follow') {
+        st.cameraMode = 'inspect';
+        st.flyProgress = 1; // already at target; stay put
+        camModeRef.current('inspect');
+        console.log(`[3D CAM] Esc: follow → inspect  [panel stays, camera holds]`);
+
+      } else if (prev === 'inspect') {
+        // Close panel and smoothly fly back to the default overview.
+        st.selectedAcId = null;
+        selectRef.current(null);
+        const cam = st.camera;
+        const tx  = st.orbitTarget.x + st.orbitRadius * Math.cos(st.angle);
+        const tz  = st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle);
+        st.flyFrom.copy(cam.position);
+        st.flyTo.set(tx, st.orbitElevation, tz);
+        st.flyLookFrom.copy(st.orbitTarget);
+        st.flyLookTo.copy(st.orbitTarget);
+        st.flyProgress = 0;
+        st.cameraMode  = 'returning';
+        camModeRef.current('orbit');
+        console.log(`[3D CAM] Esc: inspect → returning (smooth fly-back, panel closed)`);
+
+      } else if (prev === 'manual') {
+        // Smooth fly-back instead of a position snap.
+        const cam = st.camera;
+        const tx  = st.orbitTarget.x + st.orbitRadius * Math.cos(st.angle);
+        const tz  = st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle);
+        st.flyFrom.copy(cam.position);
+        st.flyTo.set(tx, st.orbitElevation, tz);
+        st.flyLookFrom.copy(st.orbitTarget);
+        st.flyLookTo.copy(st.orbitTarget);
+        st.flyProgress = 0;
+        st.cameraMode  = 'returning';
+        camModeRef.current('orbit');
+        console.log(`[3D CAM] Esc: manual → returning (smooth fly-back to orbit)`);
+
+      } else {
+        // Already in orbit — nothing to unwind
+        console.log(`[3D CAM] Esc: orbit → orbit  [no-op]`);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+
+    // ── Cleanup ──────────────────────────────────────────────────────────────
+    return () => {
+      ro.disconnect();
+      cancelAnimationFrame(st.animId);
+      // Fire the alert-done callback on unmount so App clears alertFocusId.
+      if (st.alertFocusId) {
+        const done = st.alertFocusDone;
+        st.alertFocusDone = null;
+        st.alertFocusId   = null;
+        done?.();
+      }
+      if (st.panResumeTimer !== null) clearTimeout(st.panResumeTimer);
+      canvas.removeEventListener('wheel',        onWheel);
+      canvas.removeEventListener('contextmenu',  onContextMenu);
+      canvas.removeEventListener('pointerdown',  onPointerDown);
+      canvas.removeEventListener('pointermove',  onPointerMove);
+      canvas.removeEventListener('pointerup',    onPointerUp);
+      window.removeEventListener('keydown', onKey);
+      st.acMap.forEach(b => {
+        scene.remove(b.cone, b.stem, b.trail, b.label);
+        if (b.halo)      scene.remove(b.halo);
+        if (b.pinRing)   scene.remove(b.pinRing);
+        if (b.velVec)    scene.remove(b.velVec);
+        if (b.sepBubble) scene.remove(b.sepBubble);
+        if (b.wakeL)     scene.remove(b.wakeL);
+        if (b.wakeR)     scene.remove(b.wakeR);
+=== 3. SceneState director fields (1370-1480) ===
+  renderer:    THREE.WebGLRenderer;
+  scene:       THREE.Scene;
+  camera:      THREE.PerspectiveCamera;
+  animId:      number;
+  angle:       number;
+  acMap:       Map<string, AcBundle>;
+  coneToId:    Map<THREE.Mesh, string>; // for raycasting
+  // camera mode
+  cameraMode:  CameraMode;
+  // fly-to animation (used during 'inspect' with flyProgress < 1)
+  flyFrom:     THREE.Vector3;
+  flyTo:       THREE.Vector3;
+  flyLookFrom: THREE.Vector3;
+  flyLookTo:   THREE.Vector3;
+  flyProgress: number;              // 0 → 1; 1 = arrived
+  // selection
+  selectedAcId: string | null;
+  // latest aircraft snapshot for camera tracking (updated each data tick)
+  latestAircraftMap: Map<string, Aircraft>;
+  // click tracking for double-click detection
+  mouseDownX:    number;
+  mouseDownY:    number;
+  lastClickAcId: string | null;
+  lastClickTime: number;
+  // wall-clock timestamp (performance.now, ms) of the most recent poll arrival
+  lastPollMs:    number;
+  // measured interval between the two most recent accepted polls (ms); initially 8000
+  pollDurationMs: number;
+  // zoom/pan/rotate state
+  orbitRadius:      number;          // mutable zoom radius (starts at ORBIT_RADIUS)
+  orbitElevation:   number;          // camera height above scene origin (mutable via drag)
+  orbitTarget:      THREE.Vector3;   // mutable orbit centre (panned by right-drag)
+  rightDragActive:  boolean;
+  rightDragLastX:   number;
+  rightDragLastY:   number;
+  panResumeTimer:   ReturnType<typeof setTimeout> | null;
+  leftDragActive:   boolean;         // left-drag arc-rotate
+  leftDragLastX:    number;
+  leftDragLastY:    number;
+  /** Mirror of the directorMode prop — updated each render via sync effect. */
+  directorMode:     boolean;
+  /** Aircraft ID → alert severity for the current snapshot (Phase 6A). */
+  alertedIds: Map<string, 'advisory' | 'caution' | 'critical'>;
+  /** Set of aircraft IDs currently pinned by the controller. */
+  pinnedAcIds: Set<string>;
+  /** Full active SWAlert list — used by the threat beam renderer. */
+  activeAlerts: SWAlert[];
+  /** Alert ID → live beam entry (line + midSphere). */
+  beamMap: Map<string, BeamEntry>;
+  /** Alert ID → expanding pulse ring cluster on the ground plane. */
+  pulseRingMap: Map<string, PulseRingEntry>;
+  /** Alert ID → floating 3D canvas-sprite label at the conflict midpoint. */
+  labelMap: Map<string, AlertLabelEntry>;
+  /** Aircraft ID → takeoff vertical-line + sign indicator. */
+  takeoffMap: Map<string, TakeoffIndicatorEntry>;
+  /** Aircraft ID → approach/landing diagonal-line + sign indicator. */
+  approachMap: Map<string, ApproachIndicatorEntry>;
+  /** Aircraft ID → glide slope projected path line (approach phase only). */
+  glideSlopeMap: Map<string, GlideSlopeEntry>;
+  /** All runway threshold positions [designator, x, z] in Three.js scene coords.
+   *  Computed once at scene-setup and used every rAF frame for glide slope targeting. */
+  allThresholds: Array<[string, number, number]>;
+  /** Active landing runway direction stem (e.g. "19"), derived from weather.
+   *  Kept on st so the rAF tick can filter thresholds without a stale closure. */
+  activeRunwayDirection: string | null;
+
+  // ── Task 33 — visual aids ─────────────────────────────────────────────────
+  /** Mirror of the showPaths prop — controls velocity vectors, sep bubbles,
+   *  wake ribbons, and taxi rings. Updated via sync effect. */
+  showPaths:   boolean;
+  /** Aircraft ID → expanding ground-plane rings for taxiing aircraft. */
+  taxiRingMap: Map<string, TaxiRingEntry>;
+
+  // ── Alert focus + director state ─────────────────────────────────────────
+  /** Alert ID currently being shown by the director, or null. */
+  alertFocusId:   string | null;
+  /** Callback to fire when the director alert hold completes. */
+  alertFocusDone: (() => void) | null;
+  /** Self-contained director camera state machine. */
+  dir: DirState;
+  /** Aircraft IDs queued for deferred spawn; drained ≤ SPAWN_PER_FRAME per rAF tick. */
+  spawnQueue:    string[];
+  /** Fast membership check — prevents re-queuing across back-to-back polls. */
+  spawnQueueIds: Set<string>;
+}
+
+// ── Director camera state machine ─────────────────────────────────────────────
+
+/** Internal state for the director's three-priority camera state machine. */
+interface DirState {
+  /** Current phase. */
+  phase: 'orbit' | 'fly_alert' | 'hold_alert' | 'fly_ac' | 'hold_ac';
+  // Shared fly-animation vectors
+  flyFrom:    THREE.Vector3;
+  flyTo:      THREE.Vector3;
+  lookFrom:   THREE.Vector3;
+  lookTo:     THREE.Vector3;
+  flyStartMs: number;  // performance.now() when fly began
+  flyMs:      number;  // total fly duration (ms)
+  // Alert hold
+  alertId:     string | null;
+  holdUntilMs: number;
+  // Aircraft follow
+  acId:    string | null;
+  // Smooth look target lerped every frame
+  lookAt:  THREE.Vector3;
+}
+
+/** Pick the highest-priority aircraft for the director.
+ *  Approach/landing (closest to threshold first) > takeoff > null. */
+function pickDirectorAircraft(st: SceneState): { id: string; kind: 'approach' | 'takeoff' } | null {
+=== DONE ===
