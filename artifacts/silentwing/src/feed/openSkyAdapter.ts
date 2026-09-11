@@ -145,7 +145,10 @@ function normaliseState(
   // Altitude: OpenSky returns METERS; convert to feet. Null when on_ground or unknown.
   const onGround = sv[IDX_ON_GROUND] as boolean;
   const baroAltM = sv[IDX_BARO_ALT] as number | null;
-  const altFt    = baroAltM != null ? baroAltM * 3.28084 : (onGround ? 0 : 0);
+  // onGround is the authoritative signal. A noisy barometric altitude must
+  // never promote a ground aircraft to airborne. Mirrors adsbAdapter.ts,
+  // where alt_baro === 'ground' forces 0.
+  const altFt = onGround ? 0 : (baroAltM != null ? baroAltM * 3.28084 : 0);
 
   // Speed: m/s → knots
   const velMs    = sv[IDX_VELOCITY] as number | null;
