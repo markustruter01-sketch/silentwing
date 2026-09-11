@@ -3563,7 +3563,13 @@ export default function AirspaceView3D({
         const tz  = st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle);
         st.flyFrom.copy(cam.position);
         st.flyTo.set(tx, st.orbitElevation, tz);
-        st.flyLookFrom.copy(st.orbitTarget);
+        // Capture where the camera is actually aimed so the look-at eases from
+        // there. Setting flyLookFrom == flyLookTo makes the aim snap to the
+        // orbit centre on frame 0 while the body glides — reads as a jerk.
+        // Same approach as the cameraMode prop-sync effect.
+        const dirV = new THREE.Vector3();
+        cam.getWorldDirection(dirV);
+        st.flyLookFrom.copy(cam.position).addScaledVector(dirV, 2000);
         st.flyLookTo.copy(st.orbitTarget);
         st.flyProgress = 0;
         st.cameraMode  = 'returning';
@@ -3577,7 +3583,13 @@ export default function AirspaceView3D({
         const tz  = st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle);
         st.flyFrom.copy(cam.position);
         st.flyTo.set(tx, st.orbitElevation, tz);
-        st.flyLookFrom.copy(st.orbitTarget);
+        // Capture where the camera is actually aimed so the look-at eases from
+        // there. Setting flyLookFrom == flyLookTo makes the aim snap to the
+        // orbit centre on frame 0 while the body glides — reads as a jerk.
+        // Same approach as the cameraMode prop-sync effect.
+        const dirV = new THREE.Vector3();
+        cam.getWorldDirection(dirV);
+        st.flyLookFrom.copy(cam.position).addScaledVector(dirV, 2000);
         st.flyLookTo.copy(st.orbitTarget);
         st.flyProgress = 0;
         st.cameraMode  = 'returning';
