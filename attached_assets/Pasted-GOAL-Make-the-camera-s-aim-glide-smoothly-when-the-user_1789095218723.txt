@@ -1,0 +1,72 @@
+GOAL
+Make the camera's aim glide smoothly when the user presses Escape, instead of
+snapping to the airport centre on the first frame.
+
+RISK CLASS
+[BEHAVIOR-CHANGING]
+
+DONE WHEN
+Pressing Escape from an aircraft panel eases both the camera position AND its
+look direction back to the overview, with no visible jerk. pnpm typecheck passes.
+
+SCOPE
+artifacts/silentwing/src/components/views/AirspaceView3D.tsx
+This is the only file you may change.
+
+DO NOT
+- Do not change the director Escape branch (the one testing st.dir.phase).
+  That is a separate fix.
+- Do not change the prop-sync effect. It is already correct and is the
+  reference this fix copies.
+- Do not change the 'returning' animation case in the render loop.
+- Do not change the pan-idle timeout handlers.
+- Do not add, remove or upgrade any package.
+- Do not fix anything else you notice. Report it instead.
+
+STEPS
+1. In artifacts/silentwing/src/components/views/AirspaceView3D.tsx, find the
+   onKey handler. Inside it, locate the branch beginning:
+
+      } else if (prev === 'inspect') {
+
+   Within that branch only, find these two adjacent lines:
+
+        st.flyLookFrom.copy(st.orbitTarget);
+        st.flyLookTo.copy(st.orbitTarget);
+
+   Replace those two lines with:
+
+        // Capture where the camera is actually aimed so the look-at eases from
+        // there. Setting flyLookFrom == flyLookTo makes the aim snap to the
+        // orbit centre on frame 0 while the body glides — reads as a jerk.
+        // Same approach as the cameraMode prop-sync effect.
+        const dirV = new THREE.Vector3();
+        cam.getWorldDirection(dirV);
+        st.flyLookFrom.copy(cam.position).addScaledVector(dirV, 2000);
+        st.flyLookTo.copy(st.orbitTarget);
+
+2. Now find the branch beginning:
+
+      } else if (prev === 'manual') {
+
+   It contains the SAME two adjacent lines. Apply the SAME replacement there,
+   using the same code exactly.
+
+3. Both branches already declare "const cam = st.camera;" above. Do not add
+   another one. Do not add any import — THREE is already imported.
+
+4. Change nothing else in the file. There must be exactly two edits.
+
+5. Run: pnpm typecheck
+   Paste the full raw output.
+
+6. Commit this change on its own, with the message:
+   "Ease camera aim on Escape instead of snapping to orbit centre"
+   Do not include any other change in this commit.
+
+REPORT
+- The raw output of pnpm typecheck.
+- Confirm AirspaceView3D.tsx is the only file you touched.
+- Confirm exactly two edits were made.
+- The commit hash.
+- Anything else you noticed, described but NOT changed.
