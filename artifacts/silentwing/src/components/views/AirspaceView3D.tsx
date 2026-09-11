@@ -3479,6 +3479,25 @@ export default function AirspaceView3D({
       // is on still flies to that aircraft (inspect mode), which is the
       // expected manual override — director resumes automatically once the
       // inspector panel is closed and cameraMode returns to orbit."
+      // Clicking an aircraft interrupts the director. runDirector only runs
+      // while cameraMode is 'orbit', so without this reset the director stays
+      // frozen in its current phase and resumes it when the camera later
+      // returns to orbit — snapping to whatever it had been tracking.
+      st.dir.phase   = 'orbit';
+      st.dir.acId    = null;
+      st.dir.alertId = null;
+
+      // If the interrupted phase was alert-related, tell App the focus is
+      // finished. Otherwise App's alertFocusId stays set and runDirector flies
+      // straight back to the same alert on the next orbit frame, undoing the
+      // user's click. Mirrors the unmount cleanup at the end of this effect.
+      if (st.alertFocusId) {
+        const done = st.alertFocusDone;
+        st.alertFocusDone = null;
+        st.alertFocusId   = null;
+        done?.();
+        console.log('[3D CAM] click interrupt — alert focus released');
+      }
       const now = Date.now();
       if (acId === st.lastClickAcId && now - st.lastClickTime < 400) {
         // Double-click — follow mode
