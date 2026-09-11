@@ -1,0 +1,79 @@
+GOAL
+When several alerts appear in the same update, make the camera director focus
+the most severe one instead of whichever happens to be encountered first.
+
+RISK CLASS
+[BEHAVIOR-CHANGING]
+
+DONE WHEN
+The new-alert effect in artifacts/silentwing/src/App.tsx compares severity
+across all newly-seen alerts before choosing one, instead of breaking out of
+the loop on the first match. pnpm typecheck passes.
+
+SCOPE
+artifacts/silentwing/src/App.tsx
+This is the only file you may change.
+
+DO NOT
+- Do not change the AlertEngine, the alert types, or anything in src/alerts/.
+- Do not change how alerts are raised, dismissed or cleared.
+- Do not rename prevCriticalIdsRef, even though its name is now misleading.
+  Renaming it is a separate task.
+- Do not change any other effect or handler in App.tsx.
+- Do not add, remove or upgrade any package.
+- Do not fix anything else you notice. Report it instead.
+
+STEPS
+1. Open artifacts/silentwing/src/App.tsx and find the effect with the comment
+   "Detect newly-fired alerts (all severities) and kick off the 3D camera
+   interrupt." Its body currently reads:
+
+     const currentAlertIds = new Set(activeAlerts.map(a => a.id));
+     let newId: string | null = null;
+     for (const id of currentAlertIds) {
+       if (!prevCriticalIdsRef.current.has(id)) { newId = id; break; }
+     }
+     prevCriticalIdsRef.current = currentAlertIds;
+     if (newId) {
+       const sev = activeAlerts.find(a => a.id === newId)?.severity ?? 'unknown';
+       console.log(`[APP] new ${sev} alert ${newId} — director interrupt`);
+       setAlertFocusId(newId);
+     }
+
+2. Replace that entire body with:
+
+     const currentAlertIds = new Set(activeAlerts.map(a => a.id));
+     // Among alerts newly seen this tick, focus the highest-severity one.
+     // Set iteration order is arrival order, not severity order, so taking
+     // the first new ID could point the director at an advisory while a
+     // critical alert fired in the same snapshot.
+     let newAlert: SWAlert | null = null;
+     for (const alert of activeAlerts) {
+       if (prevCriticalIdsRef.current.has(alert.id)) continue;
+       if (!newAlert || severityRank(alert.severity) > severityRank(newAlert.severity)) {
+         newAlert = alert;
+       }
+     }
+     prevCriticalIdsRef.current = currentAlertIds;
+     if (newAlert) {
+       console.log(`[APP] new ${newAlert.severity} alert ${newAlert.id} — director interrupt`);
+       setAlertFocusId(newAlert.id);
+     }
+
+   Both SWAlert and severityRank are already imported at the top of this
+   file. Do not add new imports.
+
+3. Change nothing else in the file.
+
+4. Run: pnpm typecheck
+   Paste the full raw output.
+
+5. Commit this change on its own, with the message:
+   "Focus highest-severity alert when several fire in one tick"
+   Do not include any other change in this commit.
+
+REPORT
+- The raw output of pnpm typecheck.
+- Confirm App.tsx is the only file you touched.
+- The commit hash.
+- Anything else you noticed, described but NOT changed.
