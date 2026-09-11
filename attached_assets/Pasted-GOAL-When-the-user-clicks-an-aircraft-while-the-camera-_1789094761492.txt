@@ -1,0 +1,79 @@
+GOAL
+When the user clicks an aircraft while the camera director is mid-flight or
+holding, fully release the director instead of leaving it frozen. Today it
+resumes its old target later and snaps the camera away.
+
+RISK CLASS
+[BEHAVIOR-CHANGING]
+
+DONE WHEN
+The onPointerUp handler in AirspaceView3D.tsx resets the director state and
+clears any active alert focus before handling the click. pnpm typecheck passes.
+
+SCOPE
+artifacts/silentwing/src/components/views/AirspaceView3D.tsx
+This is the only file you may change.
+
+DO NOT
+- Do not change the Escape key handler. Its existing behaviour is the
+  reference and must not regress.
+- Do not change runDirector, startFlyTo, or the DirState interface.
+- Do not change the empty-canvas early return. Clicking blank airspace must
+  still leave the director completely alone.
+- Do not refactor or de-duplicate the director-reset code, even though it now
+  appears in several places. That is a separate planned task.
+- Do not add, remove or upgrade any package.
+- Do not fix anything else you notice. Report it instead.
+
+STEPS
+1. Open artifacts/silentwing/src/components/views/AirspaceView3D.tsx and find
+   the onPointerUp handler. Inside it, locate this exact block:
+
+      const hitMesh = hits[0].object as THREE.Mesh;
+      const acId    = st.coneToId.get(hitMesh);
+      if (!acId) return;
+
+      // Aircraft click: this IS an intentional manual override even when the
+      // director is active.  Spec: "clicking on an aircraft cone while director
+      // is on still flies to that aircraft (inspect mode), which is the
+      // expected manual override — director resumes automatically once the
+      // inspector panel is closed and cameraMode returns to orbit."
+      const now = Date.now();
+
+2. Insert the following block between the end of that comment and the line
+   "const now = Date.now();". Do not delete or alter either of them.
+
+      // Clicking an aircraft interrupts the director. runDirector only runs
+      // while cameraMode is 'orbit', so without this reset the director stays
+      // frozen in its current phase and resumes it when the camera later
+      // returns to orbit — snapping to whatever it had been tracking.
+      st.dir.phase   = 'orbit';
+      st.dir.acId    = null;
+      st.dir.alertId = null;
+
+      // If the interrupted phase was alert-related, tell App the focus is
+      // finished. Otherwise App's alertFocusId stays set and runDirector flies
+      // straight back to the same alert on the next orbit frame, undoing the
+      // user's click. Mirrors the unmount cleanup at the end of this effect.
+      if (st.alertFocusId) {
+        const done = st.alertFocusDone;
+        st.alertFocusDone = null;
+        st.alertFocusId   = null;
+        done?.();
+        console.log('[3D CAM] click interrupt — alert focus released');
+      }
+
+3. Change nothing else in the file.
+
+4. Run: pnpm typecheck
+   Paste the full raw output.
+
+5. Commit this change on its own, with the message:
+   "Reset director state when a click interrupts it"
+   Do not include any other change in this commit.
+
+REPORT
+- The raw output of pnpm typecheck.
+- Confirm AirspaceView3D.tsx is the only file you touched.
+- The commit hash.
+- Anything else
