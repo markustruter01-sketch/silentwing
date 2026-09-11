@@ -279,15 +279,21 @@ export default function App() {
   // Detect newly-fired alerts (all severities) and kick off the 3D camera interrupt.
   useEffect(() => {
     const currentAlertIds = new Set(activeAlerts.map(a => a.id));
-    let newId: string | null = null;
-    for (const id of currentAlertIds) {
-      if (!prevCriticalIdsRef.current.has(id)) { newId = id; break; }
+    // Among alerts newly seen this tick, focus the highest-severity one.
+    // Set iteration order is arrival order, not severity order, so taking
+    // the first new ID could point the director at an advisory while a
+    // critical alert fired in the same snapshot.
+    let newAlert: SWAlert | null = null;
+    for (const alert of activeAlerts) {
+      if (prevCriticalIdsRef.current.has(alert.id)) continue;
+      if (!newAlert || severityRank(alert.severity) > severityRank(newAlert.severity)) {
+        newAlert = alert;
+      }
     }
     prevCriticalIdsRef.current = currentAlertIds;
-    if (newId) {
-      const sev = activeAlerts.find(a => a.id === newId)?.severity ?? 'unknown';
-      console.log(`[APP] new ${sev} alert ${newId} — director interrupt`);
-      setAlertFocusId(newId);
+    if (newAlert) {
+      console.log(`[APP] new ${newAlert.severity} alert ${newAlert.id} — director interrupt`);
+      setAlertFocusId(newAlert.id);
     }
   }, [activeAlerts]);
 
