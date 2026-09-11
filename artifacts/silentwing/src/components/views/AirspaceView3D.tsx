@@ -133,6 +133,9 @@ const DIRECTOR_CAM_OFFSET = new THREE.Vector3(0, 1_200, 2_400);
 // the immediate airspace rather than following traffic 100 NM away.
 // 5 000 m ≈ 2.7 NM — roughly the outer edge of the circuit / final approach.
 const DIRECTOR_FOCUS_RADIUS = 5_000;
+// How long the director stays out of the way after the operator presses
+// Escape. Alerts are exempt — only routine subject-picking is paused.
+const DIRECTOR_ESC_COOLDOWN_MS = 30_000;
 
 // ── Threat beam constants & shaders (Phase 6A) ───────────────────────────────
 
@@ -1473,6 +1476,11 @@ interface DirState {
   acId:    string | null;
   // Smooth look target lerped every frame
   lookAt:  THREE.Vector3;
+  /** Operator pressed Escape — do not pick a new subject until this
+   *  timestamp. -1 means "start the cooldown on the next director frame",
+   *  which lets the key handler set it without knowing the frame clock's
+   *  time base. Optional so no initialiser change is required. */
+  suppressUntilMs?: number;
 }
 
 /** Pick the highest-priority aircraft for the director.
@@ -1581,6 +1589,14 @@ function runDirector(st: SceneState, camera: THREE.PerspectiveCamera, nowMs: num
         st.orbitTarget.z + st.orbitRadius * Math.sin(st.angle),
       );
       camera.lookAt(st.orbitTarget);
+
+      // Resolve the deferred cooldown set by the Escape handler.
+      if (d.suppressUntilMs === -1) d.suppressUntilMs = nowMs + DIRECTOR_ESC_COOLDOWN_MS;
+      // Orbit re-picks a subject on the very next frame, so without this the
+      // aircraft the operator just dismissed is re-acquired instantly and
+      // Escape looks broken. Alerts are unaffected — that check runs above
+      // this switch and still interrupts normally.
+      if (nowMs < (d.suppressUntilMs ?? 0)) break;
 
       const subject = pickDirectorAircraft(st);
       if (subject) {
@@ -3540,11 +3556,21 @@ export default function AirspaceView3D({
 
       const prev = st.cameraMode;
 
-      // Director: Esc during aircraft-hold drops back to orbit.
-      if (st.directorMode && (st.dir.phase === 'hold_ac' || st.dir.phase === 'fly_ac')) {
-        st.dir.phase = 'orbit';
-        st.dir.acId  = null;
-        console.log('[3D CAM] Esc: director → orbit');
+      // Escape drops whatever the director is focused on — aircraft or alert
+      // — and pauses subject-picking. Previously this only covered the
+      // aircraft phases, so Escape did nothing during an alert hold.
+      if (st.directorMode && st.dir.phase !== 'orbit') {
+        st.dir.phase   = 'orbit';
+        st.dir.acId    = null;
+        st.dir.alertId = null;
+        st.dir.suppressUntilMs = -1;
+        if (st.alertFocusId) {
+          const done = st.alertFocusDone;
+          st.alertFocusDone = null;
+          st.alertFocusId   = null;
+          done?.();
+        }
+        console.log('[3D CAM] Esc: director → orbit (cooldown)');
         return;
       }
 
