@@ -1,0 +1,112 @@
+GOAL
+Make Escape actually stop the camera director. Today the director drops its
+target and immediately re-picks the same aircraft on the next frame, so
+Escape appears to do nothing. Add a 30-second pause before it may choose a
+new subject.
+
+RISK CLASS
+[BEHAVIOR-CHANGING]
+
+DONE WHEN
+Pressing Escape while the director is following an aircraft returns the camera
+to plain orbit and it stays there for about 30 seconds. pnpm typecheck passes.
+
+SCOPE
+artifacts/silentwing/src/components/views/AirspaceView3D.tsx
+This is the only file you may change.
+
+DO NOT
+- Do not suppress alert interrupts. The alert check at the top of runDirector
+  must keep working during the cooldown. Safety alerts still take the camera.
+- Do not change pickDirectorAircraft.
+- Do not change the fly_alert, hold_alert, fly_ac or hold_ac cases.
+- Do not change the non-director Escape branches (inspect, manual, follow).
+- Do not change the click handler.
+- Do not add, remove or upgrade any package.
+- Do not fix anything else you notice. Report it instead.
+
+STEPS
+1. Find this line near the other director constants:
+
+      const DIRECTOR_FOCUS_RADIUS = 5_000;
+
+   Add directly below it:
+
+      // How long the director stays out of the way after the operator presses
+      // Escape. Alerts are exempt — only routine subject-picking is paused.
+      const DIRECTOR_ESC_COOLDOWN_MS = 30_000;
+
+2. Find the DirState interface. At the end of it, after the line:
+
+        lookAt:  THREE.Vector3;
+
+   add:
+
+      /** Operator pressed Escape — do not pick a new subject until this
+       *  timestamp. -1 means "start the cooldown on the next director frame",
+       *  which lets the key handler set it without knowing the frame clock's
+       *  time base. Optional so no initialiser change is required. */
+      suppressUntilMs?: number;
+
+3. In runDirector, inside "case 'orbit': {", find this line:
+
+        const subject = pickDirectorAircraft(st);
+
+   Insert directly ABOVE it:
+
+        // Resolve the deferred cooldown set by the Escape handler.
+        if (d.suppressUntilMs === -1) d.suppressUntilMs = nowMs + DIRECTOR_ESC_COOLDOWN_MS;
+        // Orbit re-picks a subject on the very next frame, so without this the
+        // aircraft the operator just dismissed is re-acquired instantly and
+        // Escape looks broken. Alerts are unaffected — that check runs above
+        // this switch and still interrupts normally.
+        if (nowMs < (d.suppressUntilMs ?? 0)) break;
+
+4. In the onKey handler, find this whole block and replace it:
+
+        if (st.directorMode && (st.dir.phase === 'hold_ac' || st.dir.phase === 'fly_ac')) {
+          st.dir.phase = 'orbit';
+          st.dir.acId  = null;
+          console.log('[3D CAM] Esc: director → orbit');
+          return;
+        }
+
+   Replace it with:
+
+        // Escape drops whatever the director is focused on — aircraft or alert
+        // — and pauses subject-picking. Previously this only covered the
+        // aircraft phases, so Escape did nothing during an alert hold.
+        if (st.directorMode && st.dir.phase !== 'orbit') {
+          st.dir.phase   = 'orbit';
+          st.dir.acId    = null;
+          st.dir.alertId = null;
+          st.dir.suppressUntilMs = -1;
+          if (st.alertFocusId) {
+            const done = st.alertFocusDone;
+            st.alertFocusDone = null;
+            st.alertFocusId   = null;
+            done?.();
+          }
+          console.log('[3D CAM] Esc: director → orbit (cooldown)');
+          return;
+        }
+
+5. Change nothing else in the file. There must be exactly four edits.
+
+6. Run: pnpm typecheck
+   Paste the full raw output.
+
+7. Also report, without changing it: the exact line in the animation loop
+   where the variable nowMs is assigned its value.
+
+8. Commit this change on its own, with the message:
+   "Pause director subject-picking for 30s after Escape"
+   Do not include any other change in this commit.
+
+REPORT
+- The raw output of pnpm typecheck.
+- Confirm AirspaceView3D.tsx is the only file you touched.
+- Confirm exactly four edits were made.
+- The line where nowMs is assigned.
+- The commit hash.
+- Anything else you noticed, described but NOT changed.
