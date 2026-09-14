@@ -228,6 +228,16 @@ export const derivePhaseCases: PhaseCase[] = [
     args: [100, 80, undefined, 1000, 1000, [], 90, undefined],
     expected: 'landing',
   },
+  {
+    name: '44 degrees off departure heading returns takeoff',
+    args: [100, 80, undefined, 1000, 1000, [], 226, 90],
+    expected: 'takeoff',
+  },
+  {
+    name: '46 degrees off departure heading returns landing',
+    args: [100, 80, undefined, 1000, 1000, [], 224, 90],
+    expected: 'landing',
+  },
 ];
 
 for (const [adapterName, derivePhase] of [
