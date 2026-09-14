@@ -1,0 +1,73 @@
+GOAL
+Fix the Overpass request in the existing fetch script so it is accepted, then
+run it and report the real Sydney runway measurements.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — nothing in the app is modified.
+
+DONE WHEN
+The script runs successfully and prints every runway's length, bearing and
+coordinates, plus the spacing between the parallel runways.
+
+SCOPE
+scripts/fetch-yssy-runways.mjs
+This is the only file you may change.
+
+DO NOT
+- Do not modify artifacts/silentwing/src/data/yssy_real.ts. Not one line.
+- Do not modify any other file.
+- Do not change the Overpass query text itself, the bounding box, the origin,
+  or the projection maths. Only the request headers and body format change.
+- Do not "correct" any number the script prints. Print what comes back.
+- Do not add, remove or upgrade any package.
+- Do not commit anything.
+- Do not fix anything else you notice. Report it instead.
+
+STEPS
+1. Open scripts/fetch-yssy-runways.mjs and find this block:
+
+const res = await fetch('https://overpass-api.de/api/interpreter', {
+  method: 'POST',
+  body: 'data=' + encodeURIComponent(QUERY),
+  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+});
+if (!res.ok) { console.error('Overpass HTTP ' + res.status); process.exit(1); }
+
+2. Replace that whole block with:
+
+// Overpass rejects requests with no identifying User-Agent, and prefers the
+// query as a plain text body rather than form-encoded. Both were the cause
+// of the earlier HTTP 406.
+const res = await fetch('https://overpass-api.de/api/interpreter', {
+  method: 'POST',
+  body: QUERY,
+  headers: {
+    'Content-Type': 'text/plain',
+    'Accept': 'application/json',
+    'User-Agent': 'SilentWing/1.0 (airport geometry rebuild; contact via repo)',
+  },
+});
+if (!res.ok) {
+  console.error('Overpass HTTP ' + res.status);
+  console.error(await res.text());
+  process.exit(1);
+}
+
+3. Change nothing else in the file.
+
+4. Run it:
+     node scripts/fetch-yssy-runways.mjs
+
+5. If it fails again, paste the full error text it now prints and STOP. Do not
+   try another approach, another endpoint, or another format.
+
+6. If it succeeds, paste the ENTIRE raw output, unedited, including every
+   coordinate array.
+
+7. Do not change any application file based on what it prints. Stop after
+   reporting.
+
+REPORT
+- The full raw output of the script.
+- Confirm only scripts/fetch-yssy-runways.mjs was changed.
+- Confirm nothing was committed.

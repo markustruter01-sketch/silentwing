@@ -13,12 +13,23 @@ const QUERY = `[out:json][timeout:30];
 way["aeroway"="runway"](-33.97,151.15,-33.92,151.20);
 out geom;`;
 
+// Overpass rejects requests with no identifying User-Agent, and prefers the
+// query as a plain text body rather than form-encoded. Both were the cause
+// of the earlier HTTP 406.
 const res = await fetch('https://overpass-api.de/api/interpreter', {
   method: 'POST',
-  body: 'data=' + encodeURIComponent(QUERY),
-  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  body: QUERY,
+  headers: {
+    'Content-Type': 'text/plain',
+    'Accept': 'application/json',
+    'User-Agent': 'SilentWing/1.0 (airport geometry rebuild; contact via repo)',
+  },
 });
-if (!res.ok) { console.error('Overpass HTTP ' + res.status); process.exit(1); }
+if (!res.ok) {
+  console.error('Overpass HTTP ' + res.status);
+  console.error(await res.text());
+  process.exit(1);
+}
 const data = await res.json();
 
 console.log('=== RAW WAYS RETURNED: ' + data.elements.length + ' ===\n');
