@@ -35,16 +35,6 @@ const PHASE_COLOR: Record<string, string> = {
   'enroute-departure': '#C084FC',
 };
 
-// ── Seeded RNG — same seed as before so manifest values stay stable ───────────
-function seededRng(seed: string) {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = (Math.imul(31, h) + seed.charCodeAt(i)) | 0;
-  return () => {
-    h = (Math.imul(2654435769, h) ^ (h >>> 16)) | 0;
-    return (h >>> 0) / 0xFFFFFFFF;
-  };
-}
-
 // ── Sub-components ─────────────────────────────────────────────────────────────
 function Field({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
   return (
@@ -73,13 +63,6 @@ export default function DirectorFocusPanel({ ac, onClose }: DirectorFocusPanelPr
   const phaseLabel = PHASE_LABEL[ac.phase] ?? ac.phase.toUpperCase().replace(/-/g, ' ');
   const phaseColor = PHASE_COLOR[ac.phase] ?? '#94A3B8';
   const airborne   = isAirborne(ac);
-
-  // Stable manifest values seeded from the aircraft hex ID
-  const rng        = seededRng(ac.id);
-  const pax        = Math.round(rng() * 150 + 50);
-  const crew       = Math.round(rng() * 5  + 2);
-  const hasDG      = rng() < 0.15;
-  const hasAnimals = rng() < 0.10;
 
   const orig = ac.origin      ?? '—';
   const dest = ac.destination ?? '—';
@@ -136,6 +119,10 @@ export default function DirectorFocusPanel({ ac, onClose }: DirectorFocusPanelPr
       </div>
 
       {/* ── Flight data — 2-column grid ── */}
+      {/* No squawk and no manifest: SilentWing has no feed for either. A
+          hardcoded 7001 on every aircraft and a seeded-random passenger count
+          are fabrications, not estimates, and must not appear on an operator
+          display. Restore only when a real source exists. */}
       <div className="pl-5 pr-3 py-3 grid grid-cols-2 gap-y-3 gap-x-4"
            style={{ borderBottom: '1px solid rgba(168,85,247,0.10)' }}>
         <Field label="ALT"
@@ -144,28 +131,10 @@ export default function DirectorFocusPanel({ ac, onClose }: DirectorFocusPanelPr
                value={ac.groundSpeed > 0 ? `${ac.groundSpeed} kt` : '0 kt'} />
         <Field label="HDG"
                value={`${Math.round(ac.heading).toString().padStart(3, '0')}°`} />
-        <Field label="SQUAWK" value="7001" />
         <Field label="GATE"
                value={ac.assignedGate ?? '—'} />
         <Field label="RWY"
                value={ac.assignedRunway ? ac.assignedRunway.replace('_', '/') : '—'} />
-      </div>
-
-      {/* ── Manifest ── */}
-      <div className="pl-5 pr-3 py-3 grid grid-cols-[44px_1fr] gap-y-1.5 text-xs font-mono"
-           style={{ borderBottom: '1px solid rgba(168,85,247,0.10)' }}>
-        <span className="text-slate-600 uppercase text-[8px] tracking-widest pt-px">PAX</span>
-        <span className="text-slate-300 text-[11px]">{pax} passengers</span>
-        <span className="text-slate-600 uppercase text-[8px] tracking-widest pt-px">CREW</span>
-        <span className="text-slate-300 text-[11px]">{crew} crew</span>
-        <span className="text-slate-600 uppercase text-[8px] tracking-widest pt-px">DG</span>
-        <span className={['text-[11px]', hasDG ? 'text-amber-400' : 'text-slate-500'].join(' ')}>
-          {hasDG ? '⚠ Dangerous goods' : 'None declared'}
-        </span>
-        <span className="text-slate-600 uppercase text-[8px] tracking-widest pt-px">ANIM</span>
-        <span className={['text-[11px]', hasAnimals ? 'text-green-300' : 'text-slate-500'].join(' ')}>
-          {hasAnimals ? '🐾 Live animals' : 'None declared'}
-        </span>
       </div>
 
       {/* ── Position line ── */}

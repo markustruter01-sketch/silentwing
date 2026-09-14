@@ -111,6 +111,10 @@ export default function AircraftDetailPanel({
       </div>
 
       {/* ── Data fields — 2 columns ── */}
+      {/* No squawk and no manifest: SilentWing has no feed for either. A
+          hardcoded 7001 on every aircraft and a seeded-random passenger count
+          are fabrications, not estimates, and must not appear on an operator
+          display. Restore only when a real source exists. */}
       <div className="px-4 py-3 grid grid-cols-2 gap-y-3 gap-x-4">
         <Field label="ALT"
                value={airborne ? `${Math.round(ac.position.alt).toLocaleString()} ft` : 'GND'} />
@@ -118,7 +122,6 @@ export default function AircraftDetailPanel({
                value={ac.groundSpeed > 0 ? `${ac.groundSpeed} kt` : '0 kt'} />
         <Field label="HDG"
                value={`${Math.round(ac.heading).toString().padStart(3, '0')}°`} />
-        <Field label="SQUAWK" value="7001" />
         <Field label="GATE"
                value={ac.assignedGate ?? '—'} />
         <Field label="RWY"

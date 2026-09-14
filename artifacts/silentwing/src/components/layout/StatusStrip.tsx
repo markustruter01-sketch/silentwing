@@ -51,7 +51,8 @@ const StatusStrip: React.FC<StatusStripProps> = ({
       <div className="w-px h-3 bg-slate-800" />
       <Stat label="Ground" value={groundCount} />
       <div className="w-px h-3 bg-slate-800" />
-      <Stat label="Sector Load" value={`${sectorLoad}%`} accent={loadColor} />
+      {/* Estimate, not feed data: aircraft count over a fixed sectorCapacity. */}
+      <Stat label="Sector Load (est.)" value={`${sectorLoad}%`} accent={loadColor} />
 
       {/* Spacer */}
       <div className="flex-1" />

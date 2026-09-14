@@ -225,7 +225,8 @@ const Header: React.FC<HeaderProps> = ({
           { label: 'AC',   value: aircraftCount, accent: 'text-slate-300' },
           { label: 'AL',   value: alertCount,    accent: alertCount > 0 ? 'text-amber-400' : 'text-slate-500' },
           { label: 'GND',  value: groundCount,   accent: 'text-slate-300' },
-          { label: 'LOAD', value: `${sectorLoad}%`, accent: loadColor },
+          // Estimate, not feed data: aircraft count over a fixed sectorCapacity.
+          { label: 'LOAD est.', value: `${sectorLoad}%`, accent: loadColor },
         ].map(({ label, value, accent }, i, arr) => (
           <React.Fragment key={label}>
             <div className="flex items-center gap-1.5">
