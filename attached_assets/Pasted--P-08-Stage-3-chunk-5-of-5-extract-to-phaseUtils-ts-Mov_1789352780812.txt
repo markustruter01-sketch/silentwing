@@ -1,0 +1,71 @@
+[P-08] Stage 3, chunk 5 of 5 — extract to phaseUtils.ts.
+Move the code. Change nothing inside it.
+
+GOAL
+Replace the two duplicate copies of angularDiff, the active-runway-heading
+function and derivePhase with one shared module that both adapters import.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — no behaviour change.
+
+DONE WHEN
+`pnpm --filter @workspace/silentwing run test` reports 67 passing tests,
+with every expected value in phase.characterization.test.ts unchanged.
+
+SCOPE
+- artifacts/silentwing/src/feed/phaseUtils.ts  (new)
+- artifacts/silentwing/src/feed/adsbAdapter.ts
+- artifacts/silentwing/src/feed/openSkyAdapter.ts
+- artifacts/silentwing/src/feed/__tests__/phase.characterization.test.ts
+- artifacts/silentwing/src/feed/__tests__/imports.test.ts
+
+DO NOT
+- This is the whole point of the stage: do not change one character inside
+  any of the three function bodies. Not the 45, not the 200, not the 500 or
+  3000 boundaries, not the `acY + gate.pos[1]` axis flip, not AT_GATE_GS_KT
+  or AT_GATE_DIST_M. Copy them verbatim.
+- Do not change any expected value in phase.characterization.test.ts. If a
+  test fails, the extraction is wrong — fix the extraction, not the test.
+- Do not "tidy" the copies while merging them. Local variable names inside
+  derivePhase differ between the two files (diffDep/dDep, landingHdg/landHdg).
+  Take the ADS-B version wholesale and discard the OpenSky one.
+- Do not touch any function other than these three.
+- Do not change the adapters' polling, normalising or class code.
+- Do not add or upgrade any package.
+- Do not fix unrelated problems you notice. Report them instead.
+
+STEPS
+1. Create artifacts/silentwing/src/feed/phaseUtils.ts. Move into it,
+   verbatim from adsbAdapter.ts: the AT_GATE_GS_KT and AT_GATE_DIST_M
+   constants, angularDiff, activeRunwayHeadingDegrees, and derivePhase.
+   Export all three functions. Carry the explanatory comments across too.
+2. In adsbAdapter.ts: delete those two constants and three functions, and
+   import them from './phaseUtils' instead. The call sites already use the
+   name activeRunwayHeadingDegrees, so they need no edit.
+3. In openSkyAdapter.ts: delete its two constants and three functions, and
+   import from './phaseUtils'. Its call site currently reads
+   `activeRunwayHeadingDeg(this.profile, activeDir)` — update that one call
+   to activeRunwayHeadingDegrees. The local variable it assigns to is named
+   activeHdg and must keep that name.
+4. Delete the stale comment near the top of openSkyAdapter.ts that reads
+   "If a third adapter is added, extract them to feed/phaseUtils.ts" — it
+   is no longer true.
+5. Update both test files to import all three functions from
+   '../phaseUtils' rather than from the adapters. Keep the two-adapter loop
+   in phase.characterization.test.ts exactly as it is, aliasing both names
+   to the same imported function. It now runs the shared function twice,
+   which is the intended evidence of de-duplication. Test count stays 67.
+6. Run `pnpm --filter @workspace/silentwing run test`, capture raw output.
+7. Run `pnpm typecheck` at the repo root, capture raw output. Do not run
+   the root `pnpm build`.
+8. Commit. Message: "Stage 3: extract shared phase logic to phaseUtils.ts
+   [STRUCTURAL-ONLY]". Report the hash.
+
+REPORT
+- The commit hash.
+- Raw output of steps 6 and 7, unedited.
+- The full contents of phaseUtils.ts.
+- Confirm the test count is still 67 and that no expected value was edited.
+- Run `git diff` on phase.characterization.test.ts and paste it. Only
+  import lines should appear.
+- Report how many lines each adapter lost.
