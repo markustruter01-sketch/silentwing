@@ -1,0 +1,61 @@
+[P-10] Stage 4, chunk 1, second attempt — GitHub Actions CI.
+Supersedes P-09, which was unrunnable: it required a packageManager field
+that does not exist and forbade adding one. This prompt adds it.
+
+GOAL
+Every push to GitHub automatically runs typecheck, build and tests, and
+shows a pass or fail.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — no app code changes.
+
+DONE WHEN
+A push lands on GitHub and the Actions tab shows a completed run with a
+green tick.
+
+SCOPE
+- package.json  (root — one added field only)
+- .github/workflows/ci.yml  (new)
+
+DO NOT
+- Do not run `pnpm build` at the repo root. It is known to fail on
+  artifacts/mockup-sandbox for an unrelated reason.
+- Do not attempt to fix artifacts/mockup-sandbox. Leave it alone.
+- Do not change any existing script, dependency or field in the root
+  package.json. The ONLY permitted edit is adding the packageManager field.
+- Do not change any other package.json, source file, or test file.
+- Do not add or upgrade any package.
+- Do not add deploy, publish, release or secrets steps.
+- Do not fix unrelated problems you notice. Report them instead.
+
+STEPS
+1. Add "packageManager": "pnpm@10.26.1" to the root package.json. That is
+   the version you reported as installed. Do not change anything else in
+   the file.
+2. Run `pnpm install` once locally and confirm it still succeeds. If
+   adding this field breaks the local install, STOP and report the raw
+   error — do not work around it.
+3. Create .github/workflows/ci.yml. Trigger on push and on pull_request.
+   Single job, ubuntu-latest, Node 24. Use pnpm/action-setup — with the
+   packageManager field now present, it reads the version itself, so do
+   not hardcode a version in the workflow. Then actions/setup-node with
+   pnpm caching.
+4. The job runs `pnpm install --frozen-lockfile`, then `pnpm typecheck`
+   at the root. Root typecheck is known to pass today.
+5. Then build only the two real packages:
+   `pnpm --filter @workspace/silentwing run build`
+   `pnpm --filter @workspace/api-server run build`
+6. Then run `pnpm --filter @workspace/silentwing run test`.
+7. Commit and push. Message: "Stage 4: add GitHub Actions CI, scoped to
+   silentwing and api-server [STRUCTURAL-ONLY]".
+8. If the GitHub run fails, report the raw failing step and its output.
+   Do NOT loosen the workflow to make it pass — no continue-on-error, no
+   removing a step, no `|| true`. Report and stop.
+
+REPORT
+- The commit hash.
+- The exact diff applied to the root package.json.
+- The raw output of step 2.
+- The full contents of ci.yml.
+- The GitHub run result: passed or failed, and which step.
+- If it failed, the raw output of that step.
