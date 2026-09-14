@@ -1,0 +1,55 @@
+[P-09] Stage 4, chunk 1 — GitHub Actions CI.
+
+GOAL
+Every push to GitHub automatically runs typecheck, build and tests, and
+shows a pass or fail.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — no app code changes.
+
+DONE WHEN
+A push lands on GitHub and the Actions tab shows a completed run with a
+green tick.
+
+SCOPE
+- .github/workflows/ci.yml  (new)
+
+DO NOT
+- Do not run `pnpm build` at the repo root. It is known to fail on
+  artifacts/mockup-sandbox for an unrelated reason. Scope the build as
+  described in STEPS instead.
+- Do not attempt to fix artifacts/mockup-sandbox. Leave it alone.
+- Do not change any package.json, any source file, or any test file.
+- Do not add or upgrade any package.
+- Do not add deploy, publish, release or caching steps beyond what STEPS
+  lists. No secrets, no environment variables, no deploy keys.
+- Do not fix unrelated problems you notice. Report them instead.
+
+STEPS
+1. Read the root package.json and report the exact "packageManager" value
+   and the exact names of every script at the root. Use the real pnpm
+   version from that field in the workflow — do not guess one.
+2. Check whether artifacts/api-server has a "build" script. Report yes or
+   no. If yes, include it in step 5. If no, leave it out and say so.
+3. Create .github/workflows/ci.yml. Trigger on push and on pull_request.
+   Single job, ubuntu-latest, Node 24 (the repo currently runs v24.13.0).
+   Use pnpm/action-setup with the version from step 1, then
+   actions/setup-node with pnpm caching.
+4. The job runs `pnpm install --frozen-lockfile`, then `pnpm typecheck` at
+   the root. Root typecheck is known to pass today.
+5. Then build ONLY the real packages:
+   `pnpm --filter @workspace/silentwing run build`
+   and the api-server equivalent only if step 2 found one.
+6. Then run `pnpm --filter @workspace/silentwing run test`.
+7. Commit and push. Message: "Stage 4: add GitHub Actions CI, scoped to
+   silentwing and api-server [STRUCTURAL-ONLY]".
+8. If the run fails on GitHub, report the raw failing step and its output.
+   Do NOT loosen the workflow to make it pass — no continue-on-error, no
+   removing a step, no `|| true`. Report and stop.
+
+REPORT
+- The commit hash.
+- Answers to steps 1 and 2.
+- The full contents of ci.yml.
+- The result of the GitHub run: passed or failed, and which step.
+- If it failed, the raw output of the failing step.
