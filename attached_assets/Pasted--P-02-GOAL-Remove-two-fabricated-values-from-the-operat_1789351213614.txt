@@ -1,0 +1,111 @@
+[P-02]
+
+GOAL
+Remove two fabricated values from the operator display — a hardcoded squawk
+code and a randomly generated passenger manifest — and mark the sector load
+as an estimate.
+
+RISK CLASS
+[SAFETY-RELEVANT] — changes what the UI presents as real feed data.
+
+DONE WHEN
+No aircraft panel shows a SQUAWK field or a manifest block, and the header
+load figure is visibly marked as an estimate.
+
+SCOPE
+artifacts/silentwing/src/components/panels/DirectorFocusPanel.tsx
+artifacts/silentwing/src/components/panels/AircraftDetailPanel.tsx
+artifacts/silentwing/src/components/layout/Header.tsx
+artifacts/silentwing/src/components/layout/StatusStrip.tsx
+
+DO NOT
+- Do not change the ALT, GS, HDG, GATE, RWY, ORIGIN or DEST fields. GATE, RWY,
+  ORIGIN and DEST already show an em-dash when absent, which is honest. They
+  are a separate planned task.
+- Do not change how sectorLoad is calculated in App.tsx. Only its label.
+- Do not change the colour thresholds on the load figure.
+- Do not restyle, resize or re-lay-out any panel beyond removing the elements
+  named below.
+- Do not add, remove or upgrade any package.
+- Do not fix anything else you notice. Report it instead.
+
+STEPS
+1. In DirectorFocusPanel.tsx, delete this line from the flight-data grid:
+
+        <Field label="SQUAWK" value="7001" />
+
+2. In DirectorFocusPanel.tsx, delete the ENTIRE manifest block — the div whose
+   opening line is:
+
+      <div className="pl-5 pr-3 py-3 grid grid-cols-[44px_1fr] gap-y-1.5 text-xs font-mono"
+
+   through its matching closing </div>. It contains the PAX, CREW, DG and ANIM
+   rows. Delete all of it.
+
+3. In DirectorFocusPanel.tsx, delete these four now-unused lines:
+
+      const rng        = seededRng(ac.id);
+      const pax        = Math.round(rng() * 150 + 50);
+      const crew       = Math.round(rng() * 5  + 2);
+      const hasDG      = rng() < 0.15;
+      const hasAnimals = rng() < 0.10;
+
+   and the comment line above them that reads:
+
+      // Stable manifest values seeded from the aircraft hex ID
+
+4. In DirectorFocusPanel.tsx, delete the entire seededRng function and its
+   comment header:
+
+      // ── Seeded RNG — same seed as before so manifest values stay stable ───────────
+      function seededRng(seed: string) {
+        ...
+      }
+
+5. In DirectorFocusPanel.tsx, add this comment directly above the flight-data
+   grid div (the one containing the ALT and GS fields):
+
+      {/* No squawk and no manifest: SilentWing has no feed for either. A
+          hardcoded 7001 on every aircraft and a seeded-random passenger count
+          are fabrications, not estimates, and must not appear on an operator
+          display. Restore only when a real source exists. */}
+
+6. In AircraftDetailPanel.tsx, delete this line from the data-fields grid:
+
+        <Field label="SQUAWK" value="7001" />
+
+   and add the same comment as step 5 above that grid's opening div.
+
+7. In Header.tsx, find this line:
+
+          { label: 'LOAD', value: `${sectorLoad}%`, accent: loadColor },
+
+   Replace it with:
+
+          // Estimate, not feed data: aircraft count over a fixed sectorCapacity.
+          { label: 'LOAD est.', value: `${sectorLoad}%`, accent: loadColor },
+
+8. In StatusStrip.tsx, find this line:
+
+        <Stat label="Sector Load" value={`${sectorLoad}%`} accent={loadColor} />
+
+   Replace it with:
+
+        {/* Estimate, not feed data: aircraft count over a fixed sectorCapacity. */}
+        <Stat label="Sector Load (est.)" value={`${sectorLoad}%`} accent={loadColor} />
+
+9. Run: pnpm typecheck
+
+10. Commit this change on its own, with the message:
+    "Remove fabricated squawk and manifest; mark sector load as estimate"
+    Do not include any other change in this commit.
+
+REPORT
+Report typecheck as PASS or FAIL plus error lines only. Do not paste full
+typecheck output. Do not restate the STEPS. Do not list what you did not
+change.
+- The commit hash.
+- Confirm the string "7001" no longer appears anywhere in artifacts/silentwing/src.
+- Confirm seededRng no longer appears anywhere in artifacts/silentwing/src.
+- State whether StatusStrip.tsx is actually rendered anywhere, without changing it.
+- Anything else you noticed, described but NOT changed.
