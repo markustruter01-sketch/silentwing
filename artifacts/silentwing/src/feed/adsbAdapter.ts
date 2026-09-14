@@ -39,7 +39,7 @@ const AT_GATE_DIST_M = 60;  // metres — gate proximity threshold
 
 // ── angularDiff ───────────────────────────────────────────────────────────────
 // Smallest angular difference between two compass headings (0–180°).
-function angularDiff(a: number, b: number): number {
+export function angularDiff(a: number, b: number): number {
   const d = Math.abs(a - b) % 360;
   return d > 180 ? 360 - d : d;
 }
@@ -48,7 +48,7 @@ function angularDiff(a: number, b: number): number {
 // Converts the active-direction STEM string (e.g. "01", "19") back to the
 // actual compass heading in degrees that aircraft use when departing on that
 // runway end.  Returns undefined if the stem cannot be matched.
-function activeRunwayHeadingDegrees(
+export function activeRunwayHeadingDegrees(
   profile: Pick<AirportProfile, 'runways'>,
   activeStem: string,
 ): number | undefined {
@@ -61,7 +61,7 @@ function activeRunwayHeadingDegrees(
   return undefined;
 }
 
-function derivePhase(
+export function derivePhase(
   altFt: number,
   gs: number,
   baroRate: number | undefined,

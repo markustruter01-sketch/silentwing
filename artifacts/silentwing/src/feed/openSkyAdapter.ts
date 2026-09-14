@@ -51,12 +51,12 @@ export const OPENSKY_POLL_MS = 10_000;
 const AT_GATE_GS_KT  = 2;
 const AT_GATE_DIST_M = 60;
 
-function angularDiff(a: number, b: number): number {
+export function angularDiff(a: number, b: number): number {
   const d = Math.abs(a - b) % 360;
   return d > 180 ? 360 - d : d;
 }
 
-function activeRunwayHeadingDeg(
+export function activeRunwayHeadingDeg(
   profile: Pick<AirportProfile, 'runways'>,
   activeStem: string,
 ): number | undefined {
@@ -69,7 +69,7 @@ function activeRunwayHeadingDeg(
   return undefined;
 }
 
-function derivePhase(
+export function derivePhase(
   altFt:         number,
   gs:            number,
   baroRate:      number | undefined,
