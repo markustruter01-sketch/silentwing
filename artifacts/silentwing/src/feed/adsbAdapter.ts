@@ -90,9 +90,11 @@ function derivePhase(
   // Many transponders omit baro_rate at low altitude (fresh ADS-B lock right
   // after rotation is the most common case).  When baro_rate is absent below
   // 500 ft we use the aircraft's track relative to the active runway to
-  // distinguish departures from arrivals:
+  // distinguish departures from arrivals.  The active runway heading is the
+  // landing heading (aircraft land INTO the wind), so departures use its
+  // reciprocal:
   //   • Track within ±45° of the DEPARTURE heading → climbing (takeoff)
-  //   • Track within ±45° of the LANDING heading (reciprocal) → not climbing
+  //   • Track within ±45° of the LANDING heading → not climbing
   //   • Ambiguous / no runway data → assume descent (safer default; arrivals
   //     dominate terminal snapshots and a false "landing" label is less
   //     alarming than a false "takeoff").
@@ -103,10 +105,9 @@ function derivePhase(
   if (baroRate !== undefined) {
     climbing = baroRate > 200;
   } else if (altFt < 500 && gs >= 80 && activeRunwayHeadingDeg !== undefined) {
-    // Departure heading = activeRunwayHeadingDeg
-    // Landing heading  = reciprocal (+ 180)
-    const departureHdg = activeRunwayHeadingDeg;
-    const landingHdg   = (activeRunwayHeadingDeg + 180) % 360;
+    // activeRunwayHeadingDeg is the landing heading; departures use its reciprocal.
+    const landingHdg   = activeRunwayHeadingDeg;
+    const departureHdg = (activeRunwayHeadingDeg + 180) % 360;
     const diffDep      = angularDiff(track, departureHdg);
     const diffLand     = angularDiff(track, landingHdg);
     // Within 45° of departure heading → assume takeoff; otherwise → landing/approach

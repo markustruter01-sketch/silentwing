@@ -95,8 +95,10 @@ function derivePhase(
   if (baroRate !== undefined) {
     climbing = baroRate > 200;
   } else if (altFt < 500 && gs >= 80 && activeHdg !== undefined) {
-    const landHdg = (activeHdg + 180) % 360;
-    const dDep = angularDiff(track, activeHdg);
+    // activeHdg is the landing heading; departures use its reciprocal.
+    const landHdg = activeHdg;
+    const depHdg = (activeHdg + 180) % 360;
+    const dDep = angularDiff(track, depHdg);
     const dLnd = angularDiff(track, landHdg);
     climbing = dDep < 45 && dDep < dLnd;
   } else {
