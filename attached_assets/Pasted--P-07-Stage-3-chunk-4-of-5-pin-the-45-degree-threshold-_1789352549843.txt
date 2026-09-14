@@ -1,0 +1,54 @@
+[P-07] Stage 3, chunk 4 of 5 — pin the 45 degree threshold.
+Two test cases. No source changes.
+
+GOAL
+Add the two characterization cases that bracket the 45-degree track
+tolerance in derivePhase, so an accidental change to that number during
+the extraction cannot pass unnoticed.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — test file only.
+
+DONE WHEN
+`pnpm --filter @workspace/silentwing run test` reports 66 passing tests,
+up from 63.
+
+SCOPE
+- artifacts/silentwing/src/feed/__tests__/phase.characterization.test.ts
+
+DO NOT
+- Do not change either adapter. Do not change any other test file.
+- Do not change, reorder or rename any of the 31 existing cases.
+- Do not create feed/phaseUtils.ts. That is the next prompt.
+- Do not add or upgrade any package.
+- Do not fix unrelated problems you notice. Report them instead.
+
+STEPS
+1. Commit the current P-06 work first. Message: "Stage 3: characterize
+   derivePhase, angularDiff and runway heading in both adapters
+   [STRUCTURAL-ONLY]". Report the hash.
+2. Append two cases to the derivePhaseCases table. Both use altitude 100,
+   ground speed 80, no vertical rate, no gates, and an active runway
+   heading of 90 — matching the existing track-fallback cases. The active
+   heading is the LANDING heading, so the departure heading is 270.
+   - track 226, which sits 44 degrees off the departure heading
+   - track 224, which sits 46 degrees off the departure heading
+   Name them so the 44 and the 46 are visible in the test name.
+3. Do not write the expected values from reasoning. Run the tests, read
+   what each case actually returns, and record that. If a case fails, the
+   expectation is wrong, not the code — correct the expectation.
+4. Confirm the two cases return DIFFERENT phases from each other. If they
+   return the same phase, the threshold is not where this prompt assumes
+   it is. STOP and report both values rather than adjusting the tracks.
+5. Run `pnpm --filter @workspace/silentwing run test`, capture raw output.
+6. Run `pnpm typecheck` at the repo root, capture raw output. Do not run
+   the root `pnpm build`.
+7. Commit. Message: "Stage 3: pin the 45-degree track tolerance
+   [STRUCTURAL-ONLY]". Report the hash.
+
+REPORT
+- Both commit hashes.
+- Raw output of steps 5 and 6, unedited.
+- The two new cases exactly as written, including their expected values.
+- Confirm the test count went 63 to 66, and that no existing case changed.
+- Confirm both adapter files have an empty diff.

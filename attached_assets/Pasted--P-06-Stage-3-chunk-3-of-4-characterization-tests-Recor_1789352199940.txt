@@ -1,0 +1,83 @@
+[P-06] Stage 3, chunk 3 of 4 — characterization tests.
+Record what the code does today. Do not improve it.
+
+GOAL
+Lock the current behaviour of derivePhase, angularDiff and the
+active-runway-heading function in both adapters behind tests, so the
+chunk 4 extraction can be proven faithful.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — test files only. No source file changes.
+
+DONE WHEN
+`pnpm --filter @workspace/silentwing run test` passes, and the derivePhase
+cases run from ONE shared case table applied to both adsbAdapter's and
+openSkyAdapter's derivePhase.
+
+SCOPE
+- artifacts/silentwing/src/feed/__tests__/phase.characterization.test.ts (new)
+- Read-only: artifacts/silentwing/src/airports/types.ts
+- Read-only: artifacts/silentwing/src/data/ybbn_real.ts
+
+DO NOT
+- This is the important one: if a test you write fails, the TEST is wrong,
+  not the code. Correct the test to match what the function actually
+  returns. Do not edit either adapter to make a test pass. Do not skip or
+  comment out a failing case.
+- Do not fix the known departure/arrival mislabelling. A departure tracking
+  along the active runway currently returns 'landing'. That is a real bug,
+  it is tracked separately, and this suite must assert the wrong value it
+  returns today. Mark that case with a comment saying so.
+- Do not instantiate AdsbAdapter or OpenSkyAdapter. Import functions only.
+- Do not modify adsbAdapter.ts, openSkyAdapter.ts, imports.test.ts,
+  vitest.config.ts or package.json.
+- Do not create feed/phaseUtils.ts.
+- Do not add or upgrade any package.
+- Do not fix unrelated problems you notice along the way. Report them
+  instead, and do not touch them.
+
+STEPS
+1. Commit the P-05 changes on their own. Message: "Stage 3: export phase
+   helpers from both adapters for testing [STRUCTURAL-ONLY]". Report the hash.
+2. Read artifacts/silentwing/src/airports/types.ts and
+   artifacts/silentwing/src/data/ybbn_real.ts. Build fixtures that satisfy
+   the real runway and GatePos types. If a type demands so many fields that
+   a literal is unwieldy, STOP and paste the type definition rather than
+   reaching for `as any`.
+3. Write the angularDiff cases, run against both adapters' copies:
+   identical headings; 10 vs 350; exactly 180 apart; 181 apart; 720 vs 0;
+   one negative input. Assert the returned number for each.
+4. Write the active-runway-heading cases, against both copies. Use a
+   synthetic 2-runway profile, one of them a parallel pair sharing a stem:
+   stem matches lowDesignator; stem matches highDesignator (expect the
+   reciprocal); a designator carrying a trailing L, R or C that the stem
+   omits; an unmatched stem (expect undefined); a headingDeg where the
+   reciprocal wraps past 360; two runways sharing a stem — assert which one
+   actually wins, do not assume.
+5. Build ONE exported case table for derivePhase, then loop it over both
+   adapters' derivePhase so every case runs twice. Cover:
+   - ground: below 50 ft, speed under 2, inside the gate radius
+   - ground: same but speed at exactly 2
+   - ground: below 50 ft, far from any gate
+   - ground: an empty gates array
+   - the gate y-axis flip — a gate at positive y matches an aircraft at
+     NEGATIVE y. Assert this explicitly; it is a sign-convention trap.
+   - gate distance at exactly 60 m, and at 61 m
+   - altitude boundaries: 49, 50, 499, 500, 2999, 3000
+   - vertical rate at exactly 200, at 201, and negative
+   - no vertical rate, below 500 ft, speed at exactly 80, active heading
+     supplied — both a track aligned with the runway and one opposed
+   - no vertical rate, no active heading supplied
+   - the known-wrong departure case from DO NOT above
+6. Run `pnpm --filter @workspace/silentwing run test`, capture raw output.
+7. Run `pnpm typecheck` at the repo root, capture raw output. Do not run
+   the root `pnpm build`.
+
+REPORT
+- The commit hash from step 1.
+- Raw output of steps 6 and 7, unedited.
+- The full contents of the new test file.
+- A plain list of every case where the actual return value differed from
+  what you expected before running it, with both values. If there were
+  none, say so explicitly.
+- Confirm both adapter files are unchanged, with an empty diff.

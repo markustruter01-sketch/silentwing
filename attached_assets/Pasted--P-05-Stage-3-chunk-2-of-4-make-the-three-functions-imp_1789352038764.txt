@@ -1,0 +1,69 @@
+[P-05] Stage 3, chunk 2 of 4 — make the three functions importable.
+No test logic yet beyond proving the imports resolve.
+
+GOAL
+Export derivePhase, angularDiff and the active-runway-heading function
+from both adapter files so they can be tested, and prove both modules
+import cleanly under the node test environment.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — adding an export keyword changes no runtime behaviour.
+
+DONE WHEN
+`pnpm --filter @workspace/silentwing run test` passes, and the passing
+test is one that imports all six functions from the two adapter files and
+asserts each is a function.
+
+SCOPE
+- artifacts/silentwing/src/feed/adsbAdapter.ts
+- artifacts/silentwing/src/feed/openSkyAdapter.ts
+- artifacts/silentwing/src/feed/__tests__/sanity.test.ts  (delete)
+- artifacts/silentwing/src/feed/__tests__/imports.test.ts (new)
+
+DO NOT
+- Do not rename any function. openSkyAdapter.ts calls its version
+  activeRunwayHeadingDeg and adsbAdapter.ts calls its version
+  activeRunwayHeadingDegrees. Both names stay exactly as they are. The
+  names get unified in chunk 4, not here.
+- Do not change a single line inside any of the three function bodies in
+  either file. The only edit permitted to the adapters is adding the word
+  export before the function keyword.
+- Do not create feed/phaseUtils.ts.
+- Do not instantiate AdsbAdapter or OpenSkyAdapter in any test. Their
+  constructors call document.addEventListener and will fail under node.
+  Import the functions only.
+- Do not add or upgrade any package.
+- Do not refactor, rename, or reformat code you were not asked to change.
+- Do not fix unrelated problems you notice along the way. Report them
+  instead, and do not touch them.
+
+STEPS
+1. Commit the existing P-04 scaffold on its own, before making any new
+   edit. Include artifacts/silentwing/package.json,
+   artifacts/silentwing/vitest.config.ts,
+   artifacts/silentwing/src/feed/__tests__/sanity.test.ts and
+   pnpm-lock.yaml. Message: "Stage 3: add scoped vitest runner to
+   silentwing [STRUCTURAL-ONLY]". Report the resulting commit hash.
+2. In artifacts/silentwing/src/feed/adsbAdapter.ts, add the export keyword
+   to angularDiff, activeRunwayHeadingDegrees and derivePhase.
+3. In artifacts/silentwing/src/feed/openSkyAdapter.ts, add the export
+   keyword to angularDiff, activeRunwayHeadingDeg and derivePhase.
+4. Delete artifacts/silentwing/src/feed/__tests__/sanity.test.ts.
+5. Create artifacts/silentwing/src/feed/__tests__/imports.test.ts. It
+   imports all six functions, aliasing the names that collide between the
+   two modules, and asserts typeof each is 'function'. Nothing else.
+6. Run `pnpm --filter @workspace/silentwing run test` and capture raw output.
+   If it fails on a module resolution or a missing browser global rather
+   than on an assertion, STOP. Do not add jsdom, do not add a mock, do not
+   change vitest.config.ts. Report the full error and the import chain it
+   names.
+7. Run `pnpm typecheck` at the repo root and capture raw output. Do not run
+   the root `pnpm build`.
+
+REPORT
+- The commit hash from step 1.
+- The raw output of steps 6 and 7, unedited.
+- The full contents of imports.test.ts as written.
+- The exact diff applied to each adapter. It should be three one-word
+  additions per file and nothing else. If it is more than that, say why.
+- Every file touched.
