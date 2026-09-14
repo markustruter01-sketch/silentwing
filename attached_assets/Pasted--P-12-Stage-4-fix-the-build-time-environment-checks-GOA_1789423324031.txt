@@ -1,0 +1,61 @@
+[P-12] Stage 4 — fix the build-time environment checks.
+
+GOAL
+Make `pnpm --filter @workspace/silentwing run build` succeed without
+PORT or BASE_PATH being set, while keeping both checks for dev and
+preview, where they are genuinely needed.
+
+RISK CLASS
+[BEHAVIOR-CHANGING] — it changes when the app refuses to start.
+
+DONE WHEN
+Running `pnpm --filter @workspace/silentwing run build` with no PORT and
+no BASE_PATH set completes successfully, AND running
+`pnpm --filter @workspace/silentwing run dev` with no PORT set still
+fails with the existing clear error message.
+
+SCOPE
+- artifacts/silentwing/vite.config.ts
+
+DO NOT
+- Do not touch artifacts/api-server. Its PORT check is in its running
+  code, which is the correct place for it. Leave it exactly as is.
+- Do not delete either check. Both must still fire for dev and preview.
+- Do not add a default port or a default base path. No fallback values,
+  no `?? 5173`, no `|| '/'`. A silent default is worse than a clear error.
+- Do not change the plugins, the aliases, the build output directory, or
+  anything else in the file.
+- Do not add or upgrade any package.
+- Do not create, delete or commit any documentation, notes or summary
+  file. Only the file in SCOPE may change.
+- Do not fix unrelated problems you notice. Report them instead.
+
+STEPS
+1. Vite passes a command value into the config function, which is
+   'build' for a build and 'serve' for dev and preview. Change the
+   exported config to a function that receives it.
+2. Move both the PORT and BASE_PATH checks inside that function so they
+   only throw when the command is 'serve'. When the command is 'build',
+   neither variable is read and neither error is thrown.
+3. For the build case, `base` must still be set. Use BASE_PATH when it is
+   present; otherwise use '/'. This is the one place a fallback is
+   correct, because a build has no server to point at.
+4. Run, with PORT and BASE_PATH both unset:
+   `pnpm --filter @workspace/silentwing run build`
+   Capture the raw output.
+5. Run, with PORT unset:
+   `pnpm --filter @workspace/silentwing run dev`
+   Confirm it still fails with the PORT error. Capture the raw output,
+   then stop the command.
+6. Run `pnpm --filter @workspace/silentwing run test` and confirm all 67
+   still pass. Capture raw output.
+7. Run `pnpm typecheck` at the root. Capture raw output.
+8. Commit ONLY artifacts/silentwing/vite.config.ts. Message:
+   "Stage 4: only require PORT and BASE_PATH when serving
+   [BEHAVIOR-CHANGING]". Do not push. Report the hash.
+
+REPORT
+- The commit hash.
+- The full contents of vite.config.ts after the change.
+- Raw output of steps 4, 5, 6 and 7, unedited.
+- Confirm no file outside SCOPE was changed or committed.

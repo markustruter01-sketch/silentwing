@@ -7,3 +7,4 @@
 - [Multi-airport refactor](silentwing-airport-refactor.md) — AirportProfile, helpers, wind convention, approach corridor derivation
 - [Terrain mesh](silentwing-terrain.md) — Open-Meteo fetch pattern, TERRAIN_VSCALE, y=-1 offset anti-z-fight, TerrainGrid type
 - [GitHub connector publishing](github-connector-publishing.md) — empty repos need a seed commit; throttle Git Data API uploads below the connector’s 10 RPS limit
+- [Checkpoint scope hygiene](checkpoint-scope-hygiene.md) — inspect automatic checkpoint commits because uploaded instruction files can be included unexpectedly
