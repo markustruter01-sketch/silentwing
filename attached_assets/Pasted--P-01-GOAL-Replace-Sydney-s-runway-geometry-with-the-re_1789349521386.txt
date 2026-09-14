@@ -1,0 +1,115 @@
+[P-01]
+
+GOAL
+Replace Sydney's runway geometry with the real OpenStreetMap centrelines, so
+the runways sit in the same coordinate frame as the taxiways and live aircraft.
+
+RISK CLASS
+[SAFETY-RELEVANT] — this changes where runways are drawn relative to aircraft.
+
+DONE WHEN
+YSSY_RUNWAYS in yssy_real.ts contains the three arrays below exactly, and in
+the app the Sydney runways line up with the taxiways and aircraft.
+
+SCOPE
+artifacts/silentwing/src/data/yssy_real.ts
+This is the only file you may change.
+
+DO NOT
+- Do not change YSSY_TAXIWAYS, YSSY_APRONS, YSSY_GATES or YSSY_ORIGIN.
+- Do not change any coordinate value below. Paste them exactly as given.
+- Do not "correct", round, extend or recompute any number to make a runway
+  match its published length. The numbers are real survey data and the small
+  differences are expected.
+- Do not change artifacts/silentwing/src/airports/yssy.ts. The heading values
+  in it are wrong but that is a separate fix.
+- Do not delete scripts/fetch-yssy-runways.mjs.
+- Do not add, remove or upgrade any package.
+- Do not fix anything else you notice. Report it instead.
+
+STEPS
+1. In artifacts/silentwing/src/data/yssy_real.ts, delete everything from the
+   line beginning:
+
+      // ── Threshold sources ──
+
+   down to and including the line:
+
+      // Lateral separation between parallel centrelines: 1 059 m (AIP published ~1 037 m).
+
+   Replace that whole block with:
+
+// ── Runway source ─────────────────────────────────────────────────────────────
+// Runway centrelines come from OpenStreetMap aeroway=runway, the SAME source as
+// the taxiways below and as YBBN's runways. Fetched via Overpass and projected
+// with the formula above. Short OSM way fragments at the northern ends of both
+// parallels have been stitched onto their parent ways.
+//
+// This replaces an earlier hand-built set derived from two survey points plus an
+// assumed bearing. That set placed the two parallel runways on the wrong sides of
+// the field — the long 16R/34L was drawn east and the short 16L/34R west, roughly
+// 1.1-1.3 km from their true positions. Its self-check only measured runway
+// LENGTHS, which were computed from the same assumption, so it could not fail.
+//
+// Measured from the coordinates below:
+//   16R/34L  3947.1 m  (published 3962,  -0.4%)   bearing 167.7 true
+//   16L/34R  2391.0 m  (published 2438,  -1.9%)   bearing 167.8 true
+//   07/25    2420.2 m  (published 2530,  -4.3%)   bearing  74.2 true
+//   parallel spacing 1035.6 m  (published ~1037)
+// Lengths run slightly short because OSM maps the paved surface rather than the
+// declared distance. Do NOT extend these to match published figures by computing
+// an endpoint — that is the error this replaces.
+
+2. Replace the entire YSSY_RUNWAYS array — from the line
+   "export const YSSY_RUNWAYS: Polyline[] = [" through its closing "];"
+   — with exactly this:
+
+export const YSSY_RUNWAYS: Polyline[] = [
+  {
+    // 16R -> 34L  (WESTERN parallel, the long one, 3947 m as mapped)
+    // OSM ways 1064563478 (north tip) + 219359696, stitched.
+    ref: '16R/34L',
+    coords: [
+      [ -520,  1850], [ -502,  1766], [ -405,  1321], [ -405,  1317],
+      [ -283,   755], [ -261,   653], [ -238,   547], [ -215,   441],
+      [ -103,   -75], [  -95,  -110], [  -83,  -167], [   32,  -696],
+      [   32,  -697], [  197, -1457], [  305, -1948], [  318, -2007],
+    ],
+  },
+  {
+    // 16L -> 34R  (EASTERN parallel, the short one, 2391 m as mapped)
+    // OSM ways 510285760 (north tip) + 186842426, stitched.
+    ref: '16L/34R',
+    coords: [
+      [ 1026,  -388], [ 1042,  -469], [ 1060,  -551], [ 1068,  -587],
+      [ 1074,  -615], [ 1113,  -794], [ 1119,  -822], [ 1316, -1731],
+      [ 1531, -2725],
+    ],
+  },
+  {
+    // 07 -> 25  (cross runway, 2420 m as mapped). OSM way 219847158.
+    ref: '07/25',
+    coords: [
+      [-1253,   260], [ -786,   391], [ -412,   497], [ -342,   517],
+      [ -238,   547], [ -237,   547], [ -131,   577], [  -60,   597],
+      [   86,   638], [  564,   772], [ 1076,   918],
+    ],
+  },
+];
+
+3. Change nothing else in the file.
+
+4. Run: pnpm typecheck
+
+5. Commit this change on its own, with the message:
+   "Replace YSSY runway geometry with real OSM centrelines"
+   Do not include any other change in this commit.
+
+REPORT
+Report typecheck as PASS or FAIL plus error lines only. Do not paste full
+typecheck output. Do not restate the STEPS. Do not list what you did not
+change.
+- Confirm yssy_real.ts is the only file you touched.
+- Confirm no coordinate value was altered from the values given.
+- The commit hash.
+- Anything else you noticed, described but NOT changed.

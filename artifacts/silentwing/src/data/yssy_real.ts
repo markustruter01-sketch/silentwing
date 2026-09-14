@@ -11,15 +11,18 @@
 // Scene rendering applies flipRealY (y → −y) so Three.js +z = south.
 // This file must NOT pre-flip.
 //
-// ── Threshold sources ─────────────────────────────────────────────────────────
-// All six thresholds sourced independently; runway lengths validated against
-// AIP ERSA published values before proceeding (Step 1 gate — all PASS ±0 m):
+// ── Runway source ─────────────────────────────────────────────────────────────
+// Runway centrelines come from OpenStreetMap aeroway=runway, the SAME source as
+// the taxiways below and as YBBN's runways. Fetched via Overpass and projected
+// with the formula above. Short OSM way fragments at the northern ends of both
+// parallels have been stitched onto their parent ways.
 //
-//   Runway 16R/34L (eastern, 3 962 m)
-//     16R threshold (north end, aircraft land heading ~157° SSE from north):
-//       AIP ERSA 2024: 33°55′41.3″S  151°10′57.6″E  →  x=+505,  y=+1985
-//     34L threshold (south end, computed: 16R + 3962 m at 167.5° true):
-//       →  x=+1362, y=−1883
+// This replaces an earlier hand-built set derived from two survey points plus an
+// assumed bearing. That set placed the two parallel runways on the wrong sides
+// of the field — the long 16R/34L was drawn east and the short 16L/34R west,
+// roughly 1.1-1.3 km from their true positions. Its self-check only measured
+// runway LENGTHS, which were computed from the same assumption, so it could not
+// fail.
 //
 //   Runway 16L/34R (western, 2 438 m)
 //     16L threshold (north end):
