@@ -24,91 +24,24 @@
 //   • No registration field.
 //   • Anonymous rate limit: ~400 requests/day; adapter polls at 10 s.
 //
-// NOTE: phase heuristics below are intentionally parallel to adsbAdapter.ts.
-// If a third adapter is added, extract them to feed/phaseUtils.ts.
-
 import type {
   DataFeedAdapter,
   WorldSnapshot,
   Aircraft,
   AircraftDetail,
   Alert,
-  FlightPhase,
   Unsubscribe,
 } from '../types';
 import type { GatePos } from '../data/ybbn_real';
 import type { AirportProfile } from '../airports/types';
 import { deriveActiveRunwayDirection } from '../airports/helpers';
 import { HEALTH_LAGGING_MS, HEALTH_STALLED_MS } from './adsbAdapter';
+import { activeRunwayHeadingDegrees, derivePhase } from './phaseUtils';
 
 // ── Poll interval ─────────────────────────────────────────────────────────────
 // OpenSky anonymous access resolves state vectors at ≤ 10 s intervals;
 // polling more often than this wastes requests without fresher data.
 export const OPENSKY_POLL_MS = 10_000;
-
-// ── Phase heuristics (mirrors adsbAdapter.ts) ─────────────────────────────────
-
-const AT_GATE_GS_KT  = 2;
-const AT_GATE_DIST_M = 60;
-
-export function angularDiff(a: number, b: number): number {
-  const d = Math.abs(a - b) % 360;
-  return d > 180 ? 360 - d : d;
-}
-
-export function activeRunwayHeadingDeg(
-  profile: Pick<AirportProfile, 'runways'>,
-  activeStem: string,
-): number | undefined {
-  for (const rw of profile.runways) {
-    const lowStem  = rw.lowDesignator.replace(/[LRC]$/, '');
-    const highStem = rw.highDesignator.replace(/[LRC]$/, '');
-    if (lowStem  === activeStem) return rw.headingDeg;
-    if (highStem === activeStem) return (rw.headingDeg + 180) % 360;
-  }
-  return undefined;
-}
-
-export function derivePhase(
-  altFt:         number,
-  gs:            number,
-  baroRate:      number | undefined,
-  acX:           number,
-  acY:           number,
-  gates:         GatePos[],
-  track:         number,
-  activeHdg:     number | undefined,
-): FlightPhase {
-  if (altFt < 50) {
-    if (gs < AT_GATE_GS_KT) {
-      const d2 = AT_GATE_DIST_M * AT_GATE_DIST_M;
-      for (const gate of gates) {
-        const dx = acX - gate.pos[0];
-        const dy = acY + gate.pos[1];
-        if (dx * dx + dy * dy <= d2) return 'at-gate';
-      }
-    }
-    return 'taxi-in';
-  }
-
-  let climbing: boolean;
-  if (baroRate !== undefined) {
-    climbing = baroRate > 200;
-  } else if (altFt < 500 && gs >= 80 && activeHdg !== undefined) {
-    // activeHdg is the landing heading; departures use its reciprocal.
-    const landHdg = activeHdg;
-    const depHdg = (activeHdg + 180) % 360;
-    const dDep = angularDiff(track, depHdg);
-    const dLnd = angularDiff(track, landHdg);
-    climbing = dDep < 45 && dDep < dLnd;
-  } else {
-    climbing = false;
-  }
-
-  if (altFt <   500) return climbing ? 'takeoff'   : 'landing';
-  if (altFt < 3_000) return climbing ? 'departure' : 'approach';
-  return                              climbing ? 'enroute-departure' : 'enroute-arrival';
-}
 
 // ── OpenSky state-vector tuple indices ────────────────────────────────────────
 // https://openskynetwork.github.io/opensky-api/rest.html#all-state-vectors
@@ -325,7 +258,7 @@ export class OpenSkyAdapter implements DataFeedAdapter {
       const windDir   = sim?.defaultWindDir   ?? 190;
       const windSpeed = sim?.defaultWindSpeed ?? 12;
       const activeDir = deriveActiveRunwayDirection(this.profile, windDir, windSpeed);
-      const activeHdg = activeRunwayHeadingDeg(this.profile, activeDir);
+      const activeHdg = activeRunwayHeadingDegrees(this.profile, activeDir);
 
       const aircraft: Aircraft[] = [];
       let anonCount = 0, atGateCount = 0;

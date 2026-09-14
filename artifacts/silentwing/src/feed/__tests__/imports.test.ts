@@ -3,12 +3,12 @@ import {
   angularDiff as adsbAngularDiff,
   activeRunwayHeadingDegrees,
   derivePhase as adsbDerivePhase,
-} from '../adsbAdapter';
+} from '../phaseUtils';
 import {
   angularDiff as openSkyAngularDiff,
-  activeRunwayHeadingDeg,
+  activeRunwayHeadingDegrees as activeRunwayHeadingDeg,
   derivePhase as openSkyDerivePhase,
-} from '../openSkyAdapter';
+} from '../phaseUtils';
 
 it('imports all phase and runway helpers', () => {
   expect(typeof adsbAngularDiff).toBe('function');

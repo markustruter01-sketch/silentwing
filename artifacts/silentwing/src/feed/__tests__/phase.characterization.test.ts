@@ -5,12 +5,12 @@ import {
   angularDiff as adsbAngularDiff,
   activeRunwayHeadingDegrees,
   derivePhase as adsbDerivePhase,
-} from '../adsbAdapter';
+} from '../phaseUtils';
 import {
   angularDiff as openSkyAngularDiff,
-  activeRunwayHeadingDeg,
+  activeRunwayHeadingDegrees as activeRunwayHeadingDeg,
   derivePhase as openSkyDerivePhase,
-} from '../openSkyAdapter';
+} from '../phaseUtils';
 
 const angularCases = [
   { name: 'identical headings', a: 90, b: 90, expected: 0 },
