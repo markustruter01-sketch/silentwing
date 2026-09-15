@@ -1,0 +1,52 @@
+[P-18] RECON — map the camera and Director code. Read-only.
+
+GOAL
+Produce a map of where camera and Director logic lives inside
+AirspaceView3D.tsx, so Stage 5 can be planned in pieces rather than
+attempted in one go. Do not paste the whole file.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — read-only. Nothing changed, committed or pushed.
+
+DONE WHEN
+One message is pasted back with the structure below.
+
+SCOPE
+Read only. No file created, edited, deleted, committed or pushed.
+
+DO NOT
+- Do not change any file.
+- Do not start extracting anything. This prompt only looks.
+- Do not paste the entire file. Line ranges and named pieces only.
+- Do not commit or push anything.
+- Do not create any documentation, notes or summary file.
+- Do not add or upgrade any package.
+- Do not fix anything you notice. Report it instead.
+
+STEPS
+1. Report the exact line count of
+   artifacts/silentwing/src/components/views/AirspaceView3D.tsx.
+2. List every top-level function and type in that file, with its starting
+   line number and length in lines. Name only — do not paste bodies.
+3. From that list, mark which ones are camera or Director related. Include
+   anything touching: the Director state machine and its phases, camera
+   position or target, fly-to or transition logic, orbit behaviour, alert
+   focus, aircraft follow, and any easing or interpolation used to move the
+   camera.
+4. Report the full shape of the Director state object — every field and its
+   type. This one you may paste in full; it should be small.
+5. List every Director phase value that appears anywhere in the file.
+6. Report which pieces of the camera logic read from or write to React
+   state or props, versus which only touch plain variables. This is the
+   key question for the whole stage: the parts that touch only plain data
+   can move out cleanly, the parts wired into React cannot.
+7. Report every place the Director is reset, with line numbers. A previous
+   audit said four places. Confirm or correct that.
+8. Report the total lines you would estimate are camera or Director
+   related, as a rough share of the file.
+
+REPORT
+- Answers to every step above, in order.
+- Where a judgement call was needed for step 3, say which way you went and
+  why.
+- Confirm nothing was changed, committed or pushed.
