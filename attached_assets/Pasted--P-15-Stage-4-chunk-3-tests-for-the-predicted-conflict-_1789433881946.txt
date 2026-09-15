@@ -1,0 +1,58 @@
+[P-15] Stage 4, chunk 3 — tests for the predicted-conflict detector.
+
+GOAL
+Test detectPredictedConflict: the converging check, the projection window,
+the severity tiers, and the separation-suppression rule.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — test file only. No source changes.
+
+DONE WHEN
+`pnpm --filter @workspace/silentwing run test` passes with the new file,
+and the existing 83 tests still pass unchanged.
+
+SCOPE
+- artifacts/silentwing/src/alerts/__tests__/predictedConflict.test.ts (new)
+
+DO NOT
+- Do not change predictedConflict.ts or any other source file. If a test
+  fails, fix the test to match what the code actually does.
+- Do not test the other detectors. Separate prompts.
+- Do not touch the existing test files.
+- Do not add or upgrade any package.
+- Do not create or commit any documentation, notes or summary file.
+- Do not fix anything you notice. Report it instead.
+
+STEPS
+1. Reuse the same aircraft-builder approach as separation.test.ts. Do not
+   import it from that file — copy the helper. These suites stay
+   independent.
+2. Same profile throughout: terminalRadiusNm 30, terminalAltCeilFt 10000.
+   Pass an empty Set for active separation keys unless a test needs
+   otherwise.
+3. Headings matter here. In this codebase +x is east and +y is SOUTH, and
+   heading 0 is north. So heading 90 moves in +x, heading 270 moves in -x.
+   Before writing the timing tests, write one simple test that confirms a
+   plane at heading 90 has its projected position increase in x. Get that
+   right first — every other test depends on it.
+4. Test the converging check:
+   - two aircraft flying directly at each other → a finding
+   - two flying directly apart → no finding
+   - two flying parallel in the same direction, never closing → no finding
+5. Test the projection window. Set up a pair that will breach well beyond
+   120 seconds and assert no finding. Then a pair breaching inside the
+   window and assert there is one.
+6. Test the three severity tiers by time-to-conflict: under 45 seconds is
+   critical, 45 to under 90 is caution, 90 or more is advisory. Note the
+   detector steps in 10-second increments, so times come back as multiples
+   of 10. Run these and record actual values rather than assuming.
+7. Test suppression: build a converging pair that WOULD produce a finding,
+   then pass a Set containing that pair's separation key
+   ('separation:idA:idB' with IDs sorted) and assert no finding is
+   returned.
+8. Test that the same six exclusion filters as separation apply here too —
+   onGround, altitude floor, minimum ground speed, ceiling, terminal
+   radius, staleness. One test each is enough.
+9. Run `pnpm --filter @workspace/silentwing run test`, capture raw output.
+10. Run `pnpm typecheck` at the root, capture raw output.
+11. Commit ONLY the new test
