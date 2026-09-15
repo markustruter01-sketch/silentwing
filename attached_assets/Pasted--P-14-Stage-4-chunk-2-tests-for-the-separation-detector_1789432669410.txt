@@ -1,0 +1,71 @@
+[P-14] Stage 4, chunk 2 — tests for the separation detector.
+
+GOAL
+Test detectSeparation properly: the six exclusion filters, the three
+severity bands, and the stable key.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — test file only. No source changes.
+
+DONE WHEN
+`pnpm --filter @workspace/silentwing run test` passes with the new file
+included, and the existing 67 tests still pass unchanged.
+
+SCOPE
+- artifacts/silentwing/src/alerts/__tests__/separation.test.ts  (new)
+- Read-only: artifacts/silentwing/src/types/index.ts
+
+DO NOT
+- Do not change separation.ts or any other source file. If a test fails,
+  the test is wrong — fix the test to match what the code actually does.
+- Do not test the other three detectors. Separate prompts.
+- Do not touch the existing test files.
+- Do not add or upgrade any package.
+- Do not create, delete or commit any documentation, notes, summary or
+  "lesson" file. Only the file in SCOPE may be created.
+- Do not fix anything you notice. Report it instead.
+
+STEPS
+1. Read artifacts/silentwing/src/types/index.ts and build a helper that
+   makes a valid Aircraft with sensible defaults, overridable per test. If
+   the type needs so many fields the helper is unwieldy, STOP and paste
+   the type rather than reaching for `as any`.
+2. Use a fixed profile for every test: terminalRadiusNm 30,
+   terminalAltCeilFt 10000. State it once at the top.
+3. Test each exclusion filter separately. For each, build a pair that
+   WOULD alert, then break one condition and assert no finding:
+   - onGround true
+   - altitude exactly 50, and 51
+   - ground speed exactly 39, and 40
+   - altitude exactly at the ceiling, and one foot below
+   - one aircraft just outside the terminal radius, and just inside
+   - seenPos exactly 30, and 31
+   - seenPos undefined (must be treated as fresh, not stale)
+4. Test the three severity bands. Horizontal is in metres, 1852 per
+   nautical mile. Both horizontal AND vertical must be under a band's
+   limits for it to apply:
+   - 1.0 nm apart, 500 ft apart  → critical
+   - 2.0 nm apart, 800 ft apart  → caution
+   - 4.0 nm apart, 1200 ft apart → advisory
+   - 6.0 nm apart, 100 ft apart  → nothing
+   - 1.0 nm apart, 1600 ft apart → nothing (close but vertically clear)
+   Also test the exact boundaries: horizontal at precisely 1.5 nm, and
+   vertical at precisely 700 ft. Run them and record what they actually
+   return rather than assuming which side they fall on.
+5. Test that the key is stable: two aircraft produce the same key
+   regardless of the order they appear in the input array.
+6. Test that three aircraft all in breach produce three findings, one per
+   pair.
+7. Run `pnpm --filter @workspace/silentwing run test`, capture raw output.
+8. Run `pnpm typecheck` at the root, capture raw output.
+9. Commit ONLY the new test file. Message: "Stage 4: test the separation
+   detector [STRUCTURAL-ONLY]". Do not push. Report the hash.
+
+REPORT
+- The commit hash.
+- Raw output of steps 7 and 8, unedited.
+- The full contents of the new test file.
+- A plain list of any case where the actual result differed from what you
+  expected before running it, with both values. If none, say so.
+- The new total test count.
+- Confirm no file outside SCOPE was changed or committed.
