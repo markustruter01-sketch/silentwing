@@ -197,6 +197,47 @@ describe('detectPredictedConflict time-to-conflict severity', () => {
   });
 });
 
+describe('detectPredictedConflict vertical breach condition', () => {
+  // The detector holds altitude constant while projecting forward; it does not
+  // account for climb or descent, so a vertically converging pair is not detected.
+  it('returns no finding when the horizontal breach has 1500 feet of vertical separation', () => {
+    expect(
+      findingsFor(
+        makePair(
+          { heading: 90, position: { alt: 5000 } },
+          { heading: 270, position: { x: 7000, alt: 6500 } },
+        ),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('returns a finding when the vertical separation is 999 feet', () => {
+    const findings = findingsFor(
+      makePair(
+        { heading: 90, position: { alt: 5000 } },
+        { heading: 270, position: { x: 7000, alt: 5999 } },
+      ),
+    );
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      severity: 'critical',
+      ttcSeconds: 20,
+    });
+  });
+
+  it('returns no finding when the vertical separation is exactly 1000 feet', () => {
+    expect(
+      findingsFor(
+        makePair(
+          { heading: 90, position: { alt: 5000 } },
+          { heading: 270, position: { x: 7000, alt: 6000 } },
+        ),
+      ),
+    ).toHaveLength(0);
+  });
+});
+
 describe('detectPredictedConflict suppression', () => {
   it('suppresses a predicted conflict when the separation key is active', () => {
     const findings = findingsFor(
