@@ -1,0 +1,52 @@
+[P-16] Stage 4, chunk 4 — close the vertical gap in the predicted-conflict tests.
+
+GOAL
+Add the missing altitude tests. Every existing predicted-conflict test has
+both aircraft at the same altitude, so the vertical breach condition is
+completely untested.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — test file only. No source changes.
+
+DONE WHEN
+`pnpm --filter @workspace/silentwing run test` passes and the total is 102.
+
+SCOPE
+- artifacts/silentwing/src/alerts/__tests__/predictedConflict.test.ts
+
+DO NOT
+- Do not change predictedConflict.ts or any other source file. If a test
+  fails, fix the test to match what the code actually does.
+- Do not change or reorder any of the 16 existing tests.
+- Do not add or upgrade any package.
+- Do not create or commit any documentation, notes or summary file.
+- Do not rewrite, reset or amend git history. If an unwanted commit
+  appears, leave it and report it. Do not use reset, rebase or amend.
+- Do not fix anything you notice. Report it instead.
+
+STEPS
+1. Add a test where the pair converges horizontally exactly as the
+   existing critical case does, but one aircraft is 1,500 feet above the
+   other. Assert no finding. Both conditions must be met for a breach.
+2. Add the boundary pair, using the same horizontal setup each time:
+   - 999 feet apart vertically
+   - exactly 1,000 feet apart vertically
+   Run them and record what each actually returns. Do not assume which
+   side the boundary falls on.
+3. Add a comment above these three tests noting that the detector holds
+   altitude constant while projecting forward — it does not account for
+   climb or descent — so a vertically converging pair is not detected.
+   State it as observed behaviour, not as a defect.
+4. Run `pnpm --filter @workspace/silentwing run test`, capture raw output.
+5. Run `pnpm typecheck` at the root, capture raw output.
+6. Commit ONLY the test file. Message: "Stage 4: test the vertical breach
+   condition in predicted conflict [STRUCTURAL-ONLY]". Do not push.
+   Report the hash.
+
+REPORT
+- The commit hash.
+- Raw output of steps 4 and 5, unedited.
+- The three new tests exactly as written, with their expected values.
+- What the 999-foot and 1,000-foot cases actually returned.
+- The new total test count.
+- Confirm no existing test was changed and no history was rewritten.
