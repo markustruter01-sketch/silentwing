@@ -1,0 +1,77 @@
+[P-17] Stage 4, chunk 5 — tests for runway occupancy and stale tracks.
+
+GOAL
+Test the two remaining detectors and finish Stage 4's detector coverage.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — test files only. No source changes.
+
+DONE WHEN
+`pnpm --filter @workspace/silentwing run test` passes with both new files,
+and all 102 existing tests still pass unchanged.
+
+SCOPE
+- artifacts/silentwing/src/alerts/__tests__/runwayOccupancy.test.ts (new)
+- artifacts/silentwing/src/alerts/__tests__/staleTrack.test.ts (new)
+- Read-only: artifacts/silentwing/src/data/ybbn_real.ts
+
+DO NOT
+- Do not change either detector or any other source file. If a test fails,
+  fix the test to match what the code actually does.
+- Do not use a real airport profile. Build a simple synthetic runway.
+- Do not touch the existing test files.
+- Do not add or upgrade any package.
+- Do not create or commit any documentation, notes or summary file.
+- Do not rewrite, reset or amend git history.
+- Do not fix anything you notice. Report it instead.
+
+STEPS — runway occupancy
+1. Read the Polyline type in data/ybbn_real.ts. Build a synthetic profile
+   with ONE straight runway running east-west, 3000 m long, centred on the
+   origin. Use terminalRadiusNm 30.
+2. IMPORTANT: the detector flips the Y sign on runway geometry before
+   comparing, because geometry uses +y = north and aircraft use +y = south.
+   Write one test first that puts an aircraft plainly on the centreline and
+   confirms it is detected. Get that working before anything else — if the
+   sign is wrong every later test passes for the wrong reason.
+3. Then test:
+   - one aircraft alone in the corridor → no finding (needs two)
+   - two in the corridor → a finding
+   - corridor half-width: one aircraft 59 m off centreline and one at 61 m.
+     Run them, record which is inside.
+   - the 500 m end extension: one aircraft just past the runway end but
+     within 500 m, and one beyond it
+   - altitude: one at 499 ft and one at 500 ft
+   - staleness: one at 60 s and one at 61 s
+   - severity: two aircraft both moving above 5 knots → critical; two
+     present but only one moving → caution
+
+STEPS — stale tracks
+4. Test:
+   - seenPos 29 → no finding; 30 → advisory; 59 → advisory; 60 → caution
+   - seenPos undefined → no finding
+   - the anonymous-ground suppression: an aircraft whose callsign equals
+     its id AND is onGround → no finding
+   - same anonymous aircraft but airborne and moving → a finding
+   - a NAMED aircraft on the ground and stale → confirm whether it is
+     suppressed or reported. Run it and record the actual answer.
+   - the nearby-traffic note: a stale aircraft with a fresh aircraft within
+     10 nm mentions nearby traffic in its message; with none nearby, it
+     does not
+
+STEPS — finish
+5. Run `pnpm --filter @workspace/silentwing run test`, capture raw output.
+6. Run `pnpm typecheck` at the root, capture raw output.
+7. Commit ONLY the two new test files, as one commit. Message: "Stage 4:
+   test the runway occupancy and stale track detectors [STRUCTURAL-ONLY]".
+   Do not push. Report the hash.
+
+REPORT
+- The commit hash.
+- Raw output of steps 5 and 6, unedited.
+- The full contents of both new test files.
+- The result of step 2 stated plainly — confirm the Y-flip direction.
+- What the named-stale-aircraft-on-the-ground case actually returned.
+- Every case where the actual result differed from what you expected
+  before running it, with both values.
+- The new total test count.
