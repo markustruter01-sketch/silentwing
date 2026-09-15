@@ -65,7 +65,7 @@ describe('detectStaleTracks anonymous and ground handling', () => {
           onGround: true,
           groundSpeed: 0,
         }),
-      ),
+      ]),
     ).toHaveLength(0);
   });
 
