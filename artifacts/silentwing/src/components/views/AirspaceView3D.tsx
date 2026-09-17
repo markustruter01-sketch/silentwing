@@ -2394,6 +2394,7 @@ export default function AirspaceView3D({
 
     // ── Raycaster (shared across frames) ────────────────────────────────────
     const raycaster = new THREE.Raycaster();
+    let lastFollowTileDiagnosticMs = -Infinity;
 
     // ── Animation loop ───────────────────────────────────────────────────────
     const tick = () => {
@@ -3148,7 +3149,39 @@ export default function AirspaceView3D({
 
       if (tileLayerRef.current) {
         const tileLayer = tileLayerRef.current;
+        // TilesRendererBase.prepareForTraversal reads camera.matrixWorld and
+        // camera.matrixWorldInverse directly. The render call below updates
+        // those matrices too late for tile selection, so update them after
+        // follow/orbit camera movement and before tiles.update().
+        camera.updateMatrixWorld(true);
         const visibleTileCount = tileLayer.update();
+        if (
+          st.cameraMode === 'follow' &&
+          nowMs - lastFollowTileDiagnosticMs >= 1_000 &&
+          st.selectedAcId
+        ) {
+          const followed = st.acMap.get(st.selectedAcId);
+          if (followed) {
+            const groundTarget = new THREE.Vector3(
+              followed.renderPos.x,
+              0,
+              followed.renderPos.z,
+            );
+            console.info(
+              `[TILES][FOLLOW] camera-to-ground=${camera.position.distanceTo(groundTarget).toFixed(1)} m ` +
+              `vertical-ground=${Math.abs(camera.position.y).toFixed(1)} m ` +
+              `aircraft-distance=${camera.position.distanceTo(followed.renderPos).toFixed(1)} m ` +
+              `errorTarget=${tileLayer.tiles.errorTarget} ` +
+              `visible=${tileLayer.tiles.visibleTiles.size} ` +
+              `active=${tileLayer.tiles.activeTiles.size} ` +
+              `loadProgress=${tileLayer.tiles.loadProgress.toFixed(3)} ` +
+              `downloadRunning=${tileLayer.tiles.downloadQueue.running} ` +
+              `parseRunning=${tileLayer.tiles.parseQueue.running} ` +
+              `processRunning=${tileLayer.tiles.processNodeQueue.running}`,
+            );
+            lastFollowTileDiagnosticMs = nowMs;
+          }
+        }
         if (visibleTileCount > 0 && !tileVisibleRef.current) {
           tileVisibleRef.current = true;
           setTileLoaded(true);
