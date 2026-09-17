@@ -1,0 +1,62 @@
+[P-30] Stage A2 — make the UI readable against photoreal ground.
+
+GOAL
+The app's panels and floating labels were designed for a dark empty
+background. The background is now a photograph. Make everything readable
+again without redesigning the interface.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — visual only. No logic, no data, no positions.
+
+DONE WHEN
+Every panel and every floating label is legible over photoreal ground,
+and the app looks unchanged when photoreal ground is off.
+
+SCOPE
+- panel and label styling only
+
+DO NOT
+- Do not change any aircraft position, altitude, scale or placement.
+- Do not change toV3, ALT_SCALE, tileLayer.ts, director.ts, any detector,
+  any adapter, or any test.
+- Do not move any panel. Position is already settled.
+- Do not restyle the app when photoreal ground is OFF. It must look
+  exactly as it does today.
+- Do not invent a new colour palette. Keep the existing colours and add
+  backing behind them.
+- Do not load tiles during your own verification beyond what step 6 needs.
+- Do not create or commit any documentation, notes or summary file.
+
+STEPS
+1. Read how the existing panels are styled — the METAR stack, the
+   sequence ladder, the alert panels, the keyboard help. Report what
+   background they currently use.
+2. Give the HTML panels a proper backing: a dark translucent background
+   with a blur behind it, and a subtle border. Enough that white text on
+   it is legible over bright imagery. Keep the existing text colours.
+3. The floating 3D labels are the harder half — aircraft callsign labels,
+   TERMINAL, runway numbers, alert boxes. These are canvas textures in
+   the 3D scene, not HTML. Read how they are drawn, then give each a dark
+   semi-opaque rounded panel behind the text, drawn into the same canvas.
+   Report which functions you changed.
+4. The alert boxes are far too large. In one screenshot a single advisory
+   fills a quarter of the screen. Find what sets their scale and reduce it
+   so an alert box reads as a label, not a billboard. Report the before
+   and after values.
+5. Apply the same to the advisory and critical alert labels so all
+   floating text has consistent backing.
+6. Verify with photoreal ground ON at Sydney, and take a screenshot. One
+   tile request is acceptable for this.
+7. Verify with photoreal ground OFF that the app looks as it did before.
+   Screenshot that too.
+8. Run the tests, typecheck and build as usual.
+9. Commit. Message: "Stage A2: legible panels and labels over photoreal
+   ground [STRUCTURAL-ONLY]". Do not push.
+
+REPORT
+- The commit hash.
+- Both screenshots.
+- Which label-drawing functions you changed.
+- The alert box scale before and after.
+- Raw output of step 8.
+- Tile requests used.
