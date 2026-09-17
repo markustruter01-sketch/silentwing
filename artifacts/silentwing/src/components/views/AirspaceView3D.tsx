@@ -1187,7 +1187,12 @@ function disposeTakeoffIndicator(entry: TakeoffIndicatorEntry, scene: THREE.Scen
 interface AcBundle {
   cone:     THREE.Mesh;
   outline:  THREE.Mesh;
+  hitTarget: THREE.Mesh;
+  hitTargetMat: THREE.MeshBasicMaterial;
   stem:     THREE.Line;
+  stemMat:  THREE.LineBasicMaterial;
+  groundShadow: THREE.Mesh;
+  groundShadowMat: THREE.MeshBasicMaterial;
   trail:    THREE.Line;
   label:    THREE.Sprite;
   /** Timestamped trail points.  Oldest at index 0, newest at the tail. */
@@ -1267,6 +1272,9 @@ function disposeBundle(b: AcBundle): void {
   (b.cone.material as THREE.Material).dispose();
   // outline geometry is shared — dispose the per-aircraft material clone
   (b.outline.material as THREE.Material).dispose();
+  b.hitTargetMat.dispose();
+  b.stemMat.dispose();
+  b.groundShadowMat.dispose();
   b.alertRingMat.dispose();
   b.stem.geometry.dispose(); // per-aircraft (two endpoint positions vary)
   b.trail.geometry.dispose(); (b.trail.material as THREE.Material).dispose(); // per-aircraft clone
@@ -1283,9 +1291,6 @@ function disposeBundle(b: AcBundle): void {
   if (b.wakeR)      { b.wakeR.geometry.dispose(); b.wakeRMat?.dispose(); }
 }
 
-// Shared stem material — one instance, never disposed here
-const STEM_MAT = new THREE.LineBasicMaterial({ color: 0x334155, transparent: true, opacity: 0.50 });
-
 // ── Shared geometries — one instance referenced by many Mesh/Line objects ─────
 // Never call .dispose() on these in per-aircraft teardown.
 const CONE_GEO       = (() => { const g = new THREE.ConeGeometry(27.5, 85, 4, 1); g.rotateX(-Math.PI / 2); return g; })();
@@ -1293,6 +1298,12 @@ const HALO_GEO       = new THREE.TorusGeometry(84, 9, 8, 64);
 const ALERT_RING_GEO = new THREE.TorusGeometry(92, 6, 8, 64);
 const PIN_RING_GEO   = new THREE.TorusGeometry(110, 5, 8, 64);
 const SEP_BUBBLE_GEO = new THREE.SphereGeometry(SEP_BUBBLE_R, 16, 12);
+const HIT_TARGET_GEO = new THREE.SphereGeometry(105, 10, 8);
+const GROUND_SHADOW_GEO = (() => {
+  const g = new THREE.CircleGeometry(62, 24);
+  g.rotateX(-Math.PI / 2);
+  return g;
+})();
 
 // ── Shared materials — per-aircraft objects reference (not own) these ─────────
 // Never dispose these in per-aircraft teardown.

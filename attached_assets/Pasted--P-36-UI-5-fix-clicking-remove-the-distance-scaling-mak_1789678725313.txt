@@ -1,0 +1,54 @@
+[P-36] UI-5 — fix clicking, remove the distance scaling, make aircraft visible honestly.
+
+GOAL
+Aircraft are unclickable, distant markers are wrongly enlarged, and
+aircraft are still hard to find over photoreal ground.
+
+RISK CLASS
+[BEHAVIOR-CHANGING].
+
+DO NOT
+- Do not change ALT_SCALE or toV3. Aircraft altitude is already known to
+  be compressed. Raising aircraft to make them visible would make the
+  height MORE wrong, which the project charter forbids.
+- Do not change aircraft positions, headings, detectors or tests.
+- Do not create or commit any documentation or notes file.
+
+FIXES
+
+1. CLICKING IS BROKEN. Aircraft can no longer be selected. Find what the
+   raycast tests against, and report whether the distance scaling added
+   in P-35 changed the mesh the ray hits. Fix it so clicking works at any
+   zoom. This is the priority — report exactly what the cause was.
+
+2. REMOVE THE DISTANCE COMPENSATION added in P-35. Distant aircraft are
+   now drawn larger than near ones, which looks broken and misrepresents
+   the space. Restore fixed world-space sizing. Report what the scale
+   values were and what you restored them to.
+
+3. MAKE AIRCRAFT VISIBLE WITHOUT MOVING THEM. Add, for every airborne
+   aircraft:
+   - a thin vertical stem from the aircraft straight down to the ground
+     plane, in the aircraft's phase colour at low opacity
+   - a small flat ellipse where that stem meets the ground, as a shadow
+   The stem gives the eye something to follow and shows the aircraft's
+   position over the ground. Report whether a stem already exists in the
+   codebase before adding a second one.
+
+4. Keep the dark silhouette from P-35 but report whether it is actually
+   helping. If it is making aircraft muddier against bright ground, say
+   so and reduce it.
+
+5. Ground aircraft do not need a stem. Give them the shadow only.
+
+VERIFY
+6. Run the tests, typecheck and build as usual.
+7. Commit. Message: "UI-5: restore aircraft selection, remove distance
+   scaling, add position stems [BEHAVIOR-CHANGING]". Do not push.
+
+REPORT
+- The commit hash.
+- Raw output of step 6.
+- The cause of the click failure, specifically.
+- Scale values before and after.
+- Your answer to step 3 about existing stems, and step 4.
