@@ -1,0 +1,66 @@
+[P-19] Stage 5, chunk 1 — export and characterize the Director logic.
+
+GOAL
+Make the Director functions testable and lock their current behaviour,
+before anything moves.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — adding exports changes no behaviour.
+
+DONE WHEN
+`pnpm --filter @workspace/silentwing run test` passes, with new tests
+covering pickDirectorAircraft, alertMidpoint and easeInOut, and all 121
+existing tests unchanged.
+
+SCOPE
+- artifacts/silentwing/src/components/views/AirspaceView3D.tsx
+  (export keywords ONLY)
+- artifacts/silentwing/src/components/views/__tests__/director.test.ts (new)
+
+DO NOT
+- The only edit permitted to AirspaceView3D.tsx is adding the word export
+  before a function keyword. Not one other character.
+- Do not extract anything yet. Do not create a new module. Next prompt.
+- Do not export or test runDirector or startFlyTo yet — they mutate scene
+  state and need their own prompt.
+- Do not instantiate the AirspaceView3D component in any test.
+- Do not add or upgrade any package.
+- Do not create or commit any documentation, notes or summary file.
+- Do not rewrite, reset or amend git history.
+- Do not fix anything you notice. Report it instead.
+
+STEPS
+1. Add export to exactly three functions in AirspaceView3D.tsx:
+   easeInOut (line 431), pickDirectorAircraft (line 1488), and
+   alertMidpoint (line 1521).
+2. Create the test file. FIRST write a single test that imports all three
+   and asserts each is a function. Run it. If the import fails because the
+   module touches a browser global at load time, STOP and report the raw
+   error. Do not add jsdom, do not add a mock, do not change the vitest
+   config.
+3. Only once that import test passes, write the rest.
+4. easeInOut: test 0, 0.5, 1, and two values either side of the midpoint.
+   Run them and record the actual returned numbers.
+5. pickDirectorAircraft: read its body first, then test how it chooses a
+   subject — including what it does with an empty list, with ground
+   vehicles present, and when two candidates are equally good. Write the
+   cases from what the code actually does, not from what the name suggests.
+6. alertMidpoint: test the normal two-aircraft case, and the fallback when
+   the referenced aircraft are not present. The fallback matters — a
+   previous audit found it falls back to the airport centre.
+7. Run `pnpm --filter @workspace/silentwing run test`, capture raw output.
+8. Run `pnpm typecheck` at the root, capture raw output.
+9. Commit both files. Message: "Stage 5: characterize the Director helpers
+   [STRUCTURAL-ONLY]". Do not push. Report the hash.
+
+REPORT
+- The commit hash.
+- Raw output of steps 7 and 8, unedited.
+- The full contents of the new test file.
+- The bodies of pickDirectorAircraft and alertMidpoint, pasted in full, so
+  the tests can be checked against the real code.
+- Every case where the actual result differed from what you expected
+  before running it, with both values.
+- The exact diff applied to AirspaceView3D.tsx. Three added words, nothing
+  else.
+- The new total test count.
