@@ -20,10 +20,42 @@ import {
 import { GoogleCloudAuthPlugin } from "3d-tiles-renderer/plugins";
 import "./photorealisticTilesExperiment.css";
 
-const BRISBANE_AIRPORT = {
-  latitude: -27.3842,
-  longitude: 153.1175,
-};
+const AIRPORTS = [
+  {
+    id: "YBBN",
+    label: "Brisbane",
+    latitude: -27.3842,
+    longitude: 153.1175,
+  },
+  {
+    id: "YSSY",
+    label: "Sydney",
+    latitude: -33.9461,
+    longitude: 151.1772,
+  },
+  {
+    id: "YMML",
+    label: "Melbourne",
+    latitude: -37.669,
+    longitude: 144.841,
+  },
+  {
+    id: "YPPH",
+    label: "Perth",
+    latitude: -31.9403,
+    longitude: 115.9669,
+  },
+  {
+    id: "YPAD",
+    label: "Adelaide",
+    latitude: -34.945,
+    longitude: 138.531,
+  },
+] as const;
+
+type AirportId = (typeof AIRPORTS)[number]["id"];
+type AirportOption = (typeof AIRPORTS)[number];
+const BRISBANE_AIRPORT = AIRPORTS[0];
 
 // These are the same origin and equirectangular projection constants used by
 // the YBBN ADS-B adapter. The app's flat frame is +x east, +y south, then
@@ -69,7 +101,20 @@ function appFlatToLatLon({ x, y }: FlatPosition) {
   };
 }
 
-function createMarkerDefinitions(): MarkerDefinition[] {
+function createMarkerDefinitions(airport: AirportOption): MarkerDefinition[] {
+  if (airport.id !== BRISBANE_AIRPORT.id) {
+    return [
+      {
+        id: `${airport.id.toLowerCase()}-reference`,
+        label: `${airport.label} reference point`,
+        latitude: airport.latitude,
+        longitude: airport.longitude,
+        source: "Approximate airport reference point; good to within a few hundred metres",
+        color: "#ffffff",
+      },
+    ];
+  }
+
   const referenceFlat = projectToAppFlat(
     BRISBANE_AIRPORT.latitude,
     BRISBANE_AIRPORT.longitude,
@@ -188,11 +233,16 @@ export default function PhotorealisticTilesExperiment() {
     controls: GlobeControls;
     animationFrame: number;
     removeResizeListener: () => void;
+    removeTileListener: () => void;
   } | null>(null);
   const [status, setStatus] = useState<ExperimentStatus>("ready");
   const [statusMessage, setStatusMessage] = useState(
     "No Google request has been made.",
   );
+  const [selectedAirportId, setSelectedAirportId] =
+    useState<AirportId>(BRISBANE_AIRPORT.id);
+  const [loadedAirportId, setLoadedAirportId] = useState<AirportId | null>(null);
+  const [loadRequestCount, setLoadRequestCount] = useState(0);
   const [keyRequestMs, setKeyRequestMs] = useState<number | null>(null);
   const [firstFrameMs, setFirstFrameMs] = useState<number | null>(null);
   const [loadedTileCount, setLoadedTileCount] = useState(0);
@@ -200,6 +250,25 @@ export default function PhotorealisticTilesExperiment() {
   const [markerReadouts, setMarkerReadouts] = useState<MarkerReadout[] | null>(
     null,
   );
+  const selectedAirport =
+    AIRPORTS.find((airport) => airport.id === selectedAirportId) ??
+    BRISBANE_AIRPORT;
+  const loadedAirport = loadedAirportId
+    ? AIRPORTS.find((airport) => airport.id === loadedAirportId) ?? null
+    : null;
+
+  const disposeRuntime = () => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+
+    cancelAnimationFrame(runtime.animationFrame);
+    runtime.removeResizeListener();
+    runtime.removeTileListener();
+    runtime.tiles.dispose();
+    runtime.controls.dispose();
+    runtime.renderer.dispose();
+    runtimeRef.current = null;
+  };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -215,22 +284,27 @@ export default function PhotorealisticTilesExperiment() {
 
     return () => {
       window.removeEventListener("resize", resize);
-      runtimeRef.current?.tiles.dispose();
-      runtimeRef.current?.controls.dispose();
-      runtimeRef.current?.renderer.dispose();
-      runtimeRef.current?.removeResizeListener();
-      if (runtimeRef.current) {
-        cancelAnimationFrame(runtimeRef.current.animationFrame);
-      }
-      runtimeRef.current = null;
+      disposeRuntime();
     };
   }, []);
 
   const loadTiles = async () => {
-    if (status !== "ready" && status !== "error") return;
+    if (status !== "ready" && status !== "error" && status !== "loaded") return;
+
+    const airport = selectedAirport;
+    disposeRuntime();
+    setLoadRequestCount((count) => count + 1);
+    setLoadedAirportId(null);
+    setLoadedTileCount(0);
+    setMarkerReadouts(null);
+    setKeyRequestMs(null);
+    setFirstFrameMs(null);
+    setAttribution("Google Maps Platform");
 
     setStatus("requesting-key");
-    setStatusMessage("Requesting a session configuration from the server…");
+    setStatusMessage(
+      `Requesting a session configuration for ${airport.id} ${airport.label}…`,
+    );
     const requestStarted = performance.now();
 
     try {
@@ -281,7 +355,7 @@ export default function PhotorealisticTilesExperiment() {
       tiles.group.matrixAutoUpdate = false;
       scene.add(tiles.group);
 
-      const markerDefinitions = createMarkerDefinitions();
+      const markerDefinitions = createMarkerDefinitions(airport);
       const markerReadoutValues: MarkerReadout[] = [];
       for (const marker of markerDefinitions) {
         const scenePosition = new Vector3();
@@ -311,8 +385,8 @@ export default function PhotorealisticTilesExperiment() {
 
       const target = new Vector3();
       tiles.ellipsoid.getCartographicToPosition(
-        (BRISBANE_AIRPORT.latitude * Math.PI) / 180,
-        (BRISBANE_AIRPORT.longitude * Math.PI) / 180,
+        (airport.latitude * Math.PI) / 180,
+        (airport.longitude * Math.PI) / 180,
         0,
         target,
       );
@@ -332,7 +406,10 @@ export default function PhotorealisticTilesExperiment() {
       resize();
 
       setStatus("loading");
-      setStatusMessage("Google Photorealistic 3D Tiles are loading…");
+      setLoadedAirportId(airport.id);
+      setStatusMessage(
+        `Google Photorealistic 3D Tiles for ${airport.id} ${airport.label} are loading…`,
+      );
       const tileStarted = performance.now();
       let firstVisibleFrame = false;
       let previousAttribution = "";
@@ -343,7 +420,9 @@ export default function PhotorealisticTilesExperiment() {
           firstVisibleFrame = true;
           setFirstFrameMs(performance.now() - tileStarted);
           setStatus("loaded");
-          setStatusMessage("Brisbane Airport tiles are visible.");
+          setStatusMessage(
+            `${airport.id} ${airport.label} tiles are visible.`,
+          );
         }
       };
       tiles.addEventListener("tile-visibility-change", onTileVisibilityChange);
@@ -372,6 +451,11 @@ export default function PhotorealisticTilesExperiment() {
           controls,
           animationFrame,
           removeResizeListener: () => window.removeEventListener("resize", resize),
+          removeTileListener: () =>
+            tiles.removeEventListener(
+              "tile-visibility-change",
+              onTileVisibilityChange,
+            ),
         };
       };
       render();
@@ -389,11 +473,32 @@ export default function PhotorealisticTilesExperiment() {
     <main className="tiles-experiment">
       <canvas ref={canvasRef} className="tiles-experiment__canvas" />
       <section className="tiles-experiment__panel" aria-labelledby="tiles-title">
-        <div className="tiles-experiment__eyebrow">P-24 / coordinate proof</div>
-        <h1 id="tiles-title">Brisbane Airport marker conversion</h1>
+        <div className="tiles-experiment__eyebrow">P-25 / coverage check</div>
+        <h1 id="tiles-title">Australian major airport tile coverage</h1>
         <p className="tiles-experiment__lede">
-          Five known positions will be placed on the photorealistic tiles. The
-          scene stays empty until you explicitly start the Google request.
+          Choose an airport to set the pending target. The scene stays unchanged
+          until you explicitly start a Google request.
+        </p>
+
+        <div className="tiles-experiment__field">
+          <label htmlFor="airport-target">Airport target</label>
+          <select
+            id="airport-target"
+            value={selectedAirportId}
+            onChange={(event) =>
+              setSelectedAirportId(event.target.value as AirportId)
+            }
+          >
+            {AIRPORTS.map((airport) => (
+              <option key={airport.id} value={airport.id}>
+                {airport.id} — {airport.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <p className="tiles-experiment__pending-note">
+          Pending reference: {selectedAirport.latitude}, {selectedAirport.longitude}.
+          Changing this selector does not fetch tiles.
         </p>
 
         <button
@@ -404,9 +509,7 @@ export default function PhotorealisticTilesExperiment() {
         >
           {busy
             ? "Loading tiles…"
-            : status === "loaded"
-              ? "Markers loaded"
-              : "Load Brisbane Airport tiles"}
+            : `Load ${selectedAirport.id} ${selectedAirport.label} tiles`}
         </button>
 
         <div className="tiles-experiment__status" role="status" aria-live="polite">
@@ -418,12 +521,20 @@ export default function PhotorealisticTilesExperiment() {
 
         <dl className="tiles-experiment__metrics">
           <div>
-            <dt>Latitude</dt>
-            <dd>{BRISBANE_AIRPORT.latitude}</dd>
+            <dt>Pending latitude</dt>
+            <dd>{selectedAirport.latitude}</dd>
           </div>
           <div>
-            <dt>Longitude</dt>
-            <dd>{BRISBANE_AIRPORT.longitude}</dd>
+            <dt>Pending longitude</dt>
+            <dd>{selectedAirport.longitude}</dd>
+          </div>
+          <div>
+            <dt>Loaded airport</dt>
+            <dd>{loadedAirport ? `${loadedAirport.id} ${loadedAirport.label}` : "—"}</dd>
+          </div>
+          <div>
+            <dt>Tile load requests</dt>
+            <dd>{loadRequestCount}</dd>
           </div>
           <div>
             <dt>Server key request</dt>
