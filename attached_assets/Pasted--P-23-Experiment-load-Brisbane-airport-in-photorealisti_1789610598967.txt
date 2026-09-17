@@ -1,0 +1,70 @@
+[P-23] Experiment — load Brisbane airport in photorealistic 3D.
+Throwaway code. Not part of the app.
+
+GOAL
+One standalone page that loads Google's photorealistic 3D tiles for
+Brisbane airport, so we can look at it and decide whether to commit to
+the ground swap.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — new isolated files. Nothing existing is touched.
+
+DONE WHEN
+The page loads, a button fetches Brisbane airport in 3D, and it can be
+orbited and zoomed with the mouse.
+
+SCOPE
+- artifacts/silentwing/src/experiment/  (new folder, all new files)
+- artifacts/silentwing/package.json  (one dependency)
+- a route so the page can be opened in a browser
+
+DO NOT
+- COST CONTROL, the most important rule here: nothing may be fetched from
+  Google on page load. The page starts empty with a button. Tiles load ONLY
+  when the button is clicked. Replit reloads the preview on every file save
+  and each load would otherwise be a billable request.
+- Do not put the API key in any source file. Read it from the environment
+  as GOOGLE_MAPS_API_KEY.
+- Do not commit the API key. Check before committing.
+- Do not modify AirspaceView3D.tsx, director.ts, any adapter, any detector,
+  or any existing test.
+- Do not modify the existing app's routes or App.tsx beyond adding one
+  route entry for this page.
+- Do not add aircraft yet. Ground only.
+- Do not create or commit any documentation, notes or summary file.
+- Do not rewrite, reset or amend git history.
+
+STEPS
+1. Confirm the current branch is experiment-3d. If not, STOP and report.
+2. Install the 3D tiles renderer:
+   pnpm --filter @workspace/silentwing add 3d-tiles-renderer
+   Report the version installed.
+3. The API key must not reach the browser bundle from source. Check how
+   the existing ADS-B proxy handles its key in api-server and follow the
+   same pattern. Report which approach you used.
+4. Build a page at src/experiment/TilesTest.tsx:
+   - Starts with an empty scene and a single "Load Brisbane" button
+   - No network request of any kind before that click
+   - On click, loads Google photorealistic tiles centred on Brisbane
+     airport, lat -27.3842, lon 153.1175
+   - Mouse: drag to orbit, wheel to zoom
+   - An on-screen counter showing how many times tiles have been loaded
+     this session, so usage is visible at all times
+   - A visible note saying each load is one billable request
+5. Add a route so it opens at /experiment. Match however routing is
+   already done in this app — do not introduce a different router.
+6. Run `pnpm --filter @workspace/silentwing run test` and confirm all 139
+   still pass.
+7. Run `pnpm typecheck` at the root.
+8. Report the URL to open the page. Do NOT click the load button
+   yourself — that is for Pierre to do.
+9. Commit. Message: "Experiment: photorealistic 3D tiles test page".
+   Do not push.
+
+REPORT
+- The commit hash and the installed version.
+- Your answer to step 3 — how the key is kept out of the browser bundle.
+- Raw output of steps 6 and 7.
+- The exact URL to open.
+- Confirm no tiles are requested before the button is clicked.
+- Confirm the key does not appear in any committed file.
