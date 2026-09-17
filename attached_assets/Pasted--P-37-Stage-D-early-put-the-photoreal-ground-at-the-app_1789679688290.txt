@@ -1,0 +1,46 @@
+[P-37] Stage D (early) — put the photoreal ground at the app's zero height.
+
+GOAL
+Aircraft are rendering below the visible photoreal ground. The app draws
+ground level at Y=0, but the photographed tarmac sits above that. Measure
+the difference and move the tiles down so the tarmac is at Y=0.
+
+RISK CLASS
+[BEHAVIOR-CHANGING].
+
+DO NOT
+- Do not change ALT_SCALE, toV3, or any aircraft position or altitude.
+  The app's coordinate frame is correct and tested. The TILES move.
+- Do not raise aircraft to compensate. That would make altitude more wrong.
+- Do not change any detector, adapter, director.ts, or test.
+- Do not create or commit any documentation or notes file.
+
+STEPS
+1. MEASURE FIRST, do not assume. Using the tile renderer, sample the
+   actual height of the loaded tile surface at the airport reference
+   point, in the app's own coordinate frame. Report the number in metres.
+   If the library offers a raycast or a surface-height helper, use it. Do
+   not hand-write geoid maths.
+2. Report what you expected and what you measured. If the number is near
+   zero, the theory is wrong — STOP and report, do not apply an offset.
+3. Apply that measurement as a vertical offset to the tile world, so the
+   tarmac at the airport reference point sits at app Y = 0. Put the offset
+   in the same transform built in Stage A; do not add a second one.
+4. Make the offset a named value with a comment saying what it is and how
+   it was measured, so it is not a mystery number later.
+5. Report whether this offset should be recomputed per airport. Sydney,
+   Melbourne, Perth and Adelaide will each have their own. If it must be
+   per airport, say how it should be obtained rather than hardcoding one.
+6. Confirm afterwards that ground aircraft markers and their shadows sit
+   ON the visible tarmac, not under it and not floating above it.
+
+VERIFY
+7. Run the tests, typecheck and build as usual.
+8. Commit. Message: "Stage D: offset the tile world so photoreal ground
+   sits at app zero [BEHAVIOR-CHANGING]". Do not push.
+
+REPORT
+- The commit hash.
+- The measured offset in metres, and how you measured it.
+- Your answer to step 2 and step 5.
+- Raw output of step 7.
