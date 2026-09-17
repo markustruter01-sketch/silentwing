@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { alertMidpoint, easeInOut, pickDirectorAircraft } from '../AirspaceView3D';
+import { alertMidpoint, easeInOut, pickDirectorAircraft } from '../director';
 
 describe('Director helper exports', () => {
   it('imports all three helpers as functions', () => {

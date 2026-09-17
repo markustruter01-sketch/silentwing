@@ -4,7 +4,7 @@ import type { Aircraft } from '@/types';
 import {
   runDirector,
   startFlyTo,
-} from '../AirspaceView3D';
+} from '../director';
 
 type DirectorScene = Parameters<typeof runDirector>[0];
 
