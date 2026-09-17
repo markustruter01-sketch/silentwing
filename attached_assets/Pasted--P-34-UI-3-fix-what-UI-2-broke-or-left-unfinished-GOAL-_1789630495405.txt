@@ -1,0 +1,71 @@
+[P-34] UI-3 — fix what UI-2 broke or left unfinished.
+
+GOAL
+Repair the layout rebuild. Several things were wired incompletely or left
+as placeholders.
+
+RISK CLASS
+[BEHAVIOR-CHANGING].
+
+DONE WHEN
+Every item below is fixed and the app works with photoreal ground on and
+off.
+
+DO NOT
+- Do not change any detector, the alert engine, any adapter, phase logic,
+  director.ts, toV3, ALT_SCALE, or tileLayer.ts.
+- Do not change any test.
+- Do not create or commit any documentation, notes or summary file.
+
+FIXES — in priority order
+
+1. GROUND BUTTON DOES NOT LOAD TILES. It highlights but nothing happens.
+   The old control had a toggle AND a load button; the new one has only
+   the toggle. Make GROUND do both: first press enables and loads, second
+   press unloads. It must still go through requestTileSession() and be
+   refused past the limit. Show the tile count somewhere — in the button's
+   label or as a small badge.
+
+2. ADVISORY TEXT IS TRUNCATED. "14 air…" is cut off mid-word. The pane
+   must show the full message. Let it wrap to two or three lines and grow
+   upward rather than clipping.
+
+3. ADVISORY VALUES ARE PLACEHOLDERS. The stats row shows "STALE TRACK"
+   across the full width, and the footer reads "CONFIDENCE LIVE" and
+   "AGE 1m". Show real values from the alert: for a stale-track alert,
+   show the staleness in seconds and the nearby aircraft count. For a
+   separation or predicted-conflict alert, show the separation, the time
+   to conflict and the runway. If an alert kind has no value for a slot,
+   leave that slot out rather than printing a label with no number.
+   Read the alert types before wiring this.
+
+4. TOP-LEFT CORNER IS BROKEN. A ghost panel reading "3D · AIRSPACE / 11
+   AIRBORNE / ORBIT" is half-visible and clipped. Either restore it
+   properly or remove it. Report which.
+
+5. THE ALTITUDE SCALE top-right is clipped against the edge — FL150,
+   FL100, FL050, GND are cut off. Move it clear of the edge.
+
+6. THE DIRECTOR CIRCLE has no icon, just a yellow disc. Restore the icon.
+
+7. THE SEQUENCE LADDER is gone. Put it behind a command bar item and
+   confirm which one opens it.
+
+8. THE LEFT ALERTS RAIL is gone. Confirm ALERTS in the command bar opens
+   the alert list, and that the badge count is real.
+
+9. LABEL SIZES ARE INCONSISTENT. Some aircraft labels are large and
+   readable, others are tiny and unreadable at the same distance. Make
+   label size consistent regardless of distance from camera, or scale
+   with distance consistently. Report which you chose and why.
+
+VERIFY
+10. Run the tests, typecheck and build as usual.
+11. Commit. Message: "UI-3: repair layout wiring and advisory values
+    [BEHAVIOR-CHANGING]". Do not push.
+
+REPORT
+- The commit hash.
+- Raw output of step 10.
+- One line per fix saying what you did.
+- Anything you could not fix and why. Do not silently skip.
