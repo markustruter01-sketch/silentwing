@@ -41,6 +41,12 @@ const ORBIT_HEIGHT     = 900;     // shallower depression (~24°) so sky is visi
 const ORBIT_INIT_ANGLE = Math.PI * 0.6; // starting angle (south of airport, runway visible)
 export const ORBIT_SPEED      = 0.00025; // rad/frame ≈ 7 min/revolution at 60 fps
 const LOOK_AT      = new THREE.Vector3(0, 0, 0); // airfield centre (was y=700)
+// Keep the depth range inside the useful airport view. The closest orbit
+// radius is 500 m, so 50 m leaves a 10x margin while materially improving
+// precision over the old 10 m near plane. 20 km covers the airport,
+// approach corridors, and the surrounding traffic scene.
+const CAMERA_NEAR   = 50;
+const CAMERA_FAR    = 20_000;
 const LABEL_LIFT      = 210;      // Three.js Y-units above cone
 const TRAIL_MAX       = 600;      // max trail points
 
@@ -2256,7 +2262,7 @@ export default function AirspaceView3D({
     scene.fog = new THREE.FogExp2(0x07090F, 0.000048);
 
     // Camera
-    const camera = new THREE.PerspectiveCamera(60, W / H, 10, 80000);
+    const camera = new THREE.PerspectiveCamera(60, W / H, CAMERA_NEAR, CAMERA_FAR);
     camera.position.set(
       ORBIT_RADIUS * Math.cos(ORBIT_INIT_ANGLE),
       ORBIT_HEIGHT,
