@@ -1,0 +1,74 @@
+[P-22] Stage 5, chunk 3 — extract the Director to its own module.
+Move the code. Change nothing inside it.
+
+GOAL
+Move the Director state machine out of AirspaceView3D.tsx into its own
+file, so it survives the coming ground-rendering replacement.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — no behaviour change.
+
+DONE WHEN
+`pnpm --filter @workspace/silentwing run test` reports 139 passing, with
+every expected value in both Director test files unchanged.
+
+SCOPE
+- artifacts/silentwing/src/components/views/director.ts  (new)
+- artifacts/silentwing/src/components/views/AirspaceView3D.tsx
+- the two Director test files (import lines only)
+
+DO NOT
+- This is the whole point: do not change one character inside any moved
+  function. Not the 2000 and 3000 millisecond durations, not the 10000 ms
+  hold, not the 0.03/0.04/0.06 lerp rates, not the 100 metre minimum or
+  the max alert distance, not the 900 and 700 camera offsets, not the
+  console.log lines. Copy verbatim.
+- Do not change any expected value in either test file. If a test fails,
+  the extraction is wrong — fix the extraction.
+- Do not move anything not listed in STEPS. Leave the rest of
+  AirspaceView3D.tsx alone.
+- Do not fix the hold-blocking behaviour. It is deliberately preserved and
+  tested. Changing it here would break a passing test and is out of scope.
+- Do not add or upgrade any package.
+- Do not create or commit any documentation, notes or summary file.
+- Do not rewrite, reset or amend git history.
+
+STEPS
+1. Create artifacts/silentwing/src/components/views/director.ts.
+2. Move into it, verbatim: easeInOut, pickDirectorAircraft, alertMidpoint,
+   runDirector, startFlyTo. Export all five. Carry their comments across.
+3. Those functions depend on constants and helpers defined elsewhere in
+   AirspaceView3D.tsx — including at least DIRECTOR_FOCUS_RADIUS,
+   DIRECTOR_MAX_ALERT_DIST, DIRECTOR_CAM_OFFSET, INSPECT_OFFSET,
+   MIN_LOOK_Y, ORBIT_SPEED, DIRECTOR_ESC_COOLDOWN_MS and toV3. Read the
+   file and find every one they actually use. For each, decide:
+   - used ONLY by the Director → move it into director.ts
+   - used by the Director AND other rendering code → leave it in
+     AirspaceView3D.tsx and import it from there
+   Report which you moved and which you left, with your reason.
+4. The SceneState and DirState types are needed by both files. Leave them
+   defined in AirspaceView3D.tsx and import the types into director.ts.
+   Do not duplicate them.
+5. In AirspaceView3D.tsx, delete the five moved functions and import them
+   from './director'. Remove the export keywords added in P-19 and P-21 —
+   they exist only so the tests could reach the functions, and director.ts
+   now exports them properly.
+6. Update both Director test files to import from '../director'. Import
+   lines only — change nothing else in either file.
+7. If a circular import appears between the two files, STOP and report it
+   with the exact error. Do not work around it by duplicating code.
+8. Run `pnpm --filter @workspace/silentwing run test`, capture raw output.
+9. Run `pnpm typecheck` at the root, capture raw output.
+10. Run `pnpm --filter @workspace/silentwing run build` with PORT and
+    BASE_PATH unset, capture raw output.
+11. Commit. Message: "Stage 5: extract the Director state machine to
+    director.ts [STRUCTURAL-ONLY]". Do not push. Report the hash.
+
+REPORT
+- The commit hash.
+- Raw output of steps 8, 9 and 10, unedited.
+- The full contents of director.ts.
+- Your answer to step 3 — what moved, what stayed, and why.
+- `git diff` on both test files, pasted. Only import lines should appear.
+- Confirm the test count is still 139 and no expected value was edited.
+- How many lines AirspaceView3D.tsx lost.
