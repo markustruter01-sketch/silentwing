@@ -1,0 +1,66 @@
+[P-26] Stage 0 RECON — cost behaviour and coordinate scaling. Read-only.
+
+GOAL
+Answer two questions before any tile work touches the app: how many
+billable requests a page reload actually costs, and what the app's
+coordinate conversion really does to altitude.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — read-only. Nothing changed, committed or pushed.
+
+DONE WHEN
+One message is pasted back answering every step below.
+
+SCOPE
+Read only, plus loading the existing experiment page to observe it.
+No file created, edited, deleted, committed or pushed.
+
+DO NOT
+- Do not change any file.
+- Do not start building cost controls. This prompt only measures.
+- Do not click the tile load button more than the three times step 4
+  requires. Each click is billable.
+- Do not commit or push anything.
+- Do not create any documentation, notes or summary file.
+- Do not add or upgrade any package.
+- Do not fix anything you notice. Report it instead.
+
+STEPS — the coordinate question
+1. cat the toV3 function from
+   artifacts/silentwing/src/components/views/AirspaceView3D.tsx
+   (around line 467) and every constant it uses. Report it in full.
+2. State plainly what toV3 does to each of its three inputs. In
+   particular: is altitude scaled, and if so by what factor? The Director
+   tests showed an aircraft at 1000 ft rendering at scene height 150.
+   Confirm or correct that from the actual code.
+3. Report what x and y become, including any sign flip, and which app
+   axis maps to which Three.js axis.
+4. cat buildGroundGeometry (around line 642) and buildTerrainMesh
+   (around line 803). Report their full contents. These are the functions
+   Stage C deletes — I need to know what else they set up that might be
+   depended on elsewhere.
+
+STEPS — the cost question
+5. Open the experiment page and load Brisbane ONCE. Watch the network
+   requests. Report:
+   - how many requests go to Google's tile service before the button click
+   - how many go to /api/google-tiles/config on that click
+   - whether a session token appears in the tile URLs, and whether it is
+     reused across many tile fetches
+6. Without clicking load again, RELOAD the page. Report whether any
+   request is made to Google or to the config endpoint on reload alone.
+7. Click load a second time on the reloaded page. Report whether the
+   session token is the same as before the reload or a new one. This is
+   the key question: a reused session costs nothing extra, a new session
+   is a new billable request.
+8. Report what the 3d-tiles-renderer library's GoogleCloudAuthPlugin does
+   about session reuse — read its source in node_modules if needed. State
+   whether session reuse across reloads is something the library supports,
+   and how.
+
+REPORT
+- Answers to every step above, in order.
+- The full text of toV3, buildGroundGeometry and buildTerrainMesh.
+- A plain statement of how many billable requests one page reload costs.
+- Confirm nothing was changed, committed or pushed.
+- Confirm exactly how many times the load button was clicked.
