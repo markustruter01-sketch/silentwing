@@ -460,14 +460,11 @@ function _paintAcLabel(
 }
 
 /**
- * Returns the world-space sprite dimensions for an aircraft label based on
- * its flight phase.  Taxi aircraft are half-size; gate-parked aircraft are
- * quarter-size to reduce clutter at the terminal stand area.
+ * All aircraft labels use one world-space size. Three.js sprites then scale
+ * with perspective distance consistently instead of changing size by phase.
  */
-function labelScaleForPhase(phase: string): [number, number] {
-  if (phase === 'at-gate')                              return [120, 34]; // reduced from 135 × 37.5
-  if (phase === 'taxi-in' || phase === 'taxi-out')      return [210, 58]; // reduced from 270 × 75
-  return [300, 84]; // reduced from 540 × 150
+function labelScaleForPhase(_phase: string): [number, number] {
+  return [300, 84];
 }
 
 function makeAcLabel(callsign: string, headingDeg: number, phase: string): THREE.Sprite {
@@ -1467,6 +1464,16 @@ export interface AirspaceView3DProps {
   /** Mirrors the photoreal ground toggle for conditional UI backing. */
   photorealGroundEnabled?: boolean;
   onPhotorealGroundChange?: (enabled: boolean) => void;
+  /** Imperative command-bar control: toggle and, when enabling, load tiles. */
+  photorealGroundControlRef?: { current: (() => void) | null };
+  /** Expose guarded tile-session status to the command bar. */
+  onPhotorealGroundStatusChange?: (status: {
+    enabled: boolean;
+    sessionCount: number;
+    sessionLimit: number;
+    loading: boolean;
+    loaded: boolean;
+  }) => void;
 }
 
 // ── Deferred aircraft spawn ───────────────────────────────────────────────────
@@ -1665,6 +1672,8 @@ export default function AirspaceView3D({
   showTerrain   = true,
   photorealGroundEnabled,
   onPhotorealGroundChange,
+  photorealGroundControlRef,
+  onPhotorealGroundStatusChange,
 }: AirspaceView3DProps) {
   const mountRef       = useRef<HTMLDivElement>(null);
   const [webglUnavailable, setWebglUnavailable] = useState(false);
@@ -1716,6 +1725,22 @@ export default function AirspaceView3D({
     onPhotorealGroundChange?.(tilesEnabled);
   }, [onPhotorealGroundChange, tilesEnabled]);
 
+  useEffect(() => {
+    onPhotorealGroundStatusChange?.({
+      enabled: tilesEnabled,
+      sessionCount: tileSessionCount,
+      sessionLimit: MAX_TILE_SESSIONS,
+      loading: tileLoading,
+      loaded: tileLoaded,
+    });
+  }, [
+    onPhotorealGroundStatusChange,
+    tileLoaded,
+    tileLoading,
+    tileSessionCount,
+    tilesEnabled,
+  ]);
+
   const alertFocusIdRef     = useRef<string | null>(alertFocusId ?? null);
   const onAlertFocusDoneRef = useRef<(() => void) | null>(onAlertFocusDone ?? null);
   alertFocusIdRef.current     = alertFocusId ?? null;
@@ -1749,8 +1774,6 @@ export default function AirspaceView3D({
     setTileMessage('Photoreal ground is on. Loading is still explicit and guarded.');
   };
 
-  // The command bar owns the visible toggle; keep the existing guarded tile
-  // controller as the single source of tile-layer side effects.
   useEffect(() => {
     if (photorealGroundEnabled !== undefined && photorealGroundEnabled !== tilesEnabled) {
       handleTilesToggle(photorealGroundEnabled);
@@ -1758,20 +1781,20 @@ export default function AirspaceView3D({
   }, [photorealGroundEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleLoadTiles = async () => {
-    if (!tilesEnabled || tileLoading || tileLoaded) return;
-
-    const st = sceneRef.current;
-    if (!st) {
-      setTileStatus('error');
-      setTileMessage('The 3D scene is not ready for a tile layer.');
-      return;
-    }
+    if (!tilesEnabledRef.current || tileLoading || tileLoaded) return;
 
     const result = requestTileSession();
     setTileSessionCount(result.count);
     if (!result.ok) {
       setTileStatus('limit');
       setTileMessage(result.reason);
+      return;
+    }
+
+    const st = sceneRef.current;
+    if (!st) {
+      setTileStatus('error');
+      setTileMessage('The 3D scene is not ready for a tile layer.');
       return;
     }
 
@@ -1811,6 +1834,18 @@ export default function AirspaceView3D({
       }
     }
   };
+
+  useEffect(() => {
+    if (!photorealGroundControlRef) return;
+    photorealGroundControlRef.current = () => {
+      const next = !tilesEnabledRef.current;
+      handleTilesToggle(next);
+      if (next) void handleLoadTiles();
+    };
+    return () => {
+      photorealGroundControlRef.current = null;
+    };
+  }, [photorealGroundControlRef, tileLoaded, tileLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!tileLayerRef.current && !tileLoading) return;
@@ -3835,31 +3870,17 @@ export default function AirspaceView3D({
         </div>
       )}
 
-      {/* ── HUD top-left ── */}
-      <div className={[
-        'absolute top-4 left-4 flex flex-col gap-0.5 pointer-events-none select-none',
-        tilesEnabled && 'sw-glass-panel px-2 py-1.5',
-      ].filter(Boolean).join(' ')}>
-        <span className="font-mono text-[10px] tracking-[0.2em] text-slate-600">3D · AIRSPACE</span>
-        <span className="font-mono text-[10px] tracking-[0.2em] text-slate-700">
-          {airborneCount} AIRBORNE &nbsp;·&nbsp; {aircraft.length - airborneCount} GROUND
-        </span>
-        <span className="font-mono text-[10px] tracking-[0.25em] text-slate-800 mt-1">
-          {cameraMode.toUpperCase()}
-        </span>
-      </div>
-
       {/* ── FL altitude labels — top-right ── */}
       <div className={[
-        'absolute top-4 right-4 flex flex-col gap-1 pointer-events-none select-none text-right',
+        'absolute top-16 right-8 flex flex-col gap-1 pointer-events-none select-none text-right',
         tilesEnabled && 'sw-glass-panel px-2 py-1.5',
       ].filter(Boolean).join(' ')}>
         {[150, 100, 50].map(fl => (
-          <span key={fl} className="font-mono text-[10px] tracking-wider text-slate-700">
+          <span key={fl} className="font-mono text-[10px] tracking-wider text-slate-600">
             FL{fl.toString().padStart(3, '0')}
           </span>
         ))}
-        <span className="font-mono text-[10px] tracking-wider text-slate-800 mt-1">GND</span>
+        <span className="font-mono text-[10px] tracking-wider text-slate-700 mt-1">GND</span>
       </div>
 
     </div>

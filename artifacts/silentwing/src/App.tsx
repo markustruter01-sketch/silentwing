@@ -67,6 +67,14 @@ export default function App() {
   // ── Active airport profile ────────────────────────────────────────────────
   const [activeProfile, setActiveProfile] = useState<AirportProfile>(YBBN);
   const [photorealGroundEnabled, setPhotorealGroundEnabled] = useState(false);
+  const [groundTileStatus, setGroundTileStatus] = useState({
+    enabled: false,
+    sessionCount: 0,
+    sessionLimit: 20,
+    loading: false,
+    loaded: false,
+  });
+  const photorealGroundControlRef = useRef<(() => void) | null>(null);
   /** Stable ref — lets switch callbacks read the current profile without stale closures. */
   const activeProfileRef = useRef<AirportProfile>(YBBN);
   activeProfileRef.current = activeProfile;
@@ -459,9 +467,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKey);
   }, [handleKey]);
 
-  // Legacy adapter alerts (not used in 6A UI — kept for StatusStrip count fallback)
-  const _legacyAlerts = adapter.getActiveAlerts();
-
   return (
     <div className="flex flex-col w-screen h-screen overflow-hidden bg-[#0A0E14] text-slate-100">
       <Header
@@ -476,7 +481,7 @@ export default function App() {
         activeProfile={activeProfile}
         onSwitchAirport={handleSwitchAirport}
         aircraftCount={visibleAircraft.length}
-        alertCount={activeAlerts.length || _legacyAlerts.length}
+        alertCount={activeAlerts.length}
         groundCount={visibleAircraft.filter(ac => !isAirborne(ac)).length}
         sectorLoad={sectorLoad(visibleAircraft.length, activeProfile.sectorCapacity)}
         hideGroundVehicles={hideGroundVehicles}
@@ -568,6 +573,8 @@ export default function App() {
         {/* ── Phase 6A alert shell — left edge ── */}
         <AlertShell
           activeAlerts={activeAlerts}
+          aircraft={snapshot.aircraft}
+          activeRunwayDirection={effectiveWeather.activeRunwayDirection}
           onAlertFocus={handleManualAlertFocus}
           onDismiss={handleDismissAlert}
           alertFocusId={alertFocusId}
@@ -608,6 +615,8 @@ export default function App() {
             activeAlerts={activeAlerts}
             alertFocusId={alertFocusId ?? undefined}
             photorealGroundEnabled={photorealGroundEnabled}
+            photorealGroundControlRef={photorealGroundControlRef}
+            onPhotorealGroundStatusChange={setGroundTileStatus}
             onAlertFocusDone={handleAlertFocusDone}
             showPaths={showPredictedPaths}
             showBuildings={showBuildings}
@@ -688,7 +697,7 @@ export default function App() {
           activeView={view}
           directorMode={directorMode}
           groundEnabled={view === 'airspace' && photorealGroundEnabled}
-          alertCount={activeAlerts.length || _legacyAlerts.length}
+          alertCount={activeAlerts.length}
           onView={() => setView(v => v === 'airspace' ? 'airfield' : 'airspace')}
           onRewind={() => undefined}
           onLayers={() => {
@@ -699,9 +708,11 @@ export default function App() {
           onDirector={() => setDirectorMode(v => !v)}
           onAlerts={() => setAlertsOpen(v => !v)}
           onGround={() => {
-            if (view === 'airspace') setPhotorealGroundEnabled(v => !v);
+            if (view === 'airspace') photorealGroundControlRef.current?.();
           }}
           onMore={() => setControlsOpen(v => !v)}
+          groundTileCount={groundTileStatus.sessionCount}
+          groundTileLimit={groundTileStatus.sessionLimit}
         />
         <RewindScrubber />
 

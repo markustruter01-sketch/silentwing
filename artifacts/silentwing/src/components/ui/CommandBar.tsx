@@ -10,6 +10,8 @@ interface CommandBarProps {
   onAlerts: () => void;
   onGround: () => void;
   onMore: () => void;
+  groundTileCount: number;
+  groundTileLimit: number;
 }
 
 function CommandItem({
@@ -23,7 +25,7 @@ function CommandItem({
   icon: string;
   onClick: () => void;
   active?: boolean;
-  badge?: number;
+  badge?: number | string;
 }) {
   return (
     <button
@@ -40,9 +42,9 @@ function CommandItem({
     >
       <span aria-hidden className="text-[17px] leading-none text-white/90">{icon}</span>
       <span>{label}</span>
-      {badge !== undefined && badge > 0 && (
+      {badge !== undefined && (
         <span className="absolute right-1 top-1 flex min-w-3.5 items-center justify-center rounded-full bg-red-500 px-1 text-[8px] font-bold leading-3 text-white">
-          {badge > 99 ? '99+' : badge}
+          {typeof badge === 'number' && badge > 99 ? '99+' : badge}
         </span>
       )}
     </button>
@@ -61,6 +63,8 @@ export default function CommandBar({
   onAlerts,
   onGround,
   onMore,
+  groundTileCount,
+  groundTileLimit,
 }: CommandBarProps) {
   return (
     <nav
@@ -85,10 +89,19 @@ export default function CommandBar({
             : 'border-amber-500/80 bg-amber-500 text-slate-950 hover:bg-amber-300',
         ].join(' ')}
       >
-        ◉
+        <svg aria-hidden width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+          <path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h2l1.2-1.5h4.6L15.5 6h2A2.5 2.5 0 0 1 20 8.5v7A2.5 2.5 0 0 1 17.5 18h-11A2.5 2.5 0 0 1 4 15.5z" />
+          <circle cx="12" cy="12" r="3.25" />
+        </svg>
       </button>
       <CommandItem label="ALERTS" icon="!" onClick={onAlerts} badge={alertCount} />
-      <CommandItem label="GROUND" icon="⌂" onClick={onGround} active={groundEnabled} />
+      <CommandItem
+        label="GROUND"
+        icon="⌂"
+        onClick={onGround}
+        active={groundEnabled}
+        badge={`${groundTileCount}/${groundTileLimit}`}
+      />
       <CommandItem label="MORE" icon="•••" onClick={onMore} />
     </nav>
   );

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { SWAlert, SWAlertSeverity } from '@/alerts/types';
 import { severityRank } from '@/alerts/types';
+import type { Aircraft } from '@/types';
 
 const SEVERITY: Record<SWAlertSeverity, {
   label: string;
@@ -18,13 +19,71 @@ function ageLabel(raisedAt: number, now: number): string {
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m`;
 }
 
-function extraValues(alert: SWAlert): string[] {
+function runwayForAlert(
+  alert: SWAlert,
+  aircraftById: Map<string, Aircraft>,
+  activeRunwayDirection?: string,
+): string | null {
+  const assigned = alert.aircraftIds
+    .map(id => aircraftById.get(id)?.assignedRunway)
+    .find(Boolean);
+  return assigned ?? activeRunwayDirection ?? null;
+}
+
+function advisoryValues(
+  alert: SWAlert,
+  aircraftById: Map<string, Aircraft>,
+  activeRunwayDirection?: string,
+): string[] {
   const values: string[] = [];
-  if (alert.extra?.ttcSeconds != null) values.push(`TTC ${alert.extra.ttcSeconds.toFixed(0)}s`);
-  if (alert.extra?.predClosestNm != null) values.push(`${alert.extra.predClosestNm.toFixed(1)} NM`);
-  if (alert.extra?.predClosestFt != null) values.push(`${Math.round(alert.extra.predClosestFt)} FT`);
-  if (values.length === 0) values.push(alert.kind.replace(/_/g, ' ').toUpperCase());
+
+  if (alert.kind === 'stale_track') {
+    const staleSeconds = alert.message.match(/track stale\s+(\d+)\s*s/i)?.[1];
+    const staleAircraft = aircraftById.get(alert.aircraftIds[0]);
+    const nearbyCount = staleAircraft
+      ? [...aircraftById.values()].filter(other => {
+          if (other.id === staleAircraft.id || (other.seenPos ?? 0) >= 30) return false;
+          const dx = staleAircraft.position.x - other.position.x;
+          const dy = staleAircraft.position.y - other.position.y;
+          return dx * dx + dy * dy < (10 * 1852) ** 2;
+        }).length.toString()
+      : alert.message.match(/,\s*(\d+)\s+aircraft nearby/i)?.[1];
+    if (staleSeconds) values.push(`STALE ${staleSeconds}s`);
+    if (nearbyCount) values.push(`NEAR ${nearbyCount}`);
+  } else if (alert.kind === 'separation') {
+    const separation = alert.message.match(/—\s*([\d.]+)\s*nm\s*\/\s*(\d+)\s*ft/i);
+    if (separation) {
+      values.push(`SEP ${separation[1]} NM`);
+      values.push(`VERT ${separation[2]} FT`);
+    }
+  } else if (alert.kind === 'predicted_conflict') {
+    if (alert.extra?.predClosestNm != null) {
+      values.push(`SEP ${alert.extra.predClosestNm.toFixed(1)} NM`);
+    }
+    if (alert.extra?.ttcSeconds != null) {
+      values.push(`TTC ${alert.extra.ttcSeconds.toFixed(0)}s`);
+    }
+  } else if (alert.kind === 'runway_occupancy') {
+    const runway = alert.message.match(/^Runway\s+([^\s—]+)/i)?.[1];
+    if (runway) values.push(`RWY ${runway}`);
+    if (alert.aircraft.length > 0) values.push(`AC ${alert.aircraft.length}`);
+  }
+
+  if (alert.kind === 'separation' || alert.kind === 'predicted_conflict') {
+    const runway = runwayForAlert(alert, aircraftById, activeRunwayDirection);
+    if (runway) values.push(`RWY ${runway}`);
+  }
+
   return values;
+}
+
+function confidenceLabel(alert: SWAlert, aircraftById: Map<string, Aircraft>): string | null {
+  const confidence = alert.aircraftIds
+    .map(id => aircraftById.get(id)?.confidence)
+    .filter((value): value is number => value != null && Number.isFinite(value));
+  if (confidence.length === 0) return null;
+  const average = confidence.reduce((sum, value) => sum + value, 0) / confidence.length;
+  return `CONF ${Math.round(average * 100)}%`;
 }
 
 interface AlertShellProps {
@@ -33,6 +92,8 @@ interface AlertShellProps {
   onDismiss: (id: string) => void;
   alertFocusId?: string | null;
   open: boolean;
+  aircraft: Aircraft[];
+  activeRunwayDirection?: string;
   photorealGroundEnabled?: boolean;
 }
 
@@ -42,6 +103,8 @@ export default function AlertShell({
   onDismiss,
   alertFocusId,
   open,
+  aircraft,
+  activeRunwayDirection,
   photorealGroundEnabled = false,
 }: AlertShellProps) {
   const [now, setNow] = useState(() => Date.now());
@@ -53,6 +116,10 @@ export default function AlertShell({
   const sorted = useMemo(
     () => [...activeAlerts].sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || b.raisedAt - a.raisedAt),
     [activeAlerts],
+  );
+  const aircraftById = useMemo(
+    () => new Map(aircraft.map(ac => [ac.id, ac])),
+    [aircraft],
   );
   const primary = sorted[0];
   if (!primary && !open) return null;
@@ -86,20 +153,24 @@ export default function AlertShell({
               DISMISS
             </button>
           </header>
-          <div className="px-3 py-2">
-            <p className="truncate font-mono text-[12px] leading-5 text-white" title={primary.message}>
+           <div className="px-3 py-2">
+             <p className="whitespace-normal break-words font-mono text-[12px] leading-5 text-white" title={primary.message}>
               {primary.message}
             </p>
-            <div className="mt-2 flex divide-x divide-white/15 border-y border-white/15 py-1.5">
-              {extraValues(primary).map(value => (
+             {advisoryValues(primary, aircraftById, activeRunwayDirection).length > 0 && (
+               <div className="mt-2 flex flex-wrap divide-x divide-white/15 border-y border-white/15 py-1.5">
+               {advisoryValues(primary, aircraftById, activeRunwayDirection).map(value => (
                 <span key={value} className="flex-1 px-2 text-center font-mono text-[10px] text-white first:pl-0 last:pr-0">
                   {value}
                 </span>
               ))}
-            </div>
-            <footer className="mt-1.5 flex items-center justify-between font-mono text-[8px] tracking-widest text-white/70">
-              <span>CONFIDENCE LIVE</span>
-              <span>AGE {ageLabel(primary.raisedAt, now)}</span>
+               </div>
+             )}
+             <footer className="mt-1.5 flex items-center justify-between gap-2 font-mono text-[8px] tracking-widest text-white/70">
+               {confidenceLabel(primary, aircraftById) && (
+                 <span>{confidenceLabel(primary, aircraftById)}</span>
+               )}
+               <span className="ml-auto">AGE {ageLabel(primary.raisedAt, now)}</span>
             </footer>
           </div>
         </article>
