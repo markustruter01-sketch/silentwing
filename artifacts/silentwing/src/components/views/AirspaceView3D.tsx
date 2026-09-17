@@ -1776,6 +1776,7 @@ export default function AirspaceView3D({
   const [tileMessage, setTileMessage] = useState('Photoreal ground is off.');
   const sceneRef       = useRef<SceneState | null>(null);
   const tileLayerRef   = useRef<TileLayer | null>(null);
+  const tileLoadInFlightRef = useRef(false);
   const tileGenerationRef = useRef(0);
   const tileVisibleRef  = useRef(false);
   const tileSurfaceAlignedRef = useRef(false);
@@ -1874,7 +1875,17 @@ export default function AirspaceView3D({
   }, [photorealGroundEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleLoadTiles = async () => {
-    if (!tilesEnabledRef.current || tileLoading || tileLoaded) return;
+    // React state is asynchronous, so tileLoading/tileLoaded alone cannot
+    // prevent two callers from entering before tileLayerRef is assigned.
+    // Keep the tile group identity stable across unrelated rerenders such as
+    // an alert-focus interrupt.
+    if (
+      !tilesEnabledRef.current ||
+      tileLayerRef.current ||
+      tileLoadInFlightRef.current ||
+      tileLoading ||
+      tileLoaded
+    ) return;
 
     const result = requestTileSession();
     setTileSessionCount(result.count);
@@ -1892,6 +1903,7 @@ export default function AirspaceView3D({
     }
 
     const generation = ++tileGenerationRef.current;
+    tileLoadInFlightRef.current = true;
     tileVisibleRef.current = false;
     setTileLoading(true);
     setTileStatus('loading');
@@ -1923,6 +1935,7 @@ export default function AirspaceView3D({
         error instanceof Error ? error.message : 'The tile layer failed to load.',
       );
     } finally {
+      tileLoadInFlightRef.current = false;
       if (generation === tileGenerationRef.current) {
         setTileLoading(false);
       }
