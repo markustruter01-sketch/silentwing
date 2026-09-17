@@ -12,7 +12,7 @@
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Aircraft, WorldSnapshot } from '@/types';
 import { isAirborne } from '@/types';
 import { wakeCategory } from '@/utils/wakeCategory';
@@ -1696,6 +1696,7 @@ export default function AirspaceView3D({
   showTerrain   = true,
 }: AirspaceView3DProps) {
   const mountRef       = useRef<HTMLDivElement>(null);
+  const [webglUnavailable, setWebglUnavailable] = useState(false);
   const sceneRef       = useRef<SceneState | null>(null);
   /** Three.js Groups comprising the current airport's ground geometry.
    *  Stored so rebuildGroundGeometry() can remove and dispose them in-place. */
@@ -2032,7 +2033,14 @@ export default function AirspaceView3D({
     const H = el.clientHeight || window.innerHeight;
 
     // Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    } catch (error) {
+      console.error('[3D] WebGL unavailable — showing fallback view', error);
+      setWebglUnavailable(true);
+      return;
+    }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(W, H);
     renderer.setClearColor(0x07090F, 1);
@@ -3791,6 +3799,19 @@ export default function AirspaceView3D({
 
       {/* Three.js canvas mount */}
       <div ref={mountRef} className="absolute inset-0" />
+
+      {webglUnavailable && (
+        <div className="absolute inset-0 flex items-center justify-center px-6">
+          <div className="max-w-md border border-slate-800 bg-[#0B111B]/95 px-6 py-5 text-center shadow-2xl">
+            <div className="font-mono text-[10px] tracking-[0.25em] text-slate-500">
+              3D VIEW UNAVAILABLE
+            </div>
+            <p className="mt-3 font-mono text-xs leading-relaxed text-slate-400">
+              This browser preview cannot create a WebGL context. The airspace data and controls remain available.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* ── HUD top-left ── */}
       <div className="absolute top-4 left-4 flex flex-col gap-0.5 pointer-events-none select-none">
