@@ -1,0 +1,60 @@
+[P-32] UI-1 — move alert text out of the 3D scene.
+
+GOAL
+Alert prose currently renders as large floating billboards inside the 3D
+scene. Move the words into the advisory pane and leave only a marker in
+the scene, so nothing in 3D has to be legible.
+
+RISK CLASS
+[BEHAVIOR-CHANGING] — changes what is drawn in the scene.
+
+DONE WHEN
+An active alert shows its text only in the advisory pane, and in the 3D
+scene shows only a beam between the aircraft pair plus a ring on each,
+with no prose.
+
+SCOPE
+- the alert label drawing in AirspaceView3D.tsx
+- the advisory panel component
+
+DO NOT
+- Do not change detection. No detector, no threshold, no severity rule,
+  no engine logic. This changes rendering only.
+- Do not change aircraft callsign labels. They stay in the scene. Only
+  ALERT labels move.
+- Do not remove the alert beam or the aircraft rings. Those are how the
+  operator finds the aircraft, and they are the whole reason this is safe.
+- Do not change the Director. Its focus behaviour is untouched.
+- Do not change any panel position or styling. That is a later prompt.
+- Do not change any test.
+- Do not create or commit any documentation, notes or summary file.
+
+STEPS
+1. Confirm the branch is experiment-3d. If not, STOP and report.
+2. Find the functions that build the floating alert labels in the 3D
+   scene. Report their names and line numbers before changing anything.
+3. Stop those labels rendering text. Keep the beam and the rings exactly
+   as they are.
+4. Report what the beam and rings currently look like, and confirm an
+   operator can still tell WHICH aircraft an alert refers to without the
+   text. If they cannot, STOP and report — do not invent a new marker.
+5. Show the same alert content in the advisory panel instead: severity,
+   the aircraft involved, the message, and any extra values the alert
+   carries.
+6. When the Director is focused on an alert, show a small marker in the
+   advisory panel saying the camera is on that alert. Read how
+   alertFocusId works before wiring it; do not guess.
+7. Run `pnpm --filter @workspace/silentwing run test` — all 144 must pass.
+8. Run `pnpm typecheck` at the root.
+9. Run `pnpm --filter @workspace/silentwing run build` with PORT and
+   BASE_PATH unset.
+10. Commit. Message: "UI-1: alert text moves from the 3D scene to the
+    advisory pane [BEHAVIOR-CHANGING]". Do not push.
+
+REPORT
+- The commit hash.
+- The functions you changed, with line numbers.
+- Your answer to step 4, honestly.
+- Raw output of steps 7, 8 and 9.
+- Screenshots with photoreal ground ON, one with an alert active.
+- Tile requests used.
