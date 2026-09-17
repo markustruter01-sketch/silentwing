@@ -1,0 +1,51 @@
+[P-35] UI-4 — make the aircraft visible against photoreal ground.
+
+GOAL
+Aircraft markers were designed for a dark empty background and are nearly
+invisible over photoreal imagery. This is the most important remaining
+defect: an air traffic display must show the traffic.
+
+RISK CLASS
+[BEHAVIOR-CHANGING] — aircraft rendering.
+
+DO NOT
+- Do not change aircraft positions, altitudes, headings or any detector.
+- Do not change the colour MEANING. Approach stays blue, taxi stays amber,
+  at-gate stays green, departure stays purple. Only visibility changes.
+- Do not change any test.
+- Do not create or commit any documentation or notes file.
+
+STEPS
+1. Report how aircraft markers are currently drawn — shape, colour source,
+   size, and whether size changes with camera distance.
+2. Make each aircraft readable against bright imagery. In order of
+   preference:
+   - give every aircraft marker a dark outline or halo so its shape
+     separates from any background
+   - raise the marker's brightness and saturation so it reads as a lit
+     object rather than a dark one
+   - add a small contact shadow or ground tick beneath airborne aircraft
+     so the eye finds it
+   Keep the existing phase colours. Report what you did.
+3. Aircraft markers must stay a usable size when the camera is far away.
+   Report whether they currently shrink with distance and what you changed.
+4. The selected and alerted aircraft must stand out clearly from the rest.
+   Report how.
+5. Restore the full METAR and forecast: confirm the chevron on the weather
+   strip opens them, and that the sequence ladder opens from the command
+   bar. Report which button opens which panel. If either is unreachable,
+   fix it.
+6. Verify by screenshot with photoreal ground ON that individual aircraft
+   are findable without reading the labels.
+
+VERIFY
+7. Run the tests, typecheck and build as usual.
+8. Commit. Message: "UI-4: aircraft visibility over photoreal ground
+   [BEHAVIOR-CHANGING]". Do not push.
+
+REPORT
+- The commit hash.
+- Raw output of step 7.
+- What you changed for visibility, specifically.
+- Your answer to step 5.
+- The screenshot from step 6.
