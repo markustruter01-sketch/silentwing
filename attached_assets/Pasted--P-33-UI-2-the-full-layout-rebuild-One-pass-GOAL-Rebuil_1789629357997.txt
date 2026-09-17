@@ -1,0 +1,86 @@
+[P-33] UI-2 — the full layout rebuild. One pass.
+
+GOAL
+Rebuild the interface to the agreed layout: quiet centre, everything on
+the bottom edge, nothing overlapping.
+
+RISK CLASS
+[BEHAVIOR-CHANGING] — layout and rendering.
+
+DONE WHEN
+The app matches the layout described below with photoreal ground on, and
+still works with it off.
+
+SCOPE
+- panel layout, panel styling, 3D label sizing and placement
+
+DO NOT
+- Do not change any detector, the alert engine, any adapter, phase logic,
+  director.ts, toV3, ALT_SCALE, or tileLayer.ts.
+- Do not change aircraft positions or altitudes.
+- Do not change any test.
+- Do not delete any panel. Everything still exists, it moves or collapses.
+- Do not create or commit any documentation, notes or summary file.
+
+STEPS — the layout
+1. Confirm the branch is experiment-3d. If not, STOP.
+2. TOP BAR stays as is. Below it, make the airport title a full-width
+   band whose background, blur and bottom border all FADE to fully
+   transparent at both ends — use a horizontal mask so the band dissolves
+   about 17% in from each edge. Centre: ICAO in cyan, airport name large
+   and letterspaced, "ICAO" in muted grey.
+3. Move the ADVISORY panel to the bottom LEFT corner, 430px wide, docked
+   16px from the left and bottom edges. Compact: header row with severity
+   and dismiss, one sentence, then a single row of values divided by
+   hairlines, then a footer line with confidence and data age. When the
+   Director is focused on that alert, show a small chip in the header
+   reading "CAMERA HERE".
+4. Add a COMMAND BAR centred on the bottom edge, 16px up. A single pill
+   with fully rounded ends and glass backing. Seven items: VIEW, REWIND,
+   LAYERS, then DIRECTOR as a raised filled amber circle lifting above
+   the bar, then ALERTS with a count badge, GROUND, MORE. Icon above a
+   small label, except the circle which is icon only. GROUND is the
+   existing photoreal toggle — wire it to the existing control and remove
+   the old panel.
+5. Add a REWIND SCRUBBER bottom RIGHT, 340px, fully rounded pill, docked
+   16px from right and bottom. A track, a handle at the right end, "−30s"
+   at the left and a green LIVE dot at the right. It does not need to
+   function yet — report that it is presentational.
+6. Add a CONDENSED WEATHER strip directly above the scrubber, same width
+   and pill shape: flight category chip, wind, QNH, temp, and a chevron
+   button that opens the existing full METAR panel.
+7. The full METAR panel, the forecast strip and the sequence ladder
+   become on-demand. They open from the command bar and from the weather
+   chevron, and are closed by default. Do not delete them.
+8. The keyboard help moves behind MORE.
+9. The left alerts rail is currently cut off at the top. Either fix its
+   position or fold it into the ALERTS command-bar item. Report which you
+   chose.
+
+STEPS — the 3D labels
+10. Aircraft callsign labels are far too large. Reduce them so a label
+    reads as a tag beside an aircraft, not a billboard. Report the scale
+    before and after.
+11. Runway labels and TERMINAL are also too large. Reduce to match.
+12. Make all 3D label text pure white with a dark drop shadow.
+
+STEPS — styling
+13. All panels get the glass treatment already in the codebase. Keep body
+    text pure white, not grey.
+14. With photoreal ground OFF the app must still work and look coherent.
+    It does not have to look identical to before.
+
+STEPS — verify
+15. Run `pnpm --filter @workspace/silentwing run test` — 144 must pass.
+16. Run `pnpm typecheck` at the root.
+17. Run `pnpm --filter @workspace/silentwing run build` with PORT and
+    BASE_PATH unset.
+18. Commit. Message: "UI-2: rebuild the interface layout
+    [BEHAVIOR-CHANGING]". Do not push.
+
+REPORT
+- The commit hash.
+- Raw output of steps 15, 16 and 17.
+- Label scale before and after.
+- Your answer to step 9.
+- Anything you could not do and why. Do not silently skip a step.
