@@ -7,9 +7,17 @@ export interface TileLayerOrigin {
   lon: number;
 }
 
+export interface TileSurfaceAlignment {
+  /** Measured tile surface height at the airport reference point, in app metres. */
+  measuredHeightM: number;
+  /** Vertical translation applied to the tile world to place that surface at Y=0. */
+  appliedOffsetM: number;
+}
+
 export interface TileLayer {
   readonly tiles: TilesRenderer;
   update(): number;
+  alignSurfaceToAppZero(): TileSurfaceAlignment | null;
   dispose(): void;
 }
 
@@ -140,9 +148,21 @@ export async function createTileLayer(
   const appToEcef = new THREE.Matrix4()
     .makeBasis(east, up, north.clone().negate())
     .setPosition(originEcef);
+  const appFromEcef = appToEcef.clone().invert();
+  const tileWorldMatrix = new THREE.Matrix4();
+  // Runtime-measured at the airport reference point with a vertical raycast
+  // against the loaded tile surface; each airport gets its own value.
+  let tileVerticalOffsetM = 0;
+  const applyTileWorldTransform = () => {
+    tileWorldMatrix
+      .makeTranslation(0, tileVerticalOffsetM, 0)
+      .multiply(appFromEcef);
+    tiles.group.matrix.copy(tileWorldMatrix);
+    tiles.group.updateMatrixWorld(true);
+  };
 
   tiles.group.matrixAutoUpdate = false;
-  tiles.group.matrix.copy(appToEcef).invert();
+  applyTileWorldTransform();
   tiles.group.renderOrder = -10;
   scene.add(tiles.group);
 
@@ -152,7 +172,24 @@ export async function createTileLayer(
 
   let disposed = false;
   let firstVisibleTileLogged = false;
+  let surfaceAlignment: TileSurfaceAlignment | null = null;
   const startedAt = performance.now();
+
+  const sampleSurfaceHeightM = (): number | null => {
+    // Wait for the renderer's current refinement/download queue to settle.
+    // An early coarse tile can cover the origin with a non-ground model extent.
+    if (tiles.loadProgress < 1) return null;
+
+    scene.updateMatrixWorld(true);
+    const raycaster = new THREE.Raycaster(
+      new THREE.Vector3(0, 10_000, 0),
+      new THREE.Vector3(0, -1, 0),
+      0,
+      20_000,
+    );
+    const hits = raycaster.intersectObject(tiles.group, true);
+    return hits.length ? hits[0].point.y : null;
+  };
 
   const onTileVisibilityChange = () => {
     if (!firstVisibleTileLogged && tiles.visibleTiles.size > 0) {
@@ -170,6 +207,24 @@ export async function createTileLayer(
       if (disposed) return 0;
       tiles.update();
       return tiles.visibleTiles.size;
+    },
+    alignSurfaceToAppZero() {
+      if (disposed || surfaceAlignment) return surfaceAlignment;
+
+      const measuredHeightM = sampleSurfaceHeightM();
+      if (measuredHeightM === null) return null;
+
+      // If the renderer already agrees with the app frame, preserve zero and
+      // report it rather than inventing an offset. Otherwise move only the
+      // tile world through the same transform built above.
+      const appliedOffsetM = Math.abs(measuredHeightM) < 0.5 ? 0 : -measuredHeightM;
+      if (appliedOffsetM !== 0) {
+        tileVerticalOffsetM = appliedOffsetM;
+        applyTileWorldTransform();
+      }
+
+      surfaceAlignment = { measuredHeightM, appliedOffsetM };
+      return surfaceAlignment;
     },
     dispose() {
       if (disposed) return;

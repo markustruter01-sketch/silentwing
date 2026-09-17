@@ -1772,6 +1772,7 @@ export default function AirspaceView3D({
   const tileLayerRef   = useRef<TileLayer | null>(null);
   const tileGenerationRef = useRef(0);
   const tileVisibleRef  = useRef(false);
+  const tileSurfaceAlignedRef = useRef(false);
   const tilesEnabledRef = useRef(false);
   /** Three.js Groups comprising the current airport's ground geometry.
    *  Stored so rebuildGroundGeometry() can remove and dispose them in-place. */
@@ -1841,6 +1842,7 @@ export default function AirspaceView3D({
     tileLayerRef.current?.dispose();
     tileLayerRef.current = null;
     tileVisibleRef.current = false;
+    tileSurfaceAlignedRef.current = false;
     setTileLoading(false);
     setTileLoaded(false);
   };
@@ -1906,6 +1908,7 @@ export default function AirspaceView3D({
       }
 
       tileLayerRef.current = layer;
+      tileSurfaceAlignedRef.current = false;
       setTileMessage('Tile layer attached; waiting for the first visible tile…');
     } catch (error) {
       if (generation !== tileGenerationRef.current) return;
@@ -3138,7 +3141,8 @@ export default function AirspaceView3D({
       }
 
       if (tileLayerRef.current) {
-        const visibleTileCount = tileLayerRef.current.update();
+        const tileLayer = tileLayerRef.current;
+        const visibleTileCount = tileLayer.update();
         if (visibleTileCount > 0 && !tileVisibleRef.current) {
           tileVisibleRef.current = true;
           setTileLoaded(true);
@@ -3146,6 +3150,21 @@ export default function AirspaceView3D({
           setTileMessage(
             `Photoreal ${profileRef.current.icao} ground is visible.`,
           );
+        }
+        if (!tileSurfaceAlignedRef.current) {
+          const alignment = tileLayer.alignSurfaceToAppZero();
+          if (alignment) {
+            tileSurfaceAlignedRef.current = true;
+            console.info(
+              `[TILES] ${profileRef.current.icao} reference surface measured ` +
+              `Y=${alignment.measuredHeightM.toFixed(3)} m; ` +
+              `applied tile-world offset=${alignment.appliedOffsetM.toFixed(3)} m`,
+            );
+            setTileMessage(
+              `Photoreal ${profileRef.current.icao} ground aligned to app Y=0 ` +
+              `(measured ${alignment.measuredHeightM.toFixed(2)} m).`,
+            );
+          }
         }
       }
 
