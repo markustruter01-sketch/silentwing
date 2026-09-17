@@ -1,0 +1,70 @@
+[P-24] Experiment part 2 — prove the coordinate conversion.
+
+GOAL
+Put markers at known real-world positions on the Brisbane tiles and see
+whether they land where they should. This is the test that decides
+whether the ground swap is cheap or expensive.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — experiment folder only.
+
+DONE WHEN
+The page shows markers at Brisbane's two runway thresholds and at the
+airport reference point, and Pierre can see by eye whether they sit on
+the real runway ends.
+
+SCOPE
+- artifacts/silentwing/src/experiment/  (existing experiment files only)
+
+DO NOT
+- Do not touch anything outside src/experiment/. Not the app, not the
+  adapters, not the detectors, not director.ts, not any existing test.
+- Do not change the existing app's coordinate system. This is a
+  measurement, not a migration.
+- Do not load tiles on page load. The button rule still stands — nothing
+  fetched until clicked.
+- Do not invent runway coordinates. Use the ones given below and say
+  where any others came from.
+- Do not "correct" a marker's position to make it look right. If a marker
+  lands in the wrong place, that is the result and must be reported.
+- Do not create or commit any documentation, notes or summary file.
+- Do not rewrite, reset or amend git history.
+
+STEPS
+1. Confirm the branch is still experiment-3d. If not, STOP and report.
+2. Add three markers as simple bright vertical poles or spheres, each
+   large enough to see from altitude, at these WGS84 positions:
+   - Brisbane airport reference point: -27.3842, 153.1175
+   - Runway 01L threshold: -27.39750, 153.11722
+   - Runway 19R threshold: -27.37000, 153.12361
+   Label each one on screen.
+   The two runway positions are from public aeronautical data and should
+   be treated as approximate to within a few tens of metres, not exact
+   survey points. Note that in your report.
+3. The tiles renderer works in earth-centred coordinates. Convert each
+   lat/lon to a scene position using the library's own geo utilities
+   rather than writing your own formula. Report which function you used.
+4. Add a second marker set, offset from the reference point by a known
+   distance in the app's current flat-metres convention: one marker 1000 m
+   east and one 1000 m north of the reference point, converted through the
+   same path an aircraft position would take. Label them clearly.
+   This is the real test — it shows whether the app's flat-metre positions
+   can be placed correctly on the tiles.
+5. Add a readout showing, for each marker, its input lat/lon and its final
+   scene x/y/z. Numbers on screen, so discrepancies are visible.
+6. Do not adjust anything to improve the result. Report what happens.
+7. Run `pnpm --filter @workspace/silentwing run test` — 139 must still pass.
+8. Run `pnpm typecheck` at the root.
+9. Commit. Message: "Experiment: coordinate conversion markers".
+   Do not push.
+
+REPORT
+- The commit hash.
+- Which conversion function you used, and whether it came from the
+  library or was written by hand.
+- The scene coordinates computed for all five markers.
+- Raw output of steps 7 and 8.
+- Anything that surprised you, especially any axis that needed flipping or
+  negating to make the maths work. Say so plainly rather than quietly
+  handling it.
+- The URL to open.
