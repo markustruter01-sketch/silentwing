@@ -185,7 +185,7 @@ export default function MetarWidget({ profile, onWind, photorealGroundEnabled = 
     <div
       className={[
         'rounded-lg overflow-hidden text-slate-300',
-        photorealGroundEnabled && 'bg-[#05080D]/80 backdrop-blur-md shadow-lg',
+        photorealGroundEnabled && 'sw-glass-panel sw-glass-panel-dense',
       ].filter(Boolean).join(' ')}
       style={{
         border: photorealGroundEnabled

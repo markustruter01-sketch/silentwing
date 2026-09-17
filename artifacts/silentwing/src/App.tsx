@@ -562,12 +562,13 @@ export default function App() {
         <AlertShell
           activeAlerts={activeAlerts}
           onAlertFocus={handleManualAlertFocus}
+          photorealGroundEnabled={view === 'airspace' && photorealGroundEnabled}
         />
         {/* ── Airport title — 3D airspace only ── */}
         {view === 'airspace' && (
           <div className={[
             'absolute inset-x-0 top-3 flex flex-col items-center z-10 pointer-events-none select-none',
-            photorealGroundEnabled && 'rounded-lg border border-slate-700/50 bg-[#05080D]/78 px-4 py-2 backdrop-blur-sm',
+            photorealGroundEnabled && 'sw-glass-panel px-4 py-2',
           ].filter(Boolean).join(' ')}>
             <div className="flex items-baseline gap-3">
               <span className="text-[10px] font-mono tracking-[0.25em] text-sky-600/70 uppercase">{activeProfile.icao}</span>
@@ -625,6 +626,7 @@ export default function App() {
           <DirectorFocusPanel
             ac={selectedAc}
             onClose={handleClosePanel}
+            photorealGroundEnabled={view === 'airspace' && photorealGroundEnabled}
           />
         )}
 
@@ -639,6 +641,7 @@ export default function App() {
             setSelectedAcId(id);
             if (directorMode) setCameraMode('follow');
           }}
+          photorealGroundEnabled={view === 'airspace' && photorealGroundEnabled}
           topOffset={
             directorMode && (cameraMode === 'follow' || cameraMode === 'inspect') && selectedAc
               ? 444   // below DirectorFocusPanel (~420 px tall)
@@ -663,7 +666,10 @@ export default function App() {
         </div>
 
         {/* ── Controls HUD — bottom-centre on both views ── */}
-        <ControlsHUD activeView={view} />
+        <ControlsHUD
+          activeView={view}
+          photorealGroundEnabled={view === 'airspace' && photorealGroundEnabled}
+        />
 
         {/* ── Director intro hint ──────────────────────────────────────────── */}
         {showDirectorHint && (

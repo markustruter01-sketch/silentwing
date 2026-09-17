@@ -188,7 +188,7 @@ export default function WeatherWidget({
     <div
       className={[
         'rounded-lg overflow-hidden',
-        photorealGroundEnabled && 'bg-[#05080D]/80 backdrop-blur-md shadow-lg',
+        photorealGroundEnabled && 'sw-glass-panel',
       ].filter(Boolean).join(' ')}
       style={{
         border: photorealGroundEnabled

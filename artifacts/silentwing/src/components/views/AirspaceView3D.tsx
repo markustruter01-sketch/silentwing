@@ -378,6 +378,8 @@ function makeAlertLabelTexture(
   // Top accent line
   ctx.fillRect(0, 0, W, 2);
 
+  paintLabelTextShadow(ctx);
+
   // Severity badge
   ctx.font         = 'bold 14px "Courier New",monospace';
   ctx.fillStyle    = accentHex;
@@ -499,14 +501,21 @@ function paintLabelBacking(
   };
 
   ctx.save();
-  ctx.fillStyle = 'rgba(4,7,11,0.84)';
+  ctx.fillStyle = 'rgba(4,7,11,0.60)';
   path();
   ctx.fill();
-  ctx.strokeStyle = 'rgba(148,163,184,0.42)';
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+  ctx.lineWidth = 1;
   path();
   ctx.stroke();
   ctx.restore();
+}
+
+function paintLabelTextShadow(ctx: CanvasRenderingContext2D): void {
+  ctx.shadowColor = 'rgba(0,0,0,0.78)';
+  ctx.shadowBlur = 3;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 1;
 }
 
 function _paintAcLabel(
@@ -530,6 +539,8 @@ function _paintAcLabel(
   (ctx as CanvasRenderingContext2D & { roundRect: (...a: unknown[]) => void })
     .roundRect(3, 3, W - 6, H - 6, 8);
   ctx.stroke();
+
+  paintLabelTextShadow(ctx);
 
   // Callsign — row 1
   ctx.font = 'bold 30px "JetBrains Mono","Courier New",monospace';
@@ -600,6 +611,7 @@ function makeRingLabel(text: string): THREE.Sprite {
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'middle';
   paintLabelBacking(ctx, 256, 56, 7);
+  paintLabelTextShadow(ctx);
   ctx.fillText(text, 128, 28);
   const tex = new THREE.CanvasTexture(cv);
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.80, depthWrite: false });
@@ -714,6 +726,7 @@ function makeRunwayLabel(text: string): THREE.Sprite {
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'middle';
   paintLabelBacking(ctx, 320, 80, 9);
+  paintLabelTextShadow(ctx);
   ctx.fillText(text, 160, 40);
   const tex = new THREE.CanvasTexture(cv);
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
@@ -1051,6 +1064,7 @@ function _paintGlideSlopeLabel(
   const W = 512, H = 160;
   ctx.clearRect(0, 0, W, H);
   paintLabelBacking(ctx, W, H, 10);
+  paintLabelTextShadow(ctx);
 
   // Row 1 — "GLIDE SLOPE · callsign · angle"
   ctx.font         = 'bold 24px "Share Tech Mono", monospace';
@@ -1170,6 +1184,7 @@ function makeQueueLabel(n: number): { sprite: THREE.Sprite; mat: THREE.SpriteMat
   ctx.textAlign   = 'center';
   ctx.textBaseline = 'middle';
   paintLabelBacking(ctx, W, H, 7);
+  paintLabelTextShadow(ctx);
   ctx.fillText(`#${n}`, W / 2, H / 2);
   const tex = new THREE.CanvasTexture(canvas);
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
@@ -1191,6 +1206,7 @@ function repaintQueueLabel(entry: TakeoffIndicatorEntry, n: number): void {
   ctx.textAlign   = 'center';
   ctx.textBaseline = 'middle';
   paintLabelBacking(ctx, W, H, 7);
+  paintLabelTextShadow(ctx);
   ctx.fillText(`#${n}`, W / 2, H / 2);
   entry.queueLabelMat.map?.dispose();
   entry.queueLabelMat.map = new THREE.CanvasTexture(cv);
@@ -1217,6 +1233,8 @@ function makeTakeoffSign(): { sprite: THREE.Sprite; mat: THREE.SpriteMaterial } 
   rounded.beginPath();
   rounded.roundRect(3, 3, W - 6, H - 6, 8);
   ctx.stroke();
+
+  paintLabelTextShadow(ctx);
 
   // Label text
   ctx.font        = 'bold 28px "Share Tech Mono", monospace';
@@ -3967,7 +3985,12 @@ export default function AirspaceView3D({
       <div ref={mountRef} className="absolute inset-0" />
 
       {/* ── Photoreal ground cost control — explicit Stage 0 gate ── */}
-      <div className="absolute top-[164px] right-4 z-10 w-72 border border-slate-800 bg-[#0B111B]/95 p-3 shadow-2xl pointer-events-auto">
+      <div className={[
+        'absolute top-[164px] right-4 z-10 w-72 p-3 pointer-events-auto',
+        tilesEnabled
+          ? 'sw-glass-panel'
+          : 'border border-slate-800 bg-[#0B111B]/95 shadow-2xl',
+      ].join(' ')}>
         <label className="flex items-center gap-2 font-mono text-[10px] font-bold tracking-[0.14em] text-slate-300 uppercase">
           <input
             type="checkbox"
@@ -4022,7 +4045,7 @@ export default function AirspaceView3D({
       {/* ── HUD top-left ── */}
       <div className={[
         'absolute top-4 left-4 flex flex-col gap-0.5 pointer-events-none select-none',
-        tilesEnabled && 'rounded border border-slate-700/50 bg-[#05080D]/78 px-2 py-1.5 backdrop-blur-sm',
+        tilesEnabled && 'sw-glass-panel px-2 py-1.5',
       ].filter(Boolean).join(' ')}>
         <span className="font-mono text-[10px] tracking-[0.2em] text-slate-600">3D · AIRSPACE</span>
         <span className="font-mono text-[10px] tracking-[0.2em] text-slate-700">
@@ -4036,7 +4059,7 @@ export default function AirspaceView3D({
       {/* ── FL altitude labels — top-right ── */}
       <div className={[
         'absolute top-4 right-4 flex flex-col gap-1 pointer-events-none select-none text-right',
-        tilesEnabled && 'rounded border border-slate-700/50 bg-[#05080D]/78 px-2 py-1.5 backdrop-blur-sm',
+        tilesEnabled && 'sw-glass-panel px-2 py-1.5',
       ].filter(Boolean).join(' ')}>
         {[150, 100, 50].map(fl => (
           <span key={fl} className="font-mono text-[10px] tracking-wider text-slate-700">
@@ -4049,7 +4072,7 @@ export default function AirspaceView3D({
       {/* ── Phase legend — bottom-center horizontal ── */}
       <div className={[
         'absolute bottom-4 left-1/2 -translate-x-1/2 flex flex-row items-center gap-4 pointer-events-none select-none',
-        tilesEnabled && 'rounded border border-slate-700/50 bg-[#05080D]/78 px-3 py-1.5 backdrop-blur-sm',
+        tilesEnabled && 'sw-glass-panel px-3 py-1.5',
       ].filter(Boolean).join(' ')}>
         {([
           ['#38BDF8', 'APPROACH / ARRIVAL'],
@@ -4069,7 +4092,7 @@ export default function AirspaceView3D({
       {/* ── Key hints — bottom-right ── */}
       <div className={[
         'absolute bottom-4 right-4 pointer-events-none select-none flex flex-col items-end gap-0.5',
-        tilesEnabled && 'rounded border border-slate-700/50 bg-[#05080D]/78 px-2 py-1.5 backdrop-blur-sm',
+        tilesEnabled && 'sw-glass-panel px-2 py-1.5',
       ].filter(Boolean).join(' ')}>
         <span className="font-mono text-[9px] tracking-wider text-slate-800">[CLICK] INSPECT</span>
         <span className="font-mono text-[9px] tracking-wider text-slate-800">[DBLCLICK] FOLLOW</span>

@@ -92,10 +92,16 @@ const SEV_CFG = {
 interface AlertShellProps {
   activeAlerts:  SWAlert[];
   onAlertFocus?: (alertId: string) => void;
+  /** Use the light glass surface while photoreal ground is enabled. */
+  photorealGroundEnabled?: boolean;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
-export default function AlertShell({ activeAlerts, onAlertFocus }: AlertShellProps) {
+export default function AlertShell({
+  activeAlerts,
+  onAlertFocus,
+  photorealGroundEnabled = false,
+}: AlertShellProps) {
   const [activeTab,    setActiveTab]    = useState<TabId | null>(null);
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [nowMs,        setNowMs]        = useState(() => Date.now());
@@ -160,8 +166,15 @@ export default function AlertShell({ activeAlerts, onAlertFocus }: AlertShellPro
 
       {/* ── Notebook tab spine (always visible) ──────────────────────────────── */}
       <div
-        className="w-11 flex flex-col h-fit bg-[#06090D]/95 border-r border-b border-slate-800/40 pointer-events-auto rounded-br"
-        style={{ boxShadow: '3px 0 14px rgba(0,0,0,0.65)' }}
+        className={[
+          'w-11 flex flex-col h-fit border-r border-b pointer-events-auto rounded-br',
+          photorealGroundEnabled ? 'sw-glass-panel' : 'bg-[#06090D]/95 border-slate-800/40',
+        ].join(' ')}
+        style={{
+          boxShadow: photorealGroundEnabled
+            ? undefined
+            : '3px 0 14px rgba(0,0,0,0.65)',
+        }}
       >
         {TABS.map((tab, idx) => {
           const isActive  = activeTab === tab.id;
@@ -253,8 +266,17 @@ export default function AlertShell({ activeAlerts, onAlertFocus }: AlertShellPro
       {/* ── Alert list panel — appears to the right of the spine ─────────────── */}
       {activeTab === 'alerts' && (
         <div
-          className="w-72 h-[calc(100%-1rem)] bg-[#05080D]/98 border-r border-slate-800/40 pointer-events-auto flex flex-col"
-          style={{ boxShadow: '6px 0 24px rgba(0,0,0,0.75)' }}
+          className={[
+            'w-72 h-[calc(100%-1rem)] border-r pointer-events-auto flex flex-col',
+            photorealGroundEnabled
+              ? 'sw-glass-panel sw-glass-panel-dense'
+              : 'bg-[#05080D]/98 border-slate-800/40',
+          ].join(' ')}
+          style={{
+            boxShadow: photorealGroundEnabled
+              ? undefined
+              : '6px 0 24px rgba(0,0,0,0.75)',
+          }}
         >
           {/* Panel header */}
           <div className="flex items-center justify-between px-3 py-2 border-b border-slate-800/50 shrink-0">
@@ -341,8 +363,17 @@ export default function AlertShell({ activeAlerts, onAlertFocus }: AlertShellPro
       {/* ── Placeholder panels for other tabs (to be built out in later phases) ─ */}
       {activeTab !== null && activeTab !== 'alerts' && (
         <div
-          className="w-64 h-full bg-[#05080D]/98 border-r border-slate-800/40 pointer-events-auto flex flex-col items-center justify-center gap-2"
-          style={{ boxShadow: '6px 0 24px rgba(0,0,0,0.75)' }}
+          className={[
+            'w-64 h-full border-r pointer-events-auto flex flex-col items-center justify-center gap-2',
+            photorealGroundEnabled
+              ? 'sw-glass-panel'
+              : 'bg-[#05080D]/98 border-slate-800/40',
+          ].join(' ')}
+          style={{
+            boxShadow: photorealGroundEnabled
+              ? undefined
+              : '6px 0 24px rgba(0,0,0,0.75)',
+          }}
         >
           <span className="text-slate-700 text-2xl">
             {TABS.find(t => t.id === activeTab)?.icon}

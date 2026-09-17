@@ -56,10 +56,16 @@ function Field({ label, value, highlight }: { label: string; value: string; high
 export interface DirectorFocusPanelProps {
   ac:      Aircraft;
   onClose: () => void;
+  /** Use the light glass surface while photoreal ground is enabled. */
+  photorealGroundEnabled?: boolean;
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
-export default function DirectorFocusPanel({ ac, onClose }: DirectorFocusPanelProps) {
+export default function DirectorFocusPanel({
+  ac,
+  onClose,
+  photorealGroundEnabled = false,
+}: DirectorFocusPanelProps) {
   const phaseLabel = PHASE_LABEL[ac.phase] ?? ac.phase.toUpperCase().replace(/-/g, ' ');
   const phaseColor = PHASE_COLOR[ac.phase] ?? '#94A3B8';
   const airborne   = isAirborne(ac);
@@ -69,11 +75,16 @@ export default function DirectorFocusPanel({ ac, onClose }: DirectorFocusPanelPr
 
   return (
     <div
-      className="absolute top-4 right-4 w-64 z-50 pointer-events-auto select-none overflow-hidden rounded-lg shadow-2xl"
+      className={[
+        'absolute top-4 right-4 w-64 z-50 pointer-events-auto select-none overflow-hidden rounded-lg',
+        photorealGroundEnabled ? 'sw-glass-panel sw-glass-panel-dense' : 'shadow-2xl',
+      ].join(' ')}
       style={{
-        background:     'rgba(7,10,22,0.95)',
-        border:         '1px solid rgba(168,85,247,0.35)',
-        backdropFilter: 'blur(8px)',
+        ...(photorealGroundEnabled ? {} : {
+          background:     'rgba(7,10,22,0.95)',
+          border:         '1px solid rgba(168,85,247,0.35)',
+          backdropFilter: 'blur(8px)',
+        }),
       }}
     >
       {/* Purple accent bar — signals director mode */}

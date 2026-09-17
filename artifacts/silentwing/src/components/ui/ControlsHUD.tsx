@@ -7,10 +7,17 @@ import { Key, MouseSVG, Row, MouseRow } from './ControlAtoms';
 
 type View = 'airfield' | 'airspace';
 
-interface Props { activeView: View; }
+interface Props {
+  activeView: View;
+  /** Use the light glass surface while photoreal ground is enabled. */
+  photorealGroundEnabled?: boolean;
+}
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function ControlsHUD({ activeView }: Props) {
+export default function ControlsHUD({
+  activeView,
+  photorealGroundEnabled = false,
+}: Props) {
   const is3D = activeView === 'airspace';
 
   const [collapsed, setCollapsed] = useState<boolean>(() => {
@@ -33,13 +40,14 @@ export default function ControlsHUD({ activeView }: Props) {
         onClick={toggle}
         aria-label="Show controls reference"
         title="Show keyboard & mouse controls"
-        className="absolute bottom-4 right-4 z-30
-                   flex items-center justify-center px-3 py-1.5
-                   rounded-full border border-slate-700/60
-                   bg-slate-900/75 backdrop-blur-sm
-                   font-mono text-[11px] text-slate-400
-                   hover:text-slate-200 hover:border-slate-500/80
-                   transition-colors cursor-pointer select-none"
+         className={[
+           'absolute bottom-4 right-4 z-30 flex items-center justify-center px-3 py-1.5',
+           'rounded-full border font-mono text-[11px] text-slate-400',
+           'hover:text-slate-200 hover:border-slate-500/80 transition-colors cursor-pointer select-none',
+           photorealGroundEnabled
+             ? 'sw-glass-panel'
+             : 'border-slate-700/60 bg-slate-900/75 backdrop-blur-sm',
+         ].join(' ')}
       >
         [?]
       </button>
@@ -49,11 +57,13 @@ export default function ControlsHUD({ activeView }: Props) {
   // ── Expanded state: full legend ───────────────────────────────────────────
   return (
     <div
-      className="absolute bottom-4 right-4 z-30
-                 flex flex-col gap-0
-                 rounded-xl border border-slate-700/60
-                 bg-slate-900/75 backdrop-blur-sm
-                 pointer-events-auto select-none overflow-hidden"
+      className={[
+        'absolute bottom-4 right-4 z-30 flex flex-col gap-0 rounded-xl border',
+        'pointer-events-auto select-none overflow-hidden',
+        photorealGroundEnabled
+          ? 'sw-glass-panel'
+          : 'border-slate-700/60 bg-slate-900/75 backdrop-blur-sm',
+      ].join(' ')}
       aria-label="Controls reference"
     >
       {/* Collapse button */}
