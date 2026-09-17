@@ -2,9 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import {
   AmbientLight,
   Color,
+  CylinderGeometry,
   DirectionalLight,
+  Group,
+  Mesh,
+  MeshBasicMaterial,
   PerspectiveCamera,
   Scene,
+  SphereGeometry,
   WebGLRenderer,
   Vector3,
 } from "three";
@@ -19,6 +24,148 @@ const BRISBANE_AIRPORT = {
   latitude: -27.3842,
   longitude: 153.1175,
 };
+
+// These are the same origin and equirectangular projection constants used by
+// the YBBN ADS-B adapter. The app's flat frame is +x east, +y south, then
+// AirspaceView3D maps that y value to Three.js z.
+const APP_ORIGIN = {
+  latitude: -27.384,
+  longitude: 153.117,
+};
+const LAT_METRES = 110_540;
+const LON_METRES =
+  111_320 * Math.cos((APP_ORIGIN.latitude * Math.PI) / 180);
+
+type FlatPosition = {
+  x: number;
+  y: number;
+};
+
+type MarkerDefinition = {
+  id: string;
+  label: string;
+  latitude: number;
+  longitude: number;
+  source: string;
+  flatPosition?: FlatPosition;
+  color: string;
+};
+
+type MarkerReadout = MarkerDefinition & {
+  scenePosition: { x: number; y: number; z: number };
+};
+
+function projectToAppFlat(latitude: number, longitude: number): FlatPosition {
+  return {
+    x: (longitude - APP_ORIGIN.longitude) * LON_METRES,
+    y: -(latitude - APP_ORIGIN.latitude) * LAT_METRES,
+  };
+}
+
+function appFlatToLatLon({ x, y }: FlatPosition) {
+  return {
+    latitude: APP_ORIGIN.latitude - y / LAT_METRES,
+    longitude: APP_ORIGIN.longitude + x / LON_METRES,
+  };
+}
+
+function createMarkerDefinitions(): MarkerDefinition[] {
+  const referenceFlat = projectToAppFlat(
+    BRISBANE_AIRPORT.latitude,
+    BRISBANE_AIRPORT.longitude,
+  );
+  const eastFlat = {
+    x: referenceFlat.x + 1_000,
+    y: referenceFlat.y,
+  };
+  const northFlat = {
+    x: referenceFlat.x,
+    y: referenceFlat.y - 1_000,
+  };
+  const east = appFlatToLatLon(eastFlat);
+  const north = appFlatToLatLon(northFlat);
+
+  return [
+    {
+      id: "airport-reference",
+      label: "Airport reference point",
+      latitude: BRISBANE_AIRPORT.latitude,
+      longitude: BRISBANE_AIRPORT.longitude,
+      source: "Given WGS84 position",
+      color: "#ffffff",
+    },
+    {
+      id: "runway-01l",
+      label: "Runway 01L threshold",
+      latitude: -27.3975,
+      longitude: 153.11722,
+      source: "Public aeronautical data; approximate ± tens of metres",
+      color: "#ffcd56",
+    },
+    {
+      id: "runway-19r",
+      label: "Runway 19R threshold",
+      latitude: -27.37,
+      longitude: 153.12361,
+      source: "Public aeronautical data; approximate ± tens of metres",
+      color: "#ffcd56",
+    },
+    {
+      id: "offset-east",
+      label: "App offset: 1,000 m east",
+      latitude: east.latitude,
+      longitude: east.longitude,
+      source: "Derived from YBBN flat-metres projection",
+      flatPosition: eastFlat,
+      color: "#43d9ff",
+    },
+    {
+      id: "offset-north",
+      label: "App offset: 1,000 m north",
+      latitude: north.latitude,
+      longitude: north.longitude,
+      source: "Derived from YBBN flat-metres projection",
+      flatPosition: northFlat,
+      color: "#43d9ff",
+    },
+  ];
+}
+
+function addMarkerPole(
+  scene: Scene,
+  marker: MarkerDefinition,
+  position: Vector3,
+) {
+  const markerGroup = new Group();
+  markerGroup.position.copy(position);
+  markerGroup.quaternion.setFromUnitVectors(
+    new Vector3(0, 1, 0),
+    position.clone().normalize(),
+  );
+
+  const poleMaterial = new MeshBasicMaterial({
+    color: marker.color,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const pole = new Mesh(new CylinderGeometry(12, 18, 240, 12), poleMaterial);
+  pole.position.y = 120;
+  pole.renderOrder = 10;
+  markerGroup.add(pole);
+
+  const beaconMaterial = new MeshBasicMaterial({
+    color: marker.color,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const beacon = new Mesh(new SphereGeometry(42, 16, 10), beaconMaterial);
+  beacon.position.y = 240;
+  beacon.renderOrder = 11;
+  markerGroup.add(beacon);
+
+  markerGroup.name = marker.id;
+  scene.add(markerGroup);
+}
 
 type ExperimentStatus =
   | "ready"
@@ -50,6 +197,9 @@ export default function PhotorealisticTilesExperiment() {
   const [firstFrameMs, setFirstFrameMs] = useState<number | null>(null);
   const [loadedTileCount, setLoadedTileCount] = useState(0);
   const [attribution, setAttribution] = useState("Google Maps Platform");
+  const [markerReadouts, setMarkerReadouts] = useState<MarkerReadout[] | null>(
+    null,
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -77,7 +227,7 @@ export default function PhotorealisticTilesExperiment() {
   }, []);
 
   const loadTiles = async () => {
-    if (status === "requesting-key" || status === "loading") return;
+    if (status !== "ready" && status !== "error") return;
 
     setStatus("requesting-key");
     setStatusMessage("Requesting a session configuration from the server…");
@@ -130,6 +280,28 @@ export default function PhotorealisticTilesExperiment() {
       tiles.setResolutionFromRenderer(camera, renderer);
       tiles.group.matrixAutoUpdate = false;
       scene.add(tiles.group);
+
+      const markerDefinitions = createMarkerDefinitions();
+      const markerReadoutValues: MarkerReadout[] = [];
+      for (const marker of markerDefinitions) {
+        const scenePosition = new Vector3();
+        tiles.ellipsoid.getCartographicToPosition(
+          (marker.latitude * Math.PI) / 180,
+          (marker.longitude * Math.PI) / 180,
+          0,
+          scenePosition,
+        );
+        addMarkerPole(scene, marker, scenePosition);
+        markerReadoutValues.push({
+          ...marker,
+          scenePosition: {
+            x: scenePosition.x,
+            y: scenePosition.y,
+            z: scenePosition.z,
+          },
+        });
+      }
+      setMarkerReadouts(markerReadoutValues);
 
       const controls = new GlobeControls(scene, camera, canvas);
       controls.enableDamping = true;
@@ -217,11 +389,11 @@ export default function PhotorealisticTilesExperiment() {
     <main className="tiles-experiment">
       <canvas ref={canvasRef} className="tiles-experiment__canvas" />
       <section className="tiles-experiment__panel" aria-labelledby="tiles-title">
-        <div className="tiles-experiment__eyebrow">P-23 / isolated experiment</div>
-        <h1 id="tiles-title">Brisbane Airport photorealistic tiles</h1>
+        <div className="tiles-experiment__eyebrow">P-24 / coordinate proof</div>
+        <h1 id="tiles-title">Brisbane Airport marker conversion</h1>
         <p className="tiles-experiment__lede">
-          The scene stays empty until you explicitly start the Google 3D Tiles
-          request.
+          Five known positions will be placed on the photorealistic tiles. The
+          scene stays empty until you explicitly start the Google request.
         </p>
 
         <button
@@ -230,7 +402,11 @@ export default function PhotorealisticTilesExperiment() {
           onClick={loadTiles}
           disabled={busy}
         >
-          {busy ? "Loading tiles…" : "Load Brisbane Airport tiles"}
+          {busy
+            ? "Loading tiles…"
+            : status === "loaded"
+              ? "Markers loaded"
+              : "Load Brisbane Airport tiles"}
         </button>
 
         <div className="tiles-experiment__status" role="status" aria-live="polite">
@@ -262,6 +438,58 @@ export default function PhotorealisticTilesExperiment() {
             <dd>{loadedTileCount}</dd>
           </div>
         </dl>
+
+        <section
+          className="tiles-experiment__marker-readout"
+          aria-labelledby="marker-readout-title"
+        >
+          <h2 id="marker-readout-title">Marker readout</h2>
+          {!markerReadouts ? (
+            <p className="tiles-experiment__readout-empty">
+              Scene x/y/z values appear after the tiles load.
+            </p>
+          ) : (
+            <div className="tiles-experiment__marker-list">
+              {markerReadouts.map((marker) => (
+                <article
+                  className="tiles-experiment__marker"
+                  key={marker.id}
+                >
+                  <div className="tiles-experiment__marker-heading">
+                    <span
+                      className="tiles-experiment__marker-swatch"
+                      style={{ backgroundColor: marker.color }}
+                    />
+                    <strong>{marker.label}</strong>
+                  </div>
+                  <div className="tiles-experiment__marker-coords">
+                    input lat/lon&nbsp; {marker.latitude.toFixed(6)},{" "}
+                    {marker.longitude.toFixed(6)}
+                  </div>
+                  <div className="tiles-experiment__marker-coords">
+                    scene x/y/z&nbsp;{" "}
+                    {[
+                      marker.scenePosition.x,
+                      marker.scenePosition.y,
+                      marker.scenePosition.z,
+                    ]
+                      .map((value) => value.toFixed(3))
+                      .join(", ")}
+                  </div>
+                  <div className="tiles-experiment__marker-source">
+                    {marker.source}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+          <p className="tiles-experiment__conversion-note">
+            WGS84 lat/lon → ECEF uses the renderer library’s
+            <code>Ellipsoid.getCartographicToPosition</code>. The cyan markers
+            first use the existing app projection: +x east, +y south, then
+            Three.js z = app y.
+          </p>
+        </section>
 
         <p className="tiles-experiment__attribution" aria-label="Map data attribution">
           {attribution}
