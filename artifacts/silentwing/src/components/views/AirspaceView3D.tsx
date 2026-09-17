@@ -446,14 +446,15 @@ function _paintAcLabel(
 
   // Callsign — row 1
   ctx.font = 'bold 30px "JetBrains Mono","Courier New",monospace';
-  ctx.fillStyle = color;
+  ctx.fillStyle = '#ffffff';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(callsign, W / 2, H * 0.36);
 
   // HDG + phase — row 2, slightly dimmer
   ctx.font = '16px "JetBrains Mono","Courier New",monospace';
-  ctx.globalAlpha = 0.72;
+  ctx.globalAlpha = 1.0;
+  ctx.fillStyle = '#ffffff';
   ctx.fillText(`${hdgStr}  ·  ${phaseLabel}`, W / 2, H * 0.72);
   ctx.globalAlpha = 1.0;
 }
@@ -464,9 +465,9 @@ function _paintAcLabel(
  * quarter-size to reduce clutter at the terminal stand area.
  */
 function labelScaleForPhase(phase: string): [number, number] {
-  if (phase === 'at-gate')                              return [135, 37.5]; // 75 % smaller
-  if (phase === 'taxi-in' || phase === 'taxi-out')      return [270, 75];   // 50 % smaller
-  return [540, 150]; // full size (airborne, approach, landing, takeoff)
+  if (phase === 'at-gate')                              return [120, 34]; // reduced from 135 × 37.5
+  if (phase === 'taxi-in' || phase === 'taxi-out')      return [210, 58]; // reduced from 270 × 75
+  return [300, 84]; // reduced from 540 × 150
 }
 
 function makeAcLabel(callsign: string, headingDeg: number, phase: string): THREE.Sprite {
@@ -509,7 +510,7 @@ function makeRingLabel(text: string): THREE.Sprite {
   const ctx = cv.getContext('2d')!;
   ctx.clearRect(0, 0, 256, 56);
   ctx.font         = 'bold 22px "Courier New", monospace';
-  ctx.fillStyle    = '#2d6a9f';
+  ctx.fillStyle    = '#ffffff';
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'middle';
   paintLabelBacking(ctx, 256, 56, 7);
@@ -623,8 +624,8 @@ function makeRunwayLabel(text: string): THREE.Sprite {
   cv.width  = 320; cv.height = 80;
   const ctx = cv.getContext('2d')!;
   ctx.clearRect(0, 0, 320, 80);
-  ctx.font         = 'bold 30px "Courier New", monospace';
-  ctx.fillStyle    = '#7dd3fc';
+  ctx.font         = 'bold 22px "Courier New", monospace';
+  ctx.fillStyle    = '#ffffff';
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'middle';
   paintLabelBacking(ctx, 320, 80, 9);
@@ -633,7 +634,7 @@ function makeRunwayLabel(text: string): THREE.Sprite {
   const tex = new THREE.CanvasTexture(cv);
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
   const sp  = new THREE.Sprite(mat);
-  sp.scale.set(640, 160, 1);
+  sp.scale.set(360, 90, 1); // reduced from 640 × 160 for runway and terminal tags
   return sp;
 }
 
@@ -970,7 +971,7 @@ function _paintGlideSlopeLabel(
 
   // Row 1 — "GLIDE SLOPE · callsign · angle"
   ctx.font         = 'bold 24px "Share Tech Mono", monospace';
-  ctx.fillStyle    = '#7dd3fc';
+  ctx.fillStyle    = '#ffffff';
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(`GLIDE SLOPE  ${callsign}  ${angleDeg.toFixed(1)}°`, W / 2, 24);
@@ -989,7 +990,7 @@ function _paintGlideSlopeLabel(
 
   // Row 3 — "ETA" sub-label
   ctx.font      = 'bold 16px "Share Tech Mono", monospace';
-  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.fillStyle = '#ffffff';
   ctx.fillText('ETA TO THRESHOLD', W / 2, 148);
 }
 
@@ -1082,7 +1083,7 @@ function makeQueueLabel(n: number): { sprite: THREE.Sprite; mat: THREE.SpriteMat
   const ctx = canvas.getContext('2d')!;
   ctx.clearRect(0, 0, W, H);
   ctx.font        = 'bold 38px "Share Tech Mono", monospace';
-  ctx.fillStyle   = '#818CF8';
+  ctx.fillStyle   = '#ffffff';
   ctx.textAlign   = 'center';
   ctx.textBaseline = 'middle';
   paintLabelBacking(ctx, W, H, 7);
@@ -1104,7 +1105,7 @@ function repaintQueueLabel(entry: TakeoffIndicatorEntry, n: number): void {
   const ctx = cv.getContext('2d')!;
   ctx.clearRect(0, 0, W, H);
   ctx.font        = 'bold 38px "Share Tech Mono", monospace';
-  ctx.fillStyle   = '#818CF8';
+  ctx.fillStyle   = '#ffffff';
   ctx.textAlign   = 'center';
   ctx.textBaseline = 'middle';
   paintLabelBacking(ctx, W, H, 7);
@@ -1140,7 +1141,7 @@ function makeTakeoffSign(): { sprite: THREE.Sprite; mat: THREE.SpriteMaterial } 
 
   // Label text
   ctx.font        = 'bold 28px "Share Tech Mono", monospace';
-  ctx.fillStyle   = '#818CF8';
+  ctx.fillStyle   = '#ffffff';
   ctx.textAlign   = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('TAKING OFF', W / 2, H / 2);
@@ -1464,6 +1465,7 @@ export interface AirspaceView3DProps {
   /** When true, the coarse terrain elevation mesh is visible (default true). */
   showTerrain?: boolean;
   /** Mirrors the photoreal ground toggle for conditional UI backing. */
+  photorealGroundEnabled?: boolean;
   onPhotorealGroundChange?: (enabled: boolean) => void;
 }
 
@@ -1661,6 +1663,7 @@ export default function AirspaceView3D({
   rebuildGroundRef,
   showBuildings = true,
   showTerrain   = true,
+  photorealGroundEnabled,
   onPhotorealGroundChange,
 }: AirspaceView3DProps) {
   const mountRef       = useRef<HTMLDivElement>(null);
@@ -1745,6 +1748,14 @@ export default function AirspaceView3D({
     setTileStatus('ready');
     setTileMessage('Photoreal ground is on. Loading is still explicit and guarded.');
   };
+
+  // The command bar owns the visible toggle; keep the existing guarded tile
+  // controller as the single source of tile-layer side effects.
+  useEffect(() => {
+    if (photorealGroundEnabled !== undefined && photorealGroundEnabled !== tilesEnabled) {
+      handleTilesToggle(photorealGroundEnabled);
+    }
+  }, [photorealGroundEnabled]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleLoadTiles = async () => {
     if (!tilesEnabled || tileLoading || tileLoaded) return;
@@ -3811,51 +3822,6 @@ export default function AirspaceView3D({
       {/* Three.js canvas mount */}
       <div ref={mountRef} className="absolute inset-0" />
 
-      {/* ── Photoreal ground cost control — explicit Stage 0 gate ── */}
-      <div className={[
-        'absolute top-[164px] right-4 z-10 w-72 p-3 pointer-events-auto',
-        tilesEnabled
-          ? 'sw-glass-panel'
-          : 'border border-slate-800 bg-[#0B111B]/95 shadow-2xl',
-      ].join(' ')}>
-        <label className="flex items-center gap-2 font-mono text-[10px] font-bold tracking-[0.14em] text-slate-300 uppercase">
-          <input
-            type="checkbox"
-            checked={tilesEnabled}
-            onChange={(event) => handleTilesToggle(event.target.checked)}
-            className="h-4 w-4 accent-sky-500"
-          />
-          <span>Photoreal ground</span>
-        </label>
-
-        {tilesEnabled && (
-          <div className="mt-2 border border-emerald-900/60 bg-emerald-950/30 px-2 py-1.5 font-mono text-xs font-bold text-emerald-300">
-            tiles: {tileSessionCount} / {MAX_TILE_SESSIONS}
-          </div>
-        )}
-
-        <button
-          type="button"
-          onClick={handleLoadTiles}
-          disabled={!tilesEnabled || tileLoading || tileLoaded}
-          className="mt-3 w-full border border-sky-500/80 bg-sky-700 px-3 py-2 font-mono text-[10px] font-bold tracking-[0.12em] text-white uppercase transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-45"
-        >
-          {tileLoading
-            ? 'Loading photoreal ground…'
-            : tileLoaded
-              ? 'Photoreal ground loaded'
-              : 'Load photoreal ground'}
-        </button>
-
-        <p
-          className="mt-2 font-mono text-[10px] leading-relaxed text-slate-500"
-          role="status"
-          aria-live="polite"
-        >
-          {tileMessage}
-        </p>
-      </div>
-
       {webglUnavailable && (
         <div className="absolute inset-0 flex items-center justify-center px-6">
           <div className="max-w-md border border-slate-800 bg-[#0B111B]/95 px-6 py-5 text-center shadow-2xl">
@@ -3894,42 +3860,6 @@ export default function AirspaceView3D({
           </span>
         ))}
         <span className="font-mono text-[10px] tracking-wider text-slate-800 mt-1">GND</span>
-      </div>
-
-      {/* ── Phase legend — bottom-center horizontal ── */}
-      <div className={[
-        'absolute bottom-4 left-1/2 -translate-x-1/2 flex flex-row items-center gap-4 pointer-events-none select-none',
-        tilesEnabled && 'sw-glass-panel px-3 py-1.5',
-      ].filter(Boolean).join(' ')}>
-        {([
-          ['#38BDF8', 'APPROACH / ARRIVAL'],
-          ['#F59E0B', 'TAXI IN'],
-          ['#4ADE80', 'AT GATE'],
-          ['#FB923C', 'TAXI OUT'],
-          ['#818CF8', 'TAKEOFF'],
-          ['#C084FC', 'DEPARTURE'],
-        ] as const).map(([col, lbl]) => (
-          <div key={lbl} className="flex items-center gap-1.5">
-            <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: col }} />
-            <span className="font-mono text-[9px] tracking-wider text-slate-700">{lbl}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* ── Key hints — bottom-right ── */}
-      <div className={[
-        'absolute bottom-4 right-4 pointer-events-none select-none flex flex-col items-end gap-0.5',
-        tilesEnabled && 'sw-glass-panel px-2 py-1.5',
-      ].filter(Boolean).join(' ')}>
-        <span className="font-mono text-[9px] tracking-wider text-slate-800">[CLICK] INSPECT</span>
-        <span className="font-mono text-[9px] tracking-wider text-slate-800">[DBLCLICK] FOLLOW</span>
-        <span className="font-mono text-[9px] tracking-wider text-slate-800">[ESC] BACK</span>
-        <span className="font-mono text-[9px] tracking-wider text-slate-800">[O] ORBIT</span>
-        <span className="font-mono text-[9px] tracking-wider text-slate-800">[SCROLL] ZOOM</span>
-        <span className="font-mono text-[9px] tracking-wider text-slate-800">[RMB] PAN</span>
-        <span className="font-mono text-[9px] tracking-wider text-slate-800">[V] 2D VIEW</span>
-        <span className="font-mono text-[9px] tracking-wider text-slate-800">[P] PRED. PATHS</span>
-        <span className="font-mono text-[9px] tracking-wider text-slate-800">[L] SNAP LIVE</span>
       </div>
 
     </div>

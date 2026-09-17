@@ -233,3 +233,13 @@ html, body {
 .sw-glass-panel * {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.72);
 }
+
+/* P-33 layout surfaces: the title band dissolves before it reaches either edge. */
+.sw-airport-title-band {
+  background: linear-gradient(180deg, rgba(7, 15, 27, 0.72), rgba(7, 15, 27, 0.26));
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  backdrop-filter: blur(7px);
+  -webkit-backdrop-filter: blur(7px);
+  mask-image: linear-gradient(to right, transparent 0%, black 17%, black 83%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, black 17%, black 83%, transparent 100%);
+}

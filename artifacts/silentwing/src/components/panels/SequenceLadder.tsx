@@ -50,6 +50,10 @@ export interface SequenceLadderProps {
   onTogglePin: (id: string) => void;
   /** Top offset in px — allows caller to push panel below DirectorFocusPanel */
   topOffset?: number;
+  /** Bottom offset for the on-demand command-bar dock. */
+  bottomOffset?: number;
+  /** Center the panel above the command bar instead of docking right. */
+  dockCenter?: boolean;
   /** Use the light glass surface while photoreal ground is enabled. */
   photorealGroundEnabled?: boolean;
 }
@@ -205,6 +209,8 @@ export default function SequenceLadder({
   pinnedAcIds,
   onTogglePin,
   topOffset = 440,
+  bottomOffset,
+  dockCenter = false,
   photorealGroundEnabled = false,
 }: SequenceLadderProps) {
   const isEmpty = arrivalsQueue.length === 0 && departuresQueue.length === 0;
@@ -215,11 +221,12 @@ export default function SequenceLadder({
   return (
     <div
       className={[
-        'absolute right-4 w-[300px] z-40 pointer-events-auto select-none overflow-hidden rounded-lg',
+        'absolute w-[300px] z-40 pointer-events-auto select-none overflow-hidden rounded-lg',
+        dockCenter ? 'left-1/2 -translate-x-1/2' : 'right-4',
         photorealGroundEnabled ? 'sw-glass-panel sw-glass-panel-dense' : 'shadow-2xl',
       ].join(' ')}
       style={{
-        top: topOffset,
+        ...(bottomOffset != null ? { bottom: bottomOffset } : { top: topOffset }),
         ...(photorealGroundEnabled ? {} : {
           background:    'rgba(7,10,22,0.92)',
           border:        '1px solid rgba(148,163,184,0.15)',

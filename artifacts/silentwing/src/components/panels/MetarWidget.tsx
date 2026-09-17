@@ -116,9 +116,20 @@ interface Props {
   onWind?: (dirDeg: number, speedKt: number) => void;
   /** Add a readable surface only while photoreal ground is enabled. */
   photorealGroundEnabled?: boolean;
+  /** Render the bottom-docked summary pill instead of the full METAR panel. */
+  compact?: boolean;
+  onExpand?: () => void;
+  onClose?: () => void;
 }
 
-export default function MetarWidget({ profile, onWind, photorealGroundEnabled = false }: Props) {
+export default function MetarWidget({
+  profile,
+  onWind,
+  photorealGroundEnabled = false,
+  compact = false,
+  onExpand,
+  onClose,
+}: Props) {
   const [data,      setData]      = useState<MetarResponse | null>(null);
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
   const [error,     setError]     = useState<string | null>(null);
@@ -181,6 +192,29 @@ export default function MetarWidget({ profile, onWind, photorealGroundEnabled = 
   const cat = m?.fltCat ?? null;
   const cs  = catStyle(cat);
 
+  if (compact) {
+    return (
+      <div className="flex h-12 items-center gap-2 rounded-full border border-white/15 bg-slate-950/75 px-3 shadow-2xl backdrop-blur-xl">
+        <span className={`rounded-full border px-2 py-1 font-mono text-[10px] font-bold tracking-widest ${cs.bg} ${cs.text}`}>
+          {cat ?? 'WX'}
+        </span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-white">
+          WIND {m ? fmtWind(m.wdir, m.wspd, m.wgst) : '—'}
+        </span>
+        <span className="font-mono text-[10px] text-white">QNH {m ? fmtQnh(m.altim).replace(/^Q/, '') : '—'}</span>
+        <span className="font-mono text-[10px] text-white">{m?.temp != null ? `${fmt(m.temp)}°` : '—'}</span>
+        <button
+          type="button"
+          onClick={onExpand}
+          aria-label="Open full METAR panel"
+          className="ml-1 flex h-7 w-7 items-center justify-center rounded-full text-lg text-white/80 hover:bg-white/10 hover:text-white"
+        >
+          ⌄
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
       className={[
@@ -204,6 +238,16 @@ export default function MetarWidget({ profile, onWind, photorealGroundEnabled = 
               <span className={`w-1.5 h-1.5 rounded-full ${cs.dot}`} />
               {cat}
             </span>
+          )}
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close full METAR panel"
+              className="ml-1 rounded px-1.5 py-0.5 font-mono text-[11px] text-white/70 hover:bg-white/10 hover:text-white"
+            >
+              ×
+            </button>
           )}
         </div>
       </div>

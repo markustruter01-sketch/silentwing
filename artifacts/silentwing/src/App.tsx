@@ -6,6 +6,8 @@ import DirectorFocusPanel  from '@/components/panels/DirectorFocusPanel';
 import AlertShell          from '@/components/panels/AlertShell';
 import SequenceLadder, { ARRIVAL_PHASES, DEPARTURE_PHASES } from '@/components/panels/SequenceLadder';
 import ControlsHUD         from '@/components/ui/ControlsHUD';
+import CommandBar          from '@/components/ui/CommandBar';
+import RewindScrubber      from '@/components/ui/RewindScrubber';
 import WelcomeModal        from '@/components/ui/WelcomeModal';
 import OurAirportsPanel    from '@/components/dev/OurAirportsPanel';
 import WeatherWidget  from '@/components/panels/WeatherWidget';
@@ -196,6 +198,11 @@ export default function App() {
 
   // ── Director Mode state ──────────────────────────────────────────────────
   const [directorMode, setDirectorMode] = useState(true); // starts ON
+  const [alertsOpen, setAlertsOpen] = useState(false);
+  const [sequenceOpen, setSequenceOpen] = useState(false);
+  const [forecastOpen, setForecastOpen] = useState(false);
+  const [metarOpen, setMetarOpen] = useState(false);
+  const [controlsOpen, setControlsOpen] = useState(false);
 
   // ── Alert engine (Phase 6A) ──────────────────────────────────────────────
   const alertEngineRef  = useRef(new AlertEngine(YBBN));
@@ -562,24 +569,22 @@ export default function App() {
         <AlertShell
           activeAlerts={activeAlerts}
           onAlertFocus={handleManualAlertFocus}
+          onDismiss={handleDismissAlert}
           alertFocusId={alertFocusId}
+          open={alertsOpen}
           photorealGroundEnabled={view === 'airspace' && photorealGroundEnabled}
         />
         {/* ── Airport title — 3D airspace only ── */}
         {view === 'airspace' && (
-          <div className={[
-            'absolute inset-x-0 top-3 flex flex-col items-center z-10 pointer-events-none select-none',
-            photorealGroundEnabled && 'sw-glass-panel px-4 py-2',
-          ].filter(Boolean).join(' ')}>
+          <div className="sw-airport-title-band absolute inset-x-0 top-0 z-10 flex flex-col items-center py-2 pointer-events-none select-none">
             <div className="flex items-baseline gap-3">
-              <span className="text-[10px] font-mono tracking-[0.25em] text-sky-600/70 uppercase">{activeProfile.icao}</span>
-              <h1 className="text-2xl font-bold tracking-[0.12em] text-sky-100/90 uppercase"
+              <span className="text-[10px] font-mono tracking-[0.25em] text-cyan-300 uppercase">{activeProfile.icao}</span>
+              <h1 className="text-2xl font-bold tracking-[0.18em] text-white uppercase"
                   style={{ fontFamily: '"Courier New", monospace', textShadow: '0 0 24px rgba(14,165,233,0.45)' }}>
                 {activeProfile.name}
               </h1>
-              <span className="text-[10px] font-mono tracking-[0.25em] text-sky-600/70 uppercase">ICAO</span>
+              <span className="text-[10px] font-mono tracking-[0.25em] text-white/45 uppercase">ICAO</span>
             </div>
-            <div className="mt-0.5 h-px w-64 bg-gradient-to-r from-transparent via-sky-700/50 to-transparent" />
           </div>
         )}
         <AirportProvider profile={activeProfile}>
@@ -602,6 +607,7 @@ export default function App() {
             alertedIds={alertedIds}
             activeAlerts={activeAlerts}
             alertFocusId={alertFocusId ?? undefined}
+            photorealGroundEnabled={photorealGroundEnabled}
             onAlertFocusDone={handleAlertFocusDone}
             showPaths={showPredictedPaths}
             showBuildings={showBuildings}
@@ -631,46 +637,73 @@ export default function App() {
           />
         )}
 
-        {/* ── Sequence ladder — always visible; pushed below DirectorFocusPanel ── */}
-        <SequenceLadder
-          arrivalsQueue={arrivalsQueue}
-          departuresQueue={departuresQueue}
-          pinnedAcIds={pinnedAcIds}
-          onTogglePin={handleTogglePin}
-          onSelectAc={(id) => {
-            console.log(`[APP] sequence ladder select: ${id}`);
-            setSelectedAcId(id);
-            if (directorMode) setCameraMode('follow');
-          }}
-          photorealGroundEnabled={view === 'airspace' && photorealGroundEnabled}
-          topOffset={
-            directorMode && (cameraMode === 'follow' || cameraMode === 'inspect') && selectedAc
-              ? 444   // below DirectorFocusPanel (~420 px tall)
-              : 16    // top-4 when no focus panel
-          }
-        />
+        {/* ── On-demand sequence ladder — centered above the command bar ── */}
+        {sequenceOpen && (
+          <SequenceLadder
+            arrivalsQueue={arrivalsQueue}
+            departuresQueue={departuresQueue}
+            pinnedAcIds={pinnedAcIds}
+            onTogglePin={handleTogglePin}
+            onSelectAc={(id) => {
+              console.log(`[APP] sequence ladder select: ${id}`);
+              setSelectedAcId(id);
+              if (directorMode) setCameraMode('follow');
+            }}
+            photorealGroundEnabled={view === 'airspace' && photorealGroundEnabled}
+            bottomOffset={80}
+            dockCenter
+          />
+        )}
 
-        {/* ── Info stack — weather, bottom-left ── */}
-        <div className="absolute bottom-6 left-14 z-40 pointer-events-none select-none flex flex-col gap-2" style={{ maxWidth: 420 }}>
-          {/* NOAA METAR/TAF — authoritative aviation weather; drives runway selection */}
-          <div className="pointer-events-auto">
-            <MetarWidget
-              profile={activeProfile}
-              photorealGroundEnabled={view === 'airspace' && photorealGroundEnabled}
-              onWind={(dir, speed) => setMetarWind({ dir, speed })}
-            />
-          </div>
-          <WeatherWidget
+        {/* ── Condensed weather / on-demand full METAR ── */}
+        <div className="fixed bottom-20 right-4 z-[150] w-[340px] pointer-events-auto">
+          <MetarWidget
             profile={activeProfile}
             photorealGroundEnabled={view === 'airspace' && photorealGroundEnabled}
+            onWind={(dir, speed) => setMetarWind({ dir, speed })}
+            compact={!metarOpen}
+            onExpand={() => setMetarOpen(true)}
+            onClose={() => setMetarOpen(false)}
           />
         </div>
 
-        {/* ── Controls HUD — bottom-centre on both views ── */}
-        <ControlsHUD
+        {/* ── Forecast strip is on-demand from LAYERS ── */}
+        {forecastOpen && (
+          <div className="fixed bottom-20 right-[370px] z-[145] w-[340px] max-h-[calc(100vh-180px)] overflow-auto pointer-events-auto">
+            <WeatherWidget
+              profile={activeProfile}
+              photorealGroundEnabled={view === 'airspace' && photorealGroundEnabled}
+            />
+          </div>
+        )}
+
+        {controlsOpen && (
+          <ControlsHUD
+            activeView={view}
+            photorealGroundEnabled={view === 'airspace' && photorealGroundEnabled}
+          />
+        )}
+
+        <CommandBar
           activeView={view}
-          photorealGroundEnabled={view === 'airspace' && photorealGroundEnabled}
+          directorMode={directorMode}
+          groundEnabled={view === 'airspace' && photorealGroundEnabled}
+          alertCount={activeAlerts.length || _legacyAlerts.length}
+          onView={() => setView(v => v === 'airspace' ? 'airfield' : 'airspace')}
+          onRewind={() => undefined}
+          onLayers={() => {
+            setSequenceOpen(v => !v);
+            setForecastOpen(v => !v);
+            setMetarOpen(v => !v);
+          }}
+          onDirector={() => setDirectorMode(v => !v)}
+          onAlerts={() => setAlertsOpen(v => !v)}
+          onGround={() => {
+            if (view === 'airspace') setPhotorealGroundEnabled(v => !v);
+          }}
+          onMore={() => setControlsOpen(v => !v)}
         />
+        <RewindScrubber />
 
         {/* ── Director intro hint ──────────────────────────────────────────── */}
         {showDirectorHint && (
@@ -687,10 +720,8 @@ export default function App() {
               <span className="text-[11px] text-amber-300 font-mono tracking-wide whitespace-nowrap">
                 Toggle Camera Director Mode Off Here
               </span>
-              {/* Arrow pointing down toward the Director button in the filter bar */}
               <span className="text-amber-400 text-base leading-none">↓</span>
             </div>
-            {/* Connector line to the button */}
             <div className="flex justify-end pr-6">
               <div className="w-px h-2 bg-amber-500/40" />
             </div>
