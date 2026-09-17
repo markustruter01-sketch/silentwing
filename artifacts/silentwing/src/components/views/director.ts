@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import {
   MIN_LOOK_Y,
-  ORBIT_RADIUS,
   ORBIT_SPEED,
   toV3,
 } from './AirspaceView3D';
@@ -9,9 +8,9 @@ import type { SceneState } from './AirspaceView3D';
 
 // ── Director-only constants ────────────────────────────────────────────────────
 /** Maximum horizontal distance from the airport centre at which the director
- *  will focus on an alert.  Set to 50% of ORBIT_RADIUS so the camera stays
+ *  will focus on an alert.  Set to 50% of the orbit radius so the camera stays
  *  within the airport's visual footprint and ignores distant enroute traffic. */
-const DIRECTOR_MAX_ALERT_DIST = ORBIT_RADIUS * 0.5; // 1 700 m
+const DIRECTOR_MAX_ALERT_DIST = 2_550 * 0.5; // 1 275 m; 50% of ORBIT_RADIUS
 
 // Camera offset from aircraft for inspect / follow modes
 // (south and above: Z=south in Three.js coordinate space)
