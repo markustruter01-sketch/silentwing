@@ -1,0 +1,86 @@
+[P-31] Stage A3 — real glass, matching the reference.
+
+GOAL
+The current panels are dark opaque boxes. The target is genuine
+glassmorphism: you can see the background through the panel, softly
+blurred, with a light tint and a thin bright edge. Much lighter than what
+is there now.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — visual only.
+
+DONE WHEN
+The background is visibly readable through every HTML panel, text stays
+legible, and the frame rate has not dropped more than 10%.
+
+SCOPE
+- panel and label styling only
+
+DO NOT
+- Do not change aircraft positions, altitude, scale, or any logic.
+- Do not change label positions. Overlapping labels are the NEXT prompt,
+  not this one.
+- Do not change how the app looks with photoreal ground OFF.
+- Do not apply backdrop-filter to anything per-aircraft or per-frame.
+- Do not sacrifice legibility for transparency. If text becomes hard to
+  read over bright imagery, pull the transparency back and say so.
+- Do not create or commit any documentation, notes or summary file.
+
+STEPS
+1. Report the frame rate with photoreal ground ON, averaged over ten
+   seconds, before any change.
+2. Report the current fill opacity used on the HTML panels. The present
+   look is too opaque — the background cannot be seen through it at all.
+
+STEPS — the glass itself
+3. Restyle the fixed HTML panels — METAR stack, sequence ladder, alert
+   panels, keyboard help, photoreal control — to this specification:
+   - background fill at 25-35% opacity, NOT 60%. The background must be
+     visibly present through the panel.
+   - tint the fill toward the existing dark blue-grey rather than black,
+     so it reads as tinted glass and not as a shadow
+   - backdrop-filter: blur(24px) saturate(150%) — a larger blur than
+     before, which is what allows lower opacity to stay readable
+   - a 1px border, white at 15-18% opacity
+   - the top edge brighter than the rest: add a subtle light gradient
+     across the top few pixels of each panel, which is what sells the
+     "lit glass" look in the reference
+   - a soft outer shadow, large and low opacity, to lift the panel
+   - keep the existing corner radius
+4. Text legibility at that transparency needs help. Add a subtle dark
+   text-shadow to body text inside the panels. Keep it subtle — it should
+   be invisible as an effect and only do its job.
+5. Where a panel contains a dense data table, the fill may sit slightly
+   more opaque than a panel of headings. Use judgement, report what you
+   chose for each.
+
+STEPS — the floating 3D labels
+6. These are canvas textures and cannot blur. Lighten them to match the
+   new direction rather than leaving them as heavy dark boxes:
+   - reduce the panel opacity from its current value to roughly 55-65%
+   - keep the 1px light border
+   - keep the text shadow, which is doing the legibility work
+   Report the before and after values.
+7. Confirm this is drawn at texture creation, not per frame.
+
+STEPS — verify
+8. Measure the frame rate again, same method. Report both numbers. If the
+   drop exceeds 10%, reduce the blur radius until it does not, and report
+   what you settled on.
+9. Screenshot with photoreal ground ON at Sydney, from an angle where a
+   panel sits over bright imagery — that is where glass either works or
+   does not.
+10. Screenshot with photoreal ground OFF, confirming no change.
+11. Run the tests, typecheck and build as usual.
+12. Commit. Message: "Stage A3: genuine glassmorphic panels
+    [STRUCTURAL-ONLY]". Do not push.
+
+REPORT
+- The commit hash.
+- Frame rate before and after.
+- Opacity values before and after, for both HTML panels and 3D labels.
+- Both screenshots.
+- Whether legibility held at the target transparency, honestly. If you had
+  to pull back, say by how much and where.
+- Raw output of step 11.
+- Tile requests used.
