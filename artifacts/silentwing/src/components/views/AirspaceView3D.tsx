@@ -1538,7 +1538,7 @@ export function alertMidpoint(st: SceneState, alertId: string): THREE.Vector3 {
  *   2. Approach / takeoff — fly to aircraft in 3 s, track until phase changes, back to orbit.
  *   3. Orbit (lowest) — slow 360° rotation around airport.
  */
-function runDirector(st: SceneState, camera: THREE.PerspectiveCamera, nowMs: number): void {
+export function runDirector(st: SceneState, camera: THREE.PerspectiveCamera, nowMs: number): void {
   const d = st.dir;
 
   // ── 1. Check for a new alert (always highest priority) ───────────────────
@@ -1720,7 +1720,7 @@ function runDirector(st: SceneState, camera: THREE.PerspectiveCamera, nowMs: num
 }
 
 // ── Helper: begin fly-to animation toward an aircraft ────────────────────────
-function startFlyTo(st: SceneState, acId: string): void {
+export function startFlyTo(st: SceneState, acId: string): void {
   const ac = st.latestAircraftMap.get(acId);
   const acPos = ac
     ? toV3(ac.position.x, ac.position.y, ac.position.alt)

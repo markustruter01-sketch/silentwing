@@ -1,0 +1,79 @@
+[P-21] Stage 5, chunk 2 — characterize runDirector and startFlyTo.
+Tests only. Nothing moves yet.
+
+GOAL
+Lock the Director state machine's current behaviour so the extraction in
+the next prompt can be proven faithful.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — two export keywords and one test file.
+
+DONE WHEN
+`pnpm --filter @workspace/silentwing run test` passes with new tests
+covering both functions, and all 130 existing tests pass unchanged.
+
+SCOPE
+- artifacts/silentwing/src/components/views/AirspaceView3D.tsx
+  (export keywords ONLY, two of them)
+- artifacts/silentwing/src/components/views/__tests__/directorState.test.ts
+  (new)
+
+DO NOT
+- The only edit permitted to AirspaceView3D.tsx is adding the word export
+  before runDirector and before startFlyTo. Not one other character.
+- Do not extract anything. Do not create a new module. Next prompt.
+- Do not change the existing director.test.ts.
+- Do not instantiate the AirspaceView3D component.
+- Do not add or upgrade any package.
+- Do not create or commit any documentation, notes or summary file.
+- Do not rewrite, reset or amend git history.
+- Do not fix anything you notice. Report it instead.
+
+STEPS
+1. Add export to runDirector (line 1541) and startFlyTo (line 1723).
+2. Read both function bodies in full before writing any test. Also read
+   the SceneState and DirState definitions. You need to know exactly which
+   fields each function reads and writes.
+3. Build a helper that makes a minimal SceneState good enough for
+   runDirector to run. Real THREE.Vector3 objects, a real camera object,
+   an empty acMap and empty activeAlerts by default. If the type demands
+   so many fields the helper becomes unwieldy, STOP and report which
+   fields are required rather than reaching for `as any` everywhere.
+4. Time matters here. Note how runDirector gets the current time — if it
+   reads the clock directly rather than taking time as an argument, say so
+   in your report, and use vi.useFakeTimers() so the tests are stable.
+5. startFlyTo: call it, then assert exactly which DirState fields changed
+   and to what. Cover the flight duration, the from and to positions, and
+   the look targets.
+6. runDirector: write one test per phase transition you can reach.
+   - orbit with no aircraft and no alerts → stays in orbit, camera angle
+     advances
+   - orbit with an alert present → moves to fly_alert
+   - fly_alert with the flight time elapsed → moves to hold_alert
+   - hold_alert with the hold time elapsed → returns to orbit
+   - orbit with an aircraft worth watching but no alert → moves to fly_ac
+   - fly_ac completing → moves to hold_ac
+   Run each and record what actually happens. If a transition cannot be
+   reached with a plain state object, say which and why rather than
+   forcing it.
+7. Test the suppression sentinel: DirState.suppressUntilMs set to -1
+   should be resolved to a real timestamp on the next orbit frame. Confirm
+   what it actually resolves to.
+8. Test the known quirk from the handoff: a hold blocks a higher-severity
+   alert for the hold duration. Set up hold_alert, introduce a more severe
+   alert, and record whether the Director switches or waits.
+9. Run `pnpm --filter @workspace/silentwing run test`, capture raw output.
+10. Run `pnpm typecheck` at the root, capture raw output.
+11. Commit both files. Message: "Stage 5: characterize the Director state
+    machine [STRUCTURAL-ONLY]". Do not push. Report the hash.
+
+REPORT
+- The commit hash.
+- Raw output of steps 9 and 10, unedited.
+- The full contents of the new test file.
+- The full body of runDirector and startFlyTo, pasted, so the tests can be
+  checked against the real code.
+- Your answer to step 4 — how it gets the time.
+- Which transitions you could not reach, and why.
+- What step 8 actually showed.
+- The new total test count.
