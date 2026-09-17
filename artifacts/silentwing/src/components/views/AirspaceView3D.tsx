@@ -2394,7 +2394,7 @@ export default function AirspaceView3D({
 
     // ── Raycaster (shared across frames) ────────────────────────────────────
     const raycaster = new THREE.Raycaster();
-    let lastFollowTileDiagnosticMs = -Infinity;
+    let lastTileDiagnosticMs = -Infinity;
 
     // ── Animation loop ───────────────────────────────────────────────────────
     const tick = () => {
@@ -2415,8 +2415,18 @@ export default function AirspaceView3D({
       }
 
       // ── Director state machine — takes over when active and in orbit ────────
+      // Do not move the camera through the tile set's initial download/refinement
+      // pass. P-39 correctly gives the tile renderer the current camera matrices;
+      // Director must wait until the initial surface alignment is complete so
+      // that its automatic fly-to does not make the renderer discard the only
+      // loaded ground fallback while replacement tiles are still downloading.
+      const tileTraversalReady =
+        !tilesEnabled ||
+        (tileLayerRef.current !== null && tileSurfaceAlignedRef.current);
       if (st.directorMode && st.cameraMode === 'orbit') {
-        runDirector(st, camera, nowMs);
+        if (tileTraversalReady) {
+          runDirector(st, camera, nowMs);
+        }
       } else {
 
       switch (st.cameraMode) {
@@ -3155,32 +3165,44 @@ export default function AirspaceView3D({
         // follow/orbit camera movement and before tiles.update().
         camera.updateMatrixWorld(true);
         const visibleTileCount = tileLayer.update();
+        const directorMoving = st.directorMode && st.cameraMode === 'orbit';
+        const followed = st.selectedAcId ? st.acMap.get(st.selectedAcId) : null;
+        const directorTarget = st.dir.phase === 'orbit'
+          ? st.orbitTarget
+          : st.dir.lookAt;
+        const diagnosticTarget = st.cameraMode === 'follow' && followed
+          ? followed.renderPos
+          : directorMoving
+            ? directorTarget
+            : null;
         if (
-          st.cameraMode === 'follow' &&
-          nowMs - lastFollowTileDiagnosticMs >= 1_000 &&
-          st.selectedAcId
+          diagnosticTarget &&
+          nowMs - lastTileDiagnosticMs >= 1_000
         ) {
-          const followed = st.acMap.get(st.selectedAcId);
-          if (followed) {
-            const groundTarget = new THREE.Vector3(
-              followed.renderPos.x,
-              0,
-              followed.renderPos.z,
-            );
-            console.info(
-              `[TILES][FOLLOW] camera-to-ground=${camera.position.distanceTo(groundTarget).toFixed(1)} m ` +
-              `vertical-ground=${Math.abs(camera.position.y).toFixed(1)} m ` +
-              `aircraft-distance=${camera.position.distanceTo(followed.renderPos).toFixed(1)} m ` +
-              `errorTarget=${tileLayer.tiles.errorTarget} ` +
-              `visible=${tileLayer.tiles.visibleTiles.size} ` +
-              `active=${tileLayer.tiles.activeTiles.size} ` +
-              `loadProgress=${tileLayer.tiles.loadProgress.toFixed(3)} ` +
-              `downloadRunning=${tileLayer.tiles.downloadQueue.running} ` +
-              `parseRunning=${tileLayer.tiles.parseQueue.running} ` +
-              `processRunning=${tileLayer.tiles.processNodeQueue.running}`,
-            );
-            lastFollowTileDiagnosticMs = nowMs;
-          }
+          const groundTarget = new THREE.Vector3(
+            diagnosticTarget.x,
+            0,
+            diagnosticTarget.z,
+          );
+          const modeLabel = st.cameraMode === 'follow'
+            ? 'FOLLOW'
+            : `DIRECTOR/${st.dir.phase}`;
+          const aircraftDistance = st.cameraMode === 'follow' && followed
+            ? ` aircraft-distance=${camera.position.distanceTo(followed.renderPos).toFixed(1)} m`
+            : '';
+          console.info(
+            `[TILES][${modeLabel}] camera-to-ground=${camera.position.distanceTo(groundTarget).toFixed(1)} m ` +
+            `vertical-ground=${Math.abs(camera.position.y).toFixed(1)} m` +
+            `${aircraftDistance} ` +
+            `errorTarget=${tileLayer.tiles.errorTarget} ` +
+            `visible=${tileLayer.tiles.visibleTiles.size} ` +
+            `active=${tileLayer.tiles.activeTiles.size} ` +
+            `loadProgress=${tileLayer.tiles.loadProgress.toFixed(3)} ` +
+            `downloadRunning=${tileLayer.tiles.downloadQueue.running} ` +
+            `parseRunning=${tileLayer.tiles.parseQueue.running} ` +
+            `processRunning=${tileLayer.tiles.processNodeQueue.running}`,
+          );
+          lastTileDiagnosticMs = nowMs;
         }
         if (visibleTileCount > 0 && !tileVisibleRef.current) {
           tileVisibleRef.current = true;
