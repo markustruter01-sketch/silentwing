@@ -1,0 +1,74 @@
+[P-27] Stage 0 — cost controls, built and proven before any tile work.
+
+GOAL
+Make it impossible to burn tile requests during ordinary development.
+Nothing in Stage A onwards starts until this is signed off.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — new isolated module plus one small UI addition.
+
+DONE WHEN
+Tiles are off by default, cannot load without an explicit click, the
+request count is visible on screen, and a hard limit refuses further
+loads past a set number in one session.
+
+SCOPE
+- artifacts/silentwing/src/tiles/  (new folder)
+- one small control in the existing UI to turn tiles on and load them
+- artifacts/silentwing/src/tiles/__tests__/  (new)
+
+DO NOT
+- Do not render any tiles yet. This stage builds the guard, not the
+  ground. The load function may be a stub that only counts.
+- Do not change AirspaceView3D.tsx's rendering, director.ts, any adapter,
+  any detector, or any existing test.
+- Do not fetch anything from Google in this stage. Not once.
+- Do not make tiles default to on. Off is the default, always, in
+  development and in production, until a later stage changes it
+  deliberately.
+- Do not use localStorage or sessionStorage to remember the toggle. A
+  fresh page must start with tiles off.
+- Do not create or commit any documentation, notes or summary file.
+- Do not rewrite, reset or amend git history.
+
+STEPS
+1. Confirm the branch is experiment-3d. If not, STOP and report.
+2. Create src/tiles/tileSession.ts, a plain module with no React and no
+   Three.js, holding:
+   - a session request counter, starting at 0
+   - a hard maximum, set to 20
+   - requestTileSession(): increments and returns ok, or refuses and
+     returns a reason if the maximum is reached
+   - a way to read the current count
+   - a reset, for tests only
+   Keep it small. This is a counter and a limit, nothing else.
+3. Write tests for it in src/tiles/__tests__/tileSession.test.ts:
+   - starts at zero
+   - counts up correctly
+   - allows exactly 20 then refuses the 21st
+   - the refusal states the reason
+   - reset returns it to zero
+4. Add a small control to the existing UI — a toggle for "photoreal
+   ground" plus a load button that is disabled until the toggle is on.
+   Match the existing control styling; do not introduce a new pattern.
+   Clicking load calls requestTileSession() and nothing else for now.
+5. Show the count on screen whenever the toggle is on, in the form
+   "tiles: 3 / 20". When the limit is hit, show the refusal message
+   instead of failing silently.
+6. Confirm by inspection and report: with the toggle off, is there any
+   code path that could reach a tile fetch? Trace it and say so plainly.
+7. Run `pnpm --filter @workspace/silentwing run test`. All 139 must pass,
+   plus the new ones.
+8. Run `pnpm typecheck` at the root.
+9. Run `pnpm --filter @workspace/silentwing run build` with PORT and
+   BASE_PATH unset.
+10. Commit. Message: "Stage 0: tile request guard and cost controls
+    [STRUCTURAL-ONLY]". Do not push. Report the hash.
+
+REPORT
+- The commit hash.
+- Raw output of steps 7, 8 and 9.
+- The full contents of tileSession.ts and its test file.
+- Your answer to step 6, traced rather than asserted.
+- Where in the UI the control appears.
+- The new total test count.
