@@ -1,0 +1,86 @@
+[P-28] Stage A — anchor the tile world to the app's coordinate frame.
+
+GOAL
+Load photorealistic tiles into the real SilentWing scene, positioned so
+that app coordinates land in the right place on the imagery. This is the
+stage everything else depends on.
+
+RISK CLASS
+[BEHAVIOR-CHANGING] — adds a new rendering layer to the live app.
+
+DONE WHEN
+With the toggle on and the button clicked, photoreal Brisbane appears
+under the existing scene, and three test markers at app positions (0,0),
+(1000,0) and (0,1000) land on the airport centre, 1 km east, and 1 km
+south respectively.
+
+SCOPE
+- artifacts/silentwing/src/tiles/  (new files)
+- artifacts/silentwing/src/components/views/AirspaceView3D.tsx
+  (adding the tile layer only)
+
+DO NOT
+- Do not remove or disable any existing drawn ground. Runways, taxiways,
+  terrain and buildings all stay. Both grounds coexist in this stage.
+- Do not change toV3 or ALT_SCALE. The altitude problem is measured here,
+  not fixed here.
+- Do not change director.ts, any adapter, any detector, or any test.
+- Do not load tiles unless the Stage 0 toggle is on AND the button is
+  clicked. Every load must go through requestTileSession() and be
+  refused if it returns not ok.
+- Do not hand-write coordinate maths. Use the library's own geo utilities,
+  as the experiment did.
+- Do not adjust a marker's position to make it look right. If a marker
+  lands wrong, that is the result.
+- Do not create or commit any documentation, notes or summary file.
+- Do not rewrite, reset or amend git history.
+
+STEPS
+1. Confirm the branch is experiment-3d. If not, STOP and report.
+2. Read the experiment page's tile loading code and reuse that approach —
+   the same library, the same server-side key handling, the same
+   GoogleCloudAuthPlugin setup. Do not invent a second way of doing it.
+3. Create src/tiles/tileLayer.ts. It takes a Three.js scene, an airport
+   origin as lat/lon, and returns something that can be added to and
+   removed from the scene.
+4. The anchoring is the point of this stage. Transform the tile world so
+   that:
+   - app (0, 0) is the airport reference point
+   - app (1000, 0) is 1 km EAST
+   - app (0, 1000) is 1 km SOUTH
+   matching the app's existing +x = east, +y = south convention, where
+   Three.js z carries app y.
+   Use the library's own ellipsoid helpers to build the transform. Report
+   exactly how you did it.
+5. Wire it into AirspaceView3D so that turning the Stage 0 toggle on and
+   clicking load adds the tiles beneath the existing scene. Everything
+   already drawn stays visible on top.
+6. Add three temporary bright markers at app positions (0,0,0),
+   (1000,0,0) and (0,0,1000), labelled. These are for this stage only and
+   will be removed in a later stage.
+7. MEASURE, do not fix: report the scene Y value that toV3 produces for an
+   aircraft at 1000 ft, and state how that compares to the real vertical
+   scale of the tile world now that both are in the same scene. Say
+   plainly whether an aircraft at 1000 ft will appear at the correct
+   height above the photographed ground, and if not, by what factor it is
+   wrong.
+8. Report whether tiles load fast enough when the camera moves, or whether
+   the camera arrives before the tiles. Do not fix it — observe it.
+9. Run `pnpm --filter @workspace/silentwing run test`. All 144 must pass.
+10. Run `pnpm typecheck` at the root.
+11. Run `pnpm --filter @workspace/silentwing run build` with PORT and
+    BASE_PATH unset.
+12. Commit. Message: "Stage A: anchor photoreal tiles to the app
+    coordinate frame [BEHAVIOR-CHANGING]". Do not push. Report the hash.
+
+REPORT
+- The commit hash.
+- Raw output of steps 9, 10 and 11.
+- The full contents of tileLayer.ts.
+- Exactly how the anchoring transform was built, and which library
+  functions were used.
+- Your answer to step 7, with the actual numbers.
+- Your answer to step 8.
+- How many tile requests were used during your own verification. Aim for
+  zero — leave the clicking to Pierre.
+- The URL to open.
