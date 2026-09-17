@@ -1,0 +1,52 @@
+[P-20] Stage 5, chunk 1b — make the test runner understand the @/ shortcut.
+
+GOAL
+Fix the vitest config so `pnpm --filter @workspace/silentwing run test`
+passes on its own, with no environment variables and no alternative
+command.
+
+RISK CLASS
+[STRUCTURAL-ONLY] — test configuration only.
+
+DONE WHEN
+Running exactly `pnpm --filter @workspace/silentwing run test`, with PORT
+and BASE_PATH unset, passes all 130 tests.
+
+SCOPE
+- artifacts/silentwing/vitest.config.ts
+
+DO NOT
+- Do not change vite.config.ts. It works and is not the problem.
+- Do not change the "test" script in package.json to add environment
+  variables or point at a different config. The plain command must work.
+- Do not change AirspaceView3D.tsx or any test file.
+- Do not change the import in AirspaceView3D.tsx from '@/types' to a
+  relative path. The shortcut is used throughout the app and must keep
+  working.
+- Do not add or upgrade any package.
+- Do not create or commit any documentation, notes or summary file.
+- Do not rewrite, reset or amend git history.
+
+STEPS
+1. Read artifacts/silentwing/vite.config.ts and note the exact alias
+   definitions in its resolve.alias block — there are two, '@' and
+   '@assets'.
+2. Add the same aliases to vitest.config.ts, resolved the same way
+   relative to the silentwing package directory. Copy the definitions; do
+   not invent new ones.
+3. Run exactly this, with no environment variables set:
+   pnpm --filter @workspace/silentwing run test
+   Capture the raw output. It must pass on its own. If it does not, report
+   the raw error and STOP — do not fall back to a different command.
+4. Run `pnpm typecheck` at the root. Capture raw output.
+5. Run `pnpm --filter @workspace/silentwing run build` with PORT and
+   BASE_PATH unset, to confirm nothing here broke the build. Capture raw
+   output.
+6. Commit ONLY vitest.config.ts. Message: "Stage 5: teach vitest the @
+   path alias [STRUCTURAL-ONLY]". Do not push. Report the hash.
+
+REPORT
+- The commit hash.
+- Raw output of steps 3, 4 and 5, unedited.
+- The full contents of vitest.config.ts after the change.
+- Confirm the plain test command passed with no environment variables.
