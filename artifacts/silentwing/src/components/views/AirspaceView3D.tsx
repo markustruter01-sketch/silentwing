@@ -1535,6 +1535,21 @@ function spawnAircraft(st: SceneState, ac: Aircraft, nowMs: number): void {
   scene.add(cone);
   coneToId.set(cone, ac.id);
 
+  // Transparent fixed-size hit target. Raycasting against this separate mesh
+  // keeps selection usable at every zoom without enlarging the visible marker.
+  const hitTargetMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0,
+    colorWrite: false,
+    depthWrite: false,
+  });
+  const hitTarget = new THREE.Mesh(HIT_TARGET_GEO, hitTargetMat);
+  hitTarget.position.copy(pos);
+  hitTarget.renderOrder = -1;
+  scene.add(hitTarget);
+  coneToId.set(hitTarget, ac.id);
+
   // Halo / pin ring — shared geometry AND shared material; only the Mesh is per-aircraft
   const halo = new THREE.Mesh(HALO_GEO, HALO_MAT);
   halo.rotation.x = Math.PI / 2;
@@ -1562,13 +1577,36 @@ function spawnAircraft(st: SceneState, ac: Aircraft, nowMs: number): void {
   pinRing.visible = false;
   scene.add(pinRing);
 
-  // Stem — two endpoint positions vary per aircraft → per-aircraft geometry
+  // Stem — already existed before P-36; it now uses the aircraft phase colour,
+  // stays low-opacity, and is shown only for airborne aircraft.
   const stemGeo = new THREE.BufferGeometry().setFromPoints([
     new THREE.Vector3(pos.x, 0, pos.z),
     new THREE.Vector3(pos.x, pos.y, pos.z),
   ]);
-  const stem = new THREE.Line(stemGeo, STEM_MAT);
+  const stemMat = new THREE.LineBasicMaterial({
+    color: hex,
+    transparent: true,
+    opacity: 0.42,
+    depthWrite: false,
+  });
+  const stem = new THREE.Line(stemGeo, stemMat);
+  stem.visible = isAirborne(ac);
+  stem.renderOrder = 1;
   scene.add(stem);
+
+  // Flat ground shadow / contact ellipse. It is used for both airborne and
+  // ground aircraft; only the airborne aircraft receive the vertical stem.
+  const groundShadowMat = new THREE.MeshBasicMaterial({
+    color: 0x020617,
+    transparent: true,
+    opacity: 0.42,
+    depthWrite: false,
+  });
+  const groundShadow = new THREE.Mesh(GROUND_SHADOW_GEO, groundShadowMat);
+  groundShadow.position.set(pos.x, 1, pos.z);
+  groundShadow.scale.set(1.45, 1, 0.62);
+  groundShadow.renderOrder = 2;
+  scene.add(groundShadow);
 
   // Trail — per-aircraft geometry + cloned ShaderMaterial.
   // .clone() reuses the compiled GL program — no per-aircraft GLSL recompile.
@@ -1674,7 +1712,8 @@ function spawnAircraft(st: SceneState, ac: Aircraft, nowMs: number): void {
   }
 
   acMap.set(ac.id, {
-    cone, outline, stem, trail, label, trailBuf, halo, alertRing, alertRingMat, pinRing,
+    cone, outline, hitTarget, hitTargetMat, stem, stemMat, groundShadow, groundShadowMat,
+    trail, label, trailBuf, halo, alertRing, alertRingMat, pinRing,
     leaderLine, leaderLineMat,
     velVec, velVecMat,
     sepBubble, sepBubbleMat,
@@ -2008,7 +2047,10 @@ export default function AirspaceView3D({
       //    Per-aircraft cloned materials/geometries are disposed; shared module-level
       //    geometry/materials (CONE_GEO, HALO_MAT, etc.) are NOT touched.
       st.acMap.forEach(b => {
-        scene.remove(b.cone, b.outline, b.stem, b.trail, b.label, b.alertRing);
+        scene.remove(
+          b.cone, b.outline, b.hitTarget, b.stem, b.groundShadow,
+          b.trail, b.label, b.alertRing,
+        );
         if (b.halo)      scene.remove(b.halo);
         if (b.pinRing)   scene.remove(b.pinRing);
         if (b.velVec)    scene.remove(b.velVec);
@@ -2510,21 +2552,20 @@ export default function AirspaceView3D({
         // Underground clamp — never let a cone sink below the ground plane
         b.renderPos.y = Math.max(0, b.renderPos.y);
 
-        // Apply renderPos to all visuals. Marker geometry receives a modest
-        // distance compensation so the aircraft remains findable at the
-        // wide airport overview without changing its simulated position.
+        // Apply renderPos to all visuals. Visible aircraft geometry stays at a
+        // fixed world-space size; the separate hit target handles selection.
         b.cone.position.copy(b.renderPos);
         b.outline.position.copy(b.renderPos);
-        const markerDistance = camera.position.distanceTo(b.renderPos);
-        const markerScale = THREE.MathUtils.clamp(markerDistance / ORBIT_RADIUS, 1, 3);
-        b.cone.scale.setScalar(markerScale);
-        b.outline.scale.setScalar(markerScale * 1.45);
+        b.hitTarget.position.copy(b.renderPos);
+        b.groundShadow.position.set(b.renderPos.x, 1, b.renderPos.z);
+        b.cone.scale.setScalar(1);
+        b.outline.scale.setScalar(1.45);
         b.label.position.set(b.renderPos.x, b.renderPos.y + LABEL_LIFT, b.renderPos.z);
 
         // Halo: track aircraft + slow Z-rotation pulse
         if (b.halo && b.halo.visible) {
           b.halo.position.set(b.renderPos.x, b.renderPos.y - 40, b.renderPos.z);
-          b.halo.scale.setScalar(markerScale);
+          b.halo.scale.setScalar(1);
           b.halo.rotation.z += 0.008; // slow spin in the horizontal plane
         }
 
@@ -2539,7 +2580,7 @@ export default function AirspaceView3D({
                            : alertSev === 'caution'  ? 0xf59e0b : 0xfbbf24;
             b.alertRingMat.color.setHex(alertHex);
             b.alertRing.position.set(b.renderPos.x, b.renderPos.y - 35, b.renderPos.z);
-            b.alertRing.scale.setScalar(markerScale);
+            b.alertRing.scale.setScalar(1);
             b.alertRing.rotation.z += 0.014;
           }
         }
@@ -2550,12 +2591,13 @@ export default function AirspaceView3D({
           const isPinned = acId !== '' && st.pinnedAcIds.has(acId);
           b.pinRing.visible = isPinned;
           if (isPinned) {
-            b.pinRing.position.set(b.renderPos.x, b.renderPos.y - 20, b.renderPos.z);
-            b.pinRing.scale.setScalar(markerScale);
+             b.pinRing.position.set(b.renderPos.x, b.renderPos.y - 20, b.renderPos.z);
+             b.pinRing.scale.setScalar(1);
             b.pinRing.rotation.z -= 0.012; // counter-clockwise spin
           }
         }
 
+        b.stem.visible = b.isAirborne;
         b.stem.geometry.setFromPoints([
           new THREE.Vector3(b.renderPos.x, 0,             b.renderPos.z),
           new THREE.Vector3(b.renderPos.x, b.renderPos.y, b.renderPos.z),
@@ -3500,7 +3542,10 @@ export default function AirspaceView3D({
       canvas.removeEventListener('pointerup',    onPointerUp);
       window.removeEventListener('keydown', onKey);
       st.acMap.forEach(b => {
-        scene.remove(b.cone, b.outline, b.stem, b.trail, b.label, b.alertRing);
+        scene.remove(
+          b.cone, b.outline, b.hitTarget, b.stem, b.groundShadow,
+          b.trail, b.label, b.alertRing,
+        );
         if (b.halo)      scene.remove(b.halo);
         if (b.pinRing)   scene.remove(b.pinRing);
         if (b.velVec)    scene.remove(b.velVec);
@@ -3664,6 +3709,8 @@ export default function AirspaceView3D({
         b.isGroundVehicle = ac.isGroundVehicle ?? false;
         b.isHeavy         = wakeCategory(ac.type) === 'H';
         b.isAirborne      = isAirborne(ac);
+        b.stemMat.color.setHex(hex);
+        b.stem.visible = b.isAirborne;
         // Sync velVec colour when phase changes
         if (b.velVecMat) b.velVecMat.color.setHex(phaseHex(ac.phase));
 
@@ -3894,13 +3941,17 @@ export default function AirspaceView3D({
     // Remove aircraft that left the snapshot
     for (const [id, b] of acMap) {
       if (!seen.has(id)) {
-        scene.remove(b.cone, b.outline, b.stem, b.trail, b.label, b.halo, b.alertRing);
+        scene.remove(
+          b.cone, b.outline, b.hitTarget, b.stem, b.groundShadow,
+          b.trail, b.label, b.halo, b.alertRing,
+        );
         if (b.pinRing)   scene.remove(b.pinRing);
         if (b.velVec)    scene.remove(b.velVec);
         if (b.sepBubble) scene.remove(b.sepBubble);
         if (b.wakeL)     scene.remove(b.wakeL);
         if (b.wakeR)     scene.remove(b.wakeR);
         coneToId.delete(b.cone);
+        coneToId.delete(b.hitTarget);
         disposeBundle(b);
         acMap.delete(id);
         // Clean up any takeoff indicator for the despawned aircraft
