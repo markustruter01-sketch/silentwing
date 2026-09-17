@@ -428,7 +428,7 @@ function disposeAlertLabel(entry: AlertLabelEntry, scene: THREE.Scene): void {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
-function easeInOut(t: number): number {
+export function easeInOut(t: number): number {
   return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
 }
 
@@ -1485,7 +1485,7 @@ interface DirState {
 
 /** Pick the highest-priority aircraft for the director.
  *  Approach/landing (closest to threshold first) > takeoff > null. */
-function pickDirectorAircraft(st: SceneState): { id: string; kind: 'approach' | 'takeoff' } | null {
+export function pickDirectorAircraft(st: SceneState): { id: string; kind: 'approach' | 'takeoff' } | null {
   const cx = st.orbitTarget.x;
   const cz = st.orbitTarget.z;
   const r2 = DIRECTOR_FOCUS_RADIUS * DIRECTOR_FOCUS_RADIUS;
@@ -1518,7 +1518,7 @@ function pickDirectorAircraft(st: SceneState): { id: string; kind: 'approach' | 
 }
 
 /** Compute the 3-D conflict midpoint for the given alert. */
-function alertMidpoint(st: SceneState, alertId: string): THREE.Vector3 {
+export function alertMidpoint(st: SceneState, alertId: string): THREE.Vector3 {
   const alert = st.activeAlerts.find(a => a.id === alertId);
   if (!alert) return st.orbitTarget.clone();
   let mx = 0, my = 0, mz = 0, cnt = 0;
