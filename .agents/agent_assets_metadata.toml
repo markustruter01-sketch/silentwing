@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "A945t7dqGrSWZFvE_g4z8"
+uri = "file://screenshots/p35-photoreal-ground-final.jpg"
+type = "image"
+title = "P-35 preview evidence"
+description = "Final preview capture. The headless browser could not create WebGL, so this records the available fallback state rather than a photoreal-ground render."
+logical_id = "40d9a502-87d9-40c9-853d-d203b3f8cae3"
+content_hash = "sha256:b7dbab96cba52c50af7521dd76b1d16c77a0e898237c0c24012d9c6c9942fea8"
+size = 78074
+mtime_ms = 1789631880227
+storage_uri = "gcs://replit-rams-assets-worf/rams/assets/repl:7ffd82f0-cd29-4004-9744-00ffd7ee0abf/40d9a502-87d9-40c9-853d-d203b3f8cae3/140a9076-d80f-464b-b25b-682d32655fac"
+storage_version_token = "1789631937153122"
+content_type = "image/jpeg"
