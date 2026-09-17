@@ -63,6 +63,22 @@ function fmtAge(raisedAt: number, now: number): string {
   return `${Math.floor(s / 3600)}h`;
 }
 
+function fmtExtra(alert: SWAlert): string | null {
+  const values: string[] = [];
+  const extra = alert.extra;
+  if (!extra) return null;
+  if (extra.ttcSeconds != null) {
+    values.push(`TTC ${extra.ttcSeconds.toFixed(1)}s`);
+  }
+  if (extra.predClosestNm != null) {
+    values.push(`CPA ${extra.predClosestNm.toFixed(1)}nm`);
+  }
+  if (extra.predClosestFt != null) {
+    values.push(`${Math.round(extra.predClosestFt)}ft`);
+  }
+  return values.length > 0 ? values.join(' · ') : null;
+}
+
 // Severity display config
 const SEV_CFG = {
   critical: {
@@ -92,6 +108,7 @@ const SEV_CFG = {
 interface AlertShellProps {
   activeAlerts:  SWAlert[];
   onAlertFocus?: (alertId: string) => void;
+  alertFocusId?: string | null;
   /** Use the light glass surface while photoreal ground is enabled. */
   photorealGroundEnabled?: boolean;
 }
@@ -100,6 +117,7 @@ interface AlertShellProps {
 export default function AlertShell({
   activeAlerts,
   onAlertFocus,
+  alertFocusId = null,
   photorealGroundEnabled = false,
 }: AlertShellProps) {
   const [activeTab,    setActiveTab]    = useState<TabId | null>(null);
@@ -300,6 +318,8 @@ export default function AlertShell({
             ) : (
               sortedAlerts.map(alert => {
                 const cfg = SEV_CFG[alert.severity];
+                const extraText = fmtExtra(alert);
+                const isFocused = alert.id === alertFocusId;
                 return (
                   <button
                     key={alert.id}
@@ -331,6 +351,12 @@ export default function AlertShell({
                       </span>
                     </div>
 
+                    {isFocused && (
+                      <div className={`font-mono text-[7px] tracking-[0.16em] uppercase mb-1 ${cfg.text}`}>
+                        ● Camera on this alert
+                      </div>
+                    )}
+
                     {/* Middle row: involved aircraft callsigns */}
                     <div className={`font-mono text-[11px] font-bold tracking-wider leading-tight ${cfg.text}`}>
                       {alert.aircraft.join(' & ')}
@@ -340,6 +366,12 @@ export default function AlertShell({
                     <div className="font-mono text-[8px] text-slate-500 mt-0.5 leading-tight break-words whitespace-normal line-clamp-3">
                       {alert.message}
                     </div>
+
+                    {extraText && (
+                      <div className="font-mono text-[8px] text-slate-600 mt-1 leading-tight tabular-nums">
+                        {extraText}
+                      </div>
+                    )}
 
                     {/* Hover focus hint — right edge arrow */}
                     <div className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">

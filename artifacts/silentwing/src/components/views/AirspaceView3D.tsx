@@ -282,6 +282,13 @@ interface PulseRingEntry {
   severity:    SWAlertSeverity;
 }
 
+/** Retained as an empty compatibility slot for the director scene test fixture. */
+interface AlertLabelEntry {
+  sprite:      THREE.Sprite;
+  mat:         THREE.SpriteMaterial;
+  lastMessage: string;
+}
+
 function disposePulseRingEntry(entry: PulseRingEntry, scene: THREE.Scene): void {
   for (const ring of entry.rings) {
     scene.remove(ring.mesh);
@@ -309,111 +316,6 @@ function disposeTaxiRingEntry(entry: TaxiRingEntry, scene: THREE.Scene): void {
     // PULSE_RING_GEO is shared — do NOT dispose it here
   }
   entry.rings.length = 0;
-}
-
-// ── 3D alert label sprites (Task #15) ─────────────────────────────────────────
-// Canvas-texture Sprite at the 3D midpoint of each active caution/critical
-// alert.  Position updates every frame; texture only when message text changes.
-
-function makeAlertLabelTexture(
-  severity:  SWAlertSeverity,
-  callsigns: string,
-  message:   string,
-): THREE.CanvasTexture {
-  // --- measure phase (size-agnostic canvas) ---
-  const measureCv  = document.createElement('canvas');
-  measureCv.width  = 1; measureCv.height = 1;
-  const mCtx = measureCv.getContext('2d')!;
-
-  mCtx.font = 'bold 38px "Courier New",monospace';
-  const callsignW = mCtx.measureText(callsigns).width;
-
-  const PADDING = 24;
-  const W = Math.max(520, Math.ceil(callsignW) + PADDING);
-
-  // Word-wrap the message at the same width
-  mCtx.font = '22px "Courier New",monospace';
-  const maxLineW = W - PADDING;
-  const words = message.split(' ');
-  const msgLines: string[] = [];
-  let current = '';
-  for (const word of words) {
-    const test = current ? current + ' ' + word : word;
-    if (mCtx.measureText(test).width > maxLineW && current) {
-      msgLines.push(current);
-      current = word;
-    } else {
-      current = test;
-    }
-  }
-  if (current) msgLines.push(current);
-
-  // Layout constants
-  // Message text starts at y=90; each line occupies LINE_H px; add BOTTOM_PAD below last line.
-  const LINE_H     = 28;
-  const MSG_Y      = 90;
-  const BOTTOM_PAD = 12;
-  const H = MSG_Y + msgLines.length * LINE_H + BOTTOM_PAD;
-
-  // --- render phase ---
-  const cv  = document.createElement('canvas');
-  cv.width  = W; cv.height = H;
-  const ctx = cv.getContext('2d')!;
-
-  const accentHex =
-    severity === 'critical' ? '#ef4444' :
-    severity === 'caution'  ? '#f59e0b' : '#fbbf24';
-  const msgHex =
-    severity === 'critical' ? '#fca5a5' :
-    severity === 'caution'  ? '#fcd34d' : '#fef08a';
-
-  // Dark rounded backing keeps the alert readable over photoreal ground.
-  ctx.clearRect(0, 0, W, H);
-  paintLabelBacking(ctx, W, H, 10);
-
-  // Left accent bar
-  ctx.fillStyle = accentHex;
-  ctx.fillRect(0, 0, 4, H);
-
-  // Top accent line
-  ctx.fillRect(0, 0, W, 2);
-
-  paintLabelTextShadow(ctx);
-
-  // Severity badge
-  ctx.font         = 'bold 14px "Courier New",monospace';
-  ctx.fillStyle    = accentHex;
-  ctx.textAlign    = 'left';
-  ctx.textBaseline = 'top';
-  ctx.fillText('\u25c6 ' + severity.toUpperCase(), 12, 8);
-
-  // Callsigns — main line
-  ctx.font         = 'bold 38px "Courier New",monospace';
-  ctx.fillStyle    = '#f1f5f9';
-  ctx.textBaseline = 'top';
-  ctx.fillText(callsigns, 12, 34);
-
-  // Separation message (wrapped)
-  ctx.font         = '22px "Courier New",monospace';
-  ctx.fillStyle    = msgHex;
-  ctx.textBaseline = 'top';
-  msgLines.forEach((line, i) => {
-    ctx.fillText(line, 12, 90 + i * LINE_H);
-  });
-
-  return new THREE.CanvasTexture(cv);
-}
-
-interface AlertLabelEntry {
-  sprite:      THREE.Sprite;
-  mat:         THREE.SpriteMaterial;
-  lastMessage: string;
-}
-
-function disposeAlertLabel(entry: AlertLabelEntry, scene: THREE.Scene): void {
-  scene.remove(entry.sprite);
-  entry.mat.map?.dispose();
-  entry.mat.dispose();
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -1462,7 +1364,7 @@ export interface SceneState {
   beamMap: Map<string, BeamEntry>;
   /** Alert ID → expanding pulse ring cluster on the ground plane. */
   pulseRingMap: Map<string, PulseRingEntry>;
-  /** Alert ID → floating 3D canvas-sprite label at the conflict midpoint. */
+  /** Legacy compatibility slot; alert prose is no longer rendered in 3-D. */
   labelMap: Map<string, AlertLabelEntry>;
   /** Aircraft ID → takeoff vertical-line + sign indicator. */
   takeoffMap: Map<string, TakeoffIndicatorEntry>;
@@ -2039,14 +1941,12 @@ export default function AirspaceView3D({
       st.taxiRingMap.forEach(entry => disposeTaxiRingEntry(entry, scene));
       st.taxiRingMap.clear();
 
-      // Clear alert beams, pulse rings, and alert labels — they reference old
-      // aircraft positions and old alert state, so they must be torn down.
+      // Clear alert beams and pulse rings — they reference old aircraft
+      // positions and old alert state, so they must be torn down.
       st.beamMap.forEach(b => disposeBeamEntry(b, scene));
       st.beamMap.clear();
       st.pulseRingMap.forEach(p => disposePulseRingEntry(p, scene));
       st.pulseRingMap.clear();
-      st.labelMap.forEach(l => disposeAlertLabel(l, scene));
-      st.labelMap.clear();
 
       // Clear the weather group (approach cone + wind indicator). The weather
       // useEffect only re-fires when wind values change, so if YSSY and YBBN
@@ -2845,77 +2745,6 @@ export default function AirspaceView3D({
         }
       }
 
-      // ── 3D alert label sprites (Task #15) ────────────────────────────────
-      // Floating canvas sprites at the 3D midpoint of each active caution/
-      // critical alert.  Position updates every frame; texture only when
-      // the alert message text changes (~every 8 s with a new ADS-B poll).
-      {
-        // Remove labels for cleared / dismissed alerts
-        for (const [alertId, entry] of st.labelMap) {
-          if (!st.activeAlerts.find(a => a.id === alertId)) {
-            disposeAlertLabel(entry, scene);
-            st.labelMap.delete(alertId);
-          }
-        }
-
-        for (const alert of st.activeAlerts) {
-          if (alert.aircraftIds.length === 0) continue;
-
-          // Anchor label to the beam midpoint sphere so they stay in lockstep.
-          // Fall back to averaging renderPos when the beam entry isn't ready yet.
-          const beamEntry = st.beamMap.get(alert.id);
-          let midX: number, midY: number, midZ: number;
-          if (beamEntry) {
-            midX = beamEntry.midSphere.position.x;
-            midY = beamEntry.midSphere.position.y;
-            midZ = beamEntry.midSphere.position.z;
-          } else {
-            let cnt = 0;
-            midX = 0; midY = 0; midZ = 0;
-            for (const id of alert.aircraftIds.slice(0, 2)) {
-              const b = st.acMap.get(id);
-              if (!b) continue;
-              midX += b.renderPos.x;
-              midY += b.renderPos.y;
-              midZ += b.renderPos.z;
-              cnt++;
-            }
-            if (cnt === 0) continue;
-            midX /= cnt; midY /= cnt; midZ /= cnt;
-          }
-          // Float the label just above the sphere (sphere radius = 55 m; 160 m gives
-          // ~105 m clearance so it reads cleanly without obscuring the aircraft).
-          midY += 160;
-
-          let entry = st.labelMap.get(alert.id);
-          if (!entry) {
-            const tex    = makeAlertLabelTexture(alert.severity, alert.aircraft.join(' & '), alert.message);
-            const mat    = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
-            const sprite = new THREE.Sprite(mat);
-            sprite.scale.set(480, 144, 1);
-            sprite.frustumCulled = false;
-            sprite.renderOrder   = 999; // always draw on top of ground geometry
-            scene.add(sprite);
-            entry = { sprite, mat, lastMessage: alert.message };
-            st.labelMap.set(alert.id, entry);
-          }
-
-          // Update position every frame (cheap — just sets a Vector3)
-          entry.sprite.position.set(midX, midY, midZ);
-
-          // Regenerate canvas texture only when message text changes
-          if (alert.message !== entry.lastMessage) {
-            entry.lastMessage = alert.message;
-            const newTex = makeAlertLabelTexture(
-              alert.severity, alert.aircraft.join(' & '), alert.message,
-            );
-            entry.mat.map?.dispose();
-            entry.mat.map = newTex;
-            entry.mat.needsUpdate = true;
-          }
-        }
-      }
-
       // ── Pulse ring update (Task #6) ────────────────────────────────────────
       // Expanding concentric rings on the ground plane (y=1) pulsing outward
       // from the ground projection of each active conflict midpoint.
@@ -3569,8 +3398,6 @@ export default function AirspaceView3D({
       st.beamMap.clear();
       st.pulseRingMap.forEach(entry => disposePulseRingEntry(entry, scene));
       st.pulseRingMap.clear();
-      st.labelMap.forEach(entry => disposeAlertLabel(entry, scene));
-      st.labelMap.clear();
       st.takeoffMap.forEach(entry => disposeTakeoffIndicator(entry, scene));
       st.takeoffMap.clear();
       st.approachMap.forEach(entry => disposeApproachIndicator(entry, scene));

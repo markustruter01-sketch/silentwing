@@ -562,6 +562,7 @@ export default function App() {
         <AlertShell
           activeAlerts={activeAlerts}
           onAlertFocus={handleManualAlertFocus}
+          alertFocusId={alertFocusId}
           photorealGroundEnabled={view === 'airspace' && photorealGroundEnabled}
         />
         {/* ── Airport title — 3D airspace only ── */}
