@@ -114,9 +114,11 @@ interface Props {
   profile:  AirportProfile;
   /** Called whenever fresh METAR wind arrives — use to update active runway. */
   onWind?: (dirDeg: number, speedKt: number) => void;
+  /** Add a readable surface only while photoreal ground is enabled. */
+  photorealGroundEnabled?: boolean;
 }
 
-export default function MetarWidget({ profile, onWind }: Props) {
+export default function MetarWidget({ profile, onWind, photorealGroundEnabled = false }: Props) {
   const [data,      setData]      = useState<MetarResponse | null>(null);
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
   const [error,     setError]     = useState<string | null>(null);
@@ -181,8 +183,15 @@ export default function MetarWidget({ profile, onWind }: Props) {
 
   return (
     <div
-      className="rounded-lg overflow-hidden text-slate-300"
-      style={{ border: '1px solid rgba(100,116,139,0.20)' }}
+      className={[
+        'rounded-lg overflow-hidden text-slate-300',
+        photorealGroundEnabled && 'bg-[#05080D]/80 backdrop-blur-md shadow-lg',
+      ].filter(Boolean).join(' ')}
+      style={{
+        border: photorealGroundEnabled
+          ? '1px solid rgba(100,116,139,0.45)'
+          : '1px solid rgba(100,116,139,0.20)',
+      }}
     >
       {/* ── Header ── */}
       <div className="flex items-center gap-2 px-3 pt-2 pb-1.5 border-b border-slate-800/50">

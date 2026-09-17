@@ -150,7 +150,13 @@ function HourCard({ h }: { h: HourlySlice }) {
 // ── Main component ─────────────────────────────────────────────────────────────
 const REFRESH_MS = 15 * 60 * 1000;
 
-export default function WeatherWidget({ profile }: { profile: AirportProfile }) {
+export default function WeatherWidget({
+  profile,
+  photorealGroundEnabled = false,
+}: {
+  profile: AirportProfile;
+  photorealGroundEnabled?: boolean;
+}) {
   const [wx,    setWx]    = useState<WeatherState | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -180,8 +186,15 @@ export default function WeatherWidget({ profile }: { profile: AirportProfile }) 
 
   return (
     <div
-      className="rounded-lg overflow-hidden"
-      style={{ border: '1px solid rgba(100,116,139,0.20)' }}
+      className={[
+        'rounded-lg overflow-hidden',
+        photorealGroundEnabled && 'bg-[#05080D]/80 backdrop-blur-md shadow-lg',
+      ].filter(Boolean).join(' ')}
+      style={{
+        border: photorealGroundEnabled
+          ? '1px solid rgba(100,116,139,0.45)'
+          : '1px solid rgba(100,116,139,0.20)',
+      }}
     >
         {/* ── Location label ── */}
         <div className="flex items-center gap-2 px-3 pt-2 pb-0.5">

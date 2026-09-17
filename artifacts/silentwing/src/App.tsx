@@ -64,6 +64,7 @@ export default function App() {
 
   // ── Active airport profile ────────────────────────────────────────────────
   const [activeProfile, setActiveProfile] = useState<AirportProfile>(YBBN);
+  const [photorealGroundEnabled, setPhotorealGroundEnabled] = useState(false);
   /** Stable ref — lets switch callbacks read the current profile without stale closures. */
   const activeProfileRef = useRef<AirportProfile>(YBBN);
   activeProfileRef.current = activeProfile;
@@ -564,7 +565,10 @@ export default function App() {
         />
         {/* ── Airport title — 3D airspace only ── */}
         {view === 'airspace' && (
-          <div className="absolute inset-x-0 top-3 flex flex-col items-center z-10 pointer-events-none select-none">
+          <div className={[
+            'absolute inset-x-0 top-3 flex flex-col items-center z-10 pointer-events-none select-none',
+            photorealGroundEnabled && 'rounded-lg border border-slate-700/50 bg-[#05080D]/78 px-4 py-2 backdrop-blur-sm',
+          ].filter(Boolean).join(' ')}>
             <div className="flex items-baseline gap-3">
               <span className="text-[10px] font-mono tracking-[0.25em] text-sky-600/70 uppercase">{activeProfile.icao}</span>
               <h1 className="text-2xl font-bold tracking-[0.12em] text-sky-100/90 uppercase"
@@ -600,6 +604,7 @@ export default function App() {
             showPaths={showPredictedPaths}
             showBuildings={showBuildings}
             showTerrain={showTerrain}
+            onPhotorealGroundChange={setPhotorealGroundEnabled}
             pinnedAcIds={pinnedAcIds}
             rebuildGroundRef={rebuildGroundRef}
             onSelectAircraft={(id) => {
@@ -647,10 +652,14 @@ export default function App() {
           <div className="pointer-events-auto">
             <MetarWidget
               profile={activeProfile}
+              photorealGroundEnabled={view === 'airspace' && photorealGroundEnabled}
               onWind={(dir, speed) => setMetarWind({ dir, speed })}
             />
           </div>
-          <WeatherWidget profile={activeProfile} />
+          <WeatherWidget
+            profile={activeProfile}
+            photorealGroundEnabled={view === 'airspace' && photorealGroundEnabled}
+          />
         </div>
 
         {/* ── Controls HUD — bottom-centre on both views ── */}

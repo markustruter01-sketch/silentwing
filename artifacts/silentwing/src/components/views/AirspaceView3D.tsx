@@ -367,10 +367,9 @@ function makeAlertLabelTexture(
     severity === 'critical' ? '#fca5a5' :
     severity === 'caution'  ? '#fcd34d' : '#fef08a';
 
-  // Background
+  // Dark rounded backing keeps the alert readable over photoreal ground.
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = 'rgba(4,7,11,0.88)';
-  ctx.fillRect(0, 0, W, H);
+  paintLabelBacking(ctx, W, H, 10);
 
   // Left accent bar
   ctx.fillStyle = accentHex;
@@ -485,6 +484,31 @@ const PHASE_LABEL: Record<string, string> = {
   'enroute-departure':  'ENROUTE',
 };
 
+function paintLabelBacking(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  radius = 8,
+): void {
+  const rounded = ctx as CanvasRenderingContext2D & {
+    roundRect: (x: number, y: number, w: number, h: number, r: number) => void;
+  };
+  const path = () => {
+    rounded.beginPath();
+    rounded.roundRect(2, 2, width - 4, height - 4, radius);
+  };
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(4,7,11,0.84)';
+  path();
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(148,163,184,0.42)';
+  ctx.lineWidth = 2;
+  path();
+  ctx.stroke();
+  ctx.restore();
+}
+
 function _paintAcLabel(
   ctx: CanvasRenderingContext2D,
   callsign: string,
@@ -496,7 +520,10 @@ function _paintAcLabel(
   const phaseLabel = PHASE_LABEL[phase] ?? phase.toUpperCase();
   const hdgStr = `HDG ${Math.round(headingDeg).toString().padStart(3, '0')}°`;
 
-  // Border only — transparent interior
+  // Dark rounded backing keeps the existing phase colours legible over imagery.
+  paintLabelBacking(ctx, W, H, 8);
+
+  // Existing phase-colour border
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;
   ctx.beginPath();
@@ -572,6 +599,7 @@ function makeRingLabel(text: string): THREE.Sprite {
   ctx.fillStyle    = '#2d6a9f';
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'middle';
+  paintLabelBacking(ctx, 256, 56, 7);
   ctx.fillText(text, 128, 28);
   const tex = new THREE.CanvasTexture(cv);
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.80, depthWrite: false });
@@ -685,6 +713,7 @@ function makeRunwayLabel(text: string): THREE.Sprite {
   ctx.fillStyle    = '#7dd3fc';
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'middle';
+  paintLabelBacking(ctx, 320, 80, 9);
   ctx.fillText(text, 160, 40);
   const tex = new THREE.CanvasTexture(cv);
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
@@ -1021,6 +1050,7 @@ function _paintGlideSlopeLabel(
 ): void {
   const W = 512, H = 160;
   ctx.clearRect(0, 0, W, H);
+  paintLabelBacking(ctx, W, H, 10);
 
   // Row 1 — "GLIDE SLOPE · callsign · angle"
   ctx.font         = 'bold 24px "Share Tech Mono", monospace';
@@ -1139,6 +1169,7 @@ function makeQueueLabel(n: number): { sprite: THREE.Sprite; mat: THREE.SpriteMat
   ctx.fillStyle   = '#818CF8';
   ctx.textAlign   = 'center';
   ctx.textBaseline = 'middle';
+  paintLabelBacking(ctx, W, H, 7);
   ctx.fillText(`#${n}`, W / 2, H / 2);
   const tex = new THREE.CanvasTexture(canvas);
   const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
@@ -1159,6 +1190,7 @@ function repaintQueueLabel(entry: TakeoffIndicatorEntry, n: number): void {
   ctx.fillStyle   = '#818CF8';
   ctx.textAlign   = 'center';
   ctx.textBaseline = 'middle';
+  paintLabelBacking(ctx, W, H, 7);
   ctx.fillText(`#${n}`, W / 2, H / 2);
   entry.queueLabelMat.map?.dispose();
   entry.queueLabelMat.map = new THREE.CanvasTexture(cv);
@@ -1174,10 +1206,17 @@ function makeTakeoffSign(): { sprite: THREE.Sprite; mat: THREE.SpriteMaterial } 
   const ctx = canvas.getContext('2d')!;
   ctx.clearRect(0, 0, W, H);
 
-  // Border rect
+  paintLabelBacking(ctx, W, H, 8);
+
+  // Existing purple border
   ctx.strokeStyle = '#818CF8';
   ctx.lineWidth   = 2;
-  ctx.strokeRect(2, 2, W - 4, H - 4);
+  const rounded = ctx as CanvasRenderingContext2D & {
+    roundRect: (x: number, y: number, w: number, h: number, r: number) => void;
+  };
+  rounded.beginPath();
+  rounded.roundRect(3, 3, W - 6, H - 6, 8);
+  ctx.stroke();
 
   // Label text
   ctx.font        = 'bold 28px "Share Tech Mono", monospace';
@@ -1504,6 +1543,8 @@ export interface AirspaceView3DProps {
   showBuildings?: boolean;
   /** When true, the coarse terrain elevation mesh is visible (default true). */
   showTerrain?: boolean;
+  /** Mirrors the photoreal ground toggle for conditional UI backing. */
+  onPhotorealGroundChange?: (enabled: boolean) => void;
 }
 
 // ── Deferred aircraft spawn ───────────────────────────────────────────────────
@@ -1700,6 +1741,7 @@ export default function AirspaceView3D({
   rebuildGroundRef,
   showBuildings = true,
   showTerrain   = true,
+  onPhotorealGroundChange,
 }: AirspaceView3DProps) {
   const mountRef       = useRef<HTMLDivElement>(null);
   const [webglUnavailable, setWebglUnavailable] = useState(false);
@@ -1746,6 +1788,10 @@ export default function AirspaceView3D({
   const profileRef = useRef(profile);
   profileRef.current = profile;
   tilesEnabledRef.current = tilesEnabled;
+
+  useEffect(() => {
+    onPhotorealGroundChange?.(tilesEnabled);
+  }, [onPhotorealGroundChange, tilesEnabled]);
 
   const alertFocusIdRef     = useRef<string | null>(alertFocusId ?? null);
   const onAlertFocusDoneRef = useRef<(() => void) | null>(onAlertFocusDone ?? null);
@@ -2828,7 +2874,7 @@ export default function AirspaceView3D({
             const tex    = makeAlertLabelTexture(alert.severity, alert.aircraft.join(' & '), alert.message);
             const mat    = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
             const sprite = new THREE.Sprite(mat);
-            sprite.scale.set(800, 240, 1);
+            sprite.scale.set(480, 144, 1);
             sprite.frustumCulled = false;
             sprite.renderOrder   = 999; // always draw on top of ground geometry
             scene.add(sprite);
@@ -3974,7 +4020,10 @@ export default function AirspaceView3D({
       )}
 
       {/* ── HUD top-left ── */}
-      <div className="absolute top-4 left-4 flex flex-col gap-0.5 pointer-events-none select-none">
+      <div className={[
+        'absolute top-4 left-4 flex flex-col gap-0.5 pointer-events-none select-none',
+        tilesEnabled && 'rounded border border-slate-700/50 bg-[#05080D]/78 px-2 py-1.5 backdrop-blur-sm',
+      ].filter(Boolean).join(' ')}>
         <span className="font-mono text-[10px] tracking-[0.2em] text-slate-600">3D · AIRSPACE</span>
         <span className="font-mono text-[10px] tracking-[0.2em] text-slate-700">
           {airborneCount} AIRBORNE &nbsp;·&nbsp; {aircraft.length - airborneCount} GROUND
@@ -3985,7 +4034,10 @@ export default function AirspaceView3D({
       </div>
 
       {/* ── FL altitude labels — top-right ── */}
-      <div className="absolute top-4 right-4 flex flex-col gap-1 pointer-events-none select-none text-right">
+      <div className={[
+        'absolute top-4 right-4 flex flex-col gap-1 pointer-events-none select-none text-right',
+        tilesEnabled && 'rounded border border-slate-700/50 bg-[#05080D]/78 px-2 py-1.5 backdrop-blur-sm',
+      ].filter(Boolean).join(' ')}>
         {[150, 100, 50].map(fl => (
           <span key={fl} className="font-mono text-[10px] tracking-wider text-slate-700">
             FL{fl.toString().padStart(3, '0')}
@@ -3995,7 +4047,10 @@ export default function AirspaceView3D({
       </div>
 
       {/* ── Phase legend — bottom-center horizontal ── */}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex flex-row items-center gap-4 pointer-events-none select-none">
+      <div className={[
+        'absolute bottom-4 left-1/2 -translate-x-1/2 flex flex-row items-center gap-4 pointer-events-none select-none',
+        tilesEnabled && 'rounded border border-slate-700/50 bg-[#05080D]/78 px-3 py-1.5 backdrop-blur-sm',
+      ].filter(Boolean).join(' ')}>
         {([
           ['#38BDF8', 'APPROACH / ARRIVAL'],
           ['#F59E0B', 'TAXI IN'],
@@ -4012,7 +4067,10 @@ export default function AirspaceView3D({
       </div>
 
       {/* ── Key hints — bottom-right ── */}
-      <div className="absolute bottom-4 right-4 pointer-events-none select-none flex flex-col items-end gap-0.5">
+      <div className={[
+        'absolute bottom-4 right-4 pointer-events-none select-none flex flex-col items-end gap-0.5',
+        tilesEnabled && 'rounded border border-slate-700/50 bg-[#05080D]/78 px-2 py-1.5 backdrop-blur-sm',
+      ].filter(Boolean).join(' ')}>
         <span className="font-mono text-[9px] tracking-wider text-slate-800">[CLICK] INSPECT</span>
         <span className="font-mono text-[9px] tracking-wider text-slate-800">[DBLCLICK] FOLLOW</span>
         <span className="font-mono text-[9px] tracking-wider text-slate-800">[ESC] BACK</span>
