@@ -23,6 +23,12 @@ import type { AirportProfile, TerrainGrid } from '@/airports/types';
 import { computeRunwayThresholds, computeApproachCorridors } from '@/airports/helpers';
 import { ROUTES } from '@/data/routes';
 import type { Route } from '@/data/routes';
+import {
+  getTileSessionCount,
+  MAX_TILE_SESSIONS,
+  requestTileSession,
+} from '@/tiles/tileSession';
+import { createTileLayer, type TileLayer } from '@/tiles/tileLayer';
 import { easeInOut, runDirector, startFlyTo } from './director';
 
 // ── Camera mode — exported so App can type-check ──────────────────────────────
@@ -1697,7 +1703,17 @@ export default function AirspaceView3D({
 }: AirspaceView3DProps) {
   const mountRef       = useRef<HTMLDivElement>(null);
   const [webglUnavailable, setWebglUnavailable] = useState(false);
+  const [tilesEnabled, setTilesEnabled] = useState(false);
+  const [tileLoading, setTileLoading] = useState(false);
+  const [tileLoaded, setTileLoaded] = useState(false);
+  const [tileSessionCount, setTileSessionCount] = useState(getTileSessionCount());
+  const [tileStatus, setTileStatus] = useState<'ready' | 'loading' | 'loaded' | 'limit' | 'error'>('ready');
+  const [tileMessage, setTileMessage] = useState('Photoreal ground is off.');
   const sceneRef       = useRef<SceneState | null>(null);
+  const tileLayerRef   = useRef<TileLayer | null>(null);
+  const tileGenerationRef = useRef(0);
+  const tileVisibleRef  = useRef(false);
+  const tilesEnabledRef = useRef(false);
   /** Three.js Groups comprising the current airport's ground geometry.
    *  Stored so rebuildGroundGeometry() can remove and dispose them in-place. */
   const groundGrpsRef  = useRef<THREE.Group[]>([]);
@@ -1729,6 +1745,7 @@ export default function AirspaceView3D({
   const profile    = useAirport();
   const profileRef = useRef(profile);
   profileRef.current = profile;
+  tilesEnabledRef.current = tilesEnabled;
 
   const alertFocusIdRef     = useRef<string | null>(alertFocusId ?? null);
   const onAlertFocusDoneRef = useRef<(() => void) | null>(onAlertFocusDone ?? null);
@@ -1739,6 +1756,93 @@ export default function AirspaceView3D({
   // sync effect) can read the CURRENT directorMode without a closure.
   const directorModeRef = useRef(directorMode);
   directorModeRef.current = directorMode;
+
+  const removeTileLayer = () => {
+    tileGenerationRef.current += 1;
+    tileLayerRef.current?.dispose();
+    tileLayerRef.current = null;
+    tileVisibleRef.current = false;
+    setTileLoading(false);
+    setTileLoaded(false);
+  };
+
+  const handleTilesToggle = (enabled: boolean) => {
+    setTilesEnabled(enabled);
+    tilesEnabledRef.current = enabled;
+    if (!enabled) {
+      removeTileLayer();
+      setTileStatus('ready');
+      setTileMessage('Photoreal ground is off.');
+      return;
+    }
+
+    setTileStatus('ready');
+    setTileMessage('Photoreal ground is on. Loading is still explicit and guarded.');
+  };
+
+  const handleLoadTiles = async () => {
+    if (!tilesEnabled || tileLoading || tileLoaded) return;
+
+    const st = sceneRef.current;
+    if (!st) {
+      setTileStatus('error');
+      setTileMessage('The 3D scene is not ready for a tile layer.');
+      return;
+    }
+
+    const result = requestTileSession();
+    setTileSessionCount(result.count);
+    if (!result.ok) {
+      setTileStatus('limit');
+      setTileMessage(result.reason);
+      return;
+    }
+
+    const generation = ++tileGenerationRef.current;
+    tileVisibleRef.current = false;
+    setTileLoading(true);
+    setTileStatus('loading');
+    setTileMessage(`Loading photoreal ${profileRef.current.icao} ground…`);
+
+    try {
+      const layer = await createTileLayer(
+        st.scene,
+        profileRef.current.origin,
+        st.camera,
+        st.renderer,
+      );
+
+      if (
+        generation !== tileGenerationRef.current ||
+        !tilesEnabledRef.current
+      ) {
+        layer.dispose();
+        return;
+      }
+
+      tileLayerRef.current = layer;
+      setTileMessage('Tile layer attached; waiting for the first visible tile…');
+    } catch (error) {
+      if (generation !== tileGenerationRef.current) return;
+      setTileStatus('error');
+      setTileMessage(
+        error instanceof Error ? error.message : 'The tile layer failed to load.',
+      );
+    } finally {
+      if (generation === tileGenerationRef.current) {
+        setTileLoading(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!tileLayerRef.current && !tileLoading) return;
+    removeTileLayer();
+    if (tilesEnabled) {
+      setTileStatus('ready');
+      setTileMessage(`Airport changed to ${profile.icao}; load photoreal ground again.`);
+    }
+  }, [profile.icao]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync directorMode prop → SceneState; reset director to orbit when activated.
   useEffect(() => {
@@ -2981,6 +3085,18 @@ export default function AirspaceView3D({
         }
       }
 
+      if (tileLayerRef.current) {
+        const visibleTileCount = tileLayerRef.current.update();
+        if (visibleTileCount > 0 && !tileVisibleRef.current) {
+          tileVisibleRef.current = true;
+          setTileLoaded(true);
+          setTileStatus('loaded');
+          setTileMessage(
+            `Photoreal ${profileRef.current.icao} ground is visible.`,
+          );
+        }
+      }
+
       renderer.render(scene, camera);
     };
     tick();
@@ -3355,6 +3471,10 @@ export default function AirspaceView3D({
     return () => {
       ro.disconnect();
       cancelAnimationFrame(st.animId);
+      tileGenerationRef.current += 1;
+      tileLayerRef.current?.dispose();
+      tileLayerRef.current = null;
+      tileVisibleRef.current = false;
       // Fire the alert-done callback on unmount so App clears alertFocusId.
       if (st.alertFocusId) {
         const done = st.alertFocusDone;
@@ -3799,6 +3919,46 @@ export default function AirspaceView3D({
 
       {/* Three.js canvas mount */}
       <div ref={mountRef} className="absolute inset-0" />
+
+      {/* ── Photoreal ground cost control — explicit Stage 0 gate ── */}
+      <div className="absolute top-16 left-4 z-10 w-72 border border-slate-800 bg-[#0B111B]/95 p-3 shadow-2xl pointer-events-auto">
+        <label className="flex items-center gap-2 font-mono text-[10px] font-bold tracking-[0.14em] text-slate-300 uppercase">
+          <input
+            type="checkbox"
+            checked={tilesEnabled}
+            onChange={(event) => handleTilesToggle(event.target.checked)}
+            className="h-4 w-4 accent-sky-500"
+          />
+          <span>Photoreal ground</span>
+        </label>
+
+        {tilesEnabled && (
+          <div className="mt-2 border border-emerald-900/60 bg-emerald-950/30 px-2 py-1.5 font-mono text-xs font-bold text-emerald-300">
+            tiles: {tileSessionCount} / {MAX_TILE_SESSIONS}
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={handleLoadTiles}
+          disabled={!tilesEnabled || tileLoading || tileLoaded}
+          className="mt-3 w-full border border-sky-500/80 bg-sky-700 px-3 py-2 font-mono text-[10px] font-bold tracking-[0.12em] text-white uppercase transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          {tileLoading
+            ? 'Loading photoreal ground…'
+            : tileLoaded
+              ? 'Photoreal ground loaded'
+              : 'Load photoreal ground'}
+        </button>
+
+        <p
+          className="mt-2 font-mono text-[10px] leading-relaxed text-slate-500"
+          role="status"
+          aria-live="polite"
+        >
+          {tileMessage}
+        </p>
+      </div>
 
       {webglUnavailable && (
         <div className="absolute inset-0 flex items-center justify-center px-6">
