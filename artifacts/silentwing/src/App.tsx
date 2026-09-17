@@ -671,8 +671,14 @@ export default function App() {
             photorealGroundEnabled={view === 'airspace' && photorealGroundEnabled}
             onWind={(dir, speed) => setMetarWind({ dir, speed })}
             compact={!metarOpen}
-            onExpand={() => setMetarOpen(true)}
-            onClose={() => setMetarOpen(false)}
+            onExpand={() => {
+              setMetarOpen(true);
+              setForecastOpen(true);
+            }}
+            onClose={() => {
+              setMetarOpen(false);
+              setForecastOpen(false);
+            }}
           />
         </div>
 
@@ -700,11 +706,7 @@ export default function App() {
           alertCount={activeAlerts.length}
           onView={() => setView(v => v === 'airspace' ? 'airfield' : 'airspace')}
           onRewind={() => undefined}
-          onLayers={() => {
-            setSequenceOpen(v => !v);
-            setForecastOpen(v => !v);
-            setMetarOpen(v => !v);
-          }}
+           onLayers={() => setSequenceOpen(v => !v)}
           onDirector={() => setDirectorMode(v => !v)}
           onAlerts={() => setAlertsOpen(v => !v)}
           onGround={() => {

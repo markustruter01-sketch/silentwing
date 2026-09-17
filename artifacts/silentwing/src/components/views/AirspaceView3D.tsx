@@ -1186,6 +1186,7 @@ function disposeTakeoffIndicator(entry: TakeoffIndicatorEntry, scene: THREE.Scen
 // ── Per-aircraft Three.js bundle ──────────────────────────────────────────────
 interface AcBundle {
   cone:     THREE.Mesh;
+  outline:  THREE.Mesh;
   stem:     THREE.Line;
   trail:    THREE.Line;
   label:    THREE.Sprite;
@@ -1216,6 +1217,9 @@ interface AcBundle {
   corrStartMs:     number;
   /** Purple selection halo ring shown when director focuses this aircraft. */
   halo:            THREE.Mesh;
+  /** Per-aircraft severity ring shown for active alerts. */
+  alertRing:       THREE.Mesh;
+  alertRingMat:    THREE.MeshBasicMaterial;
   /** Cyan pin ring — visible when this aircraft is pinned from the sequence ladder. */
   pinRing:         THREE.Mesh;
   /** Callsign string — stored so refreshAcLabel can repaint without extra props. */
@@ -1261,6 +1265,9 @@ interface AcBundle {
 function disposeBundle(b: AcBundle): void {
   // cone: CONE_GEO is shared — only dispose per-aircraft material
   (b.cone.material as THREE.Material).dispose();
+  // outline geometry is shared — dispose the per-aircraft material clone
+  (b.outline.material as THREE.Material).dispose();
+  b.alertRingMat.dispose();
   b.stem.geometry.dispose(); // per-aircraft (two endpoint positions vary)
   b.trail.geometry.dispose(); (b.trail.material as THREE.Material).dispose(); // per-aircraft clone
   const sm = b.label.material as THREE.SpriteMaterial;
@@ -1282,14 +1289,19 @@ const STEM_MAT = new THREE.LineBasicMaterial({ color: 0x334155, transparent: tru
 // ── Shared geometries — one instance referenced by many Mesh/Line objects ─────
 // Never call .dispose() on these in per-aircraft teardown.
 const CONE_GEO       = (() => { const g = new THREE.ConeGeometry(27.5, 85, 4, 1); g.rotateX(-Math.PI / 2); return g; })();
-const HALO_GEO       = new THREE.TorusGeometry(70, 7, 8, 64);
+const HALO_GEO       = new THREE.TorusGeometry(84, 9, 8, 64);
+const ALERT_RING_GEO = new THREE.TorusGeometry(92, 6, 8, 64);
 const PIN_RING_GEO   = new THREE.TorusGeometry(110, 5, 8, 64);
 const SEP_BUBBLE_GEO = new THREE.SphereGeometry(SEP_BUBBLE_R, 16, 12);
 
 // ── Shared materials — per-aircraft objects reference (not own) these ─────────
 // Never dispose these in per-aircraft teardown.
-const HALO_MAT     = new THREE.MeshBasicMaterial({ color: 0xa855f7, transparent: true, opacity: 0.50, depthWrite: false });
+const HALO_MAT     = new THREE.MeshBasicMaterial({ color: 0xa855f7, transparent: true, opacity: 0.80, depthWrite: false });
 const PIN_RING_MAT = new THREE.MeshBasicMaterial({ color: 0x06b6d4, transparent: true, opacity: 0.70, depthWrite: false });
+const MARKER_OUTLINE_MAT = new THREE.MeshBasicMaterial({
+  color: 0x020617,
+  depthWrite: true,
+});
 
 // ── Trail / wake ShaderMaterial templates ─────────────────────────────────────
 // Each aircraft calls .clone() so it gets its own uniforms.color value without
@@ -1491,9 +1503,18 @@ function spawnAircraft(st: SceneState, ac: Aircraft, nowMs: number): void {
   const hex   = phaseHex(ac.phase);
   const headY = -(ac.heading * Math.PI) / 180;
 
+  // Dark silhouette — renders behind the phase-coloured cone so the aircraft
+  // remains findable over bright photoreal ground.
+  const outline = new THREE.Mesh(CONE_GEO, MARKER_OUTLINE_MAT.clone());
+  outline.position.copy(pos);
+  outline.rotation.y = headY;
+  outline.scale.setScalar(1.45);
+  outline.renderOrder = 0;
+  scene.add(outline);
+
   // Cone — shared geometry reused by every aircraft; per-aircraft MeshLambertMaterial
   const coneMat = new THREE.MeshLambertMaterial({
-    color: hex, emissive: hex, emissiveIntensity: 0.30,
+    color: hex, emissive: hex, emissiveIntensity: 0.55,
   });
   const cone = new THREE.Mesh(CONE_GEO, coneMat);
   cone.position.copy(pos);
@@ -1509,6 +1530,20 @@ function spawnAircraft(st: SceneState, ac: Aircraft, nowMs: number): void {
   halo.renderOrder = 3;
   halo.visible = false;
   scene.add(halo);
+
+  // Per-aircraft alert ring — severity colours are assigned in the rAF loop.
+  const alertRingMat = new THREE.MeshBasicMaterial({
+    color: 0xef4444,
+    transparent: true,
+    opacity: 0.95,
+    depthWrite: false,
+    depthTest: false,
+  });
+  const alertRing = new THREE.Mesh(ALERT_RING_GEO, alertRingMat);
+  alertRing.rotation.x = Math.PI / 2;
+  alertRing.renderOrder = 5;
+  alertRing.visible = false;
+  scene.add(alertRing);
 
   const pinRing = new THREE.Mesh(PIN_RING_GEO, PIN_RING_MAT);
   pinRing.rotation.x = Math.PI / 2;
@@ -1628,7 +1663,7 @@ function spawnAircraft(st: SceneState, ac: Aircraft, nowMs: number): void {
   }
 
   acMap.set(ac.id, {
-    cone, stem, trail, label, trailBuf, halo, pinRing,
+    cone, outline, stem, trail, label, trailBuf, halo, alertRing, alertRingMat, pinRing,
     leaderLine, leaderLineMat,
     velVec, velVecMat,
     sepBubble, sepBubbleMat,
@@ -1962,7 +1997,7 @@ export default function AirspaceView3D({
       //    Per-aircraft cloned materials/geometries are disposed; shared module-level
       //    geometry/materials (CONE_GEO, HALO_MAT, etc.) are NOT touched.
       st.acMap.forEach(b => {
-        scene.remove(b.cone, b.stem, b.trail, b.label);
+        scene.remove(b.cone, b.outline, b.stem, b.trail, b.label, b.alertRing);
         if (b.halo)      scene.remove(b.halo);
         if (b.pinRing)   scene.remove(b.pinRing);
         if (b.velVec)    scene.remove(b.velVec);
@@ -2464,14 +2499,38 @@ export default function AirspaceView3D({
         // Underground clamp — never let a cone sink below the ground plane
         b.renderPos.y = Math.max(0, b.renderPos.y);
 
-        // Apply renderPos to all visuals
+        // Apply renderPos to all visuals. Marker geometry receives a modest
+        // distance compensation so the aircraft remains findable at the
+        // wide airport overview without changing its simulated position.
         b.cone.position.copy(b.renderPos);
+        b.outline.position.copy(b.renderPos);
+        const markerDistance = camera.position.distanceTo(b.renderPos);
+        const markerScale = THREE.MathUtils.clamp(markerDistance / ORBIT_RADIUS, 1, 3);
+        b.cone.scale.setScalar(markerScale);
+        b.outline.scale.setScalar(markerScale * 1.45);
         b.label.position.set(b.renderPos.x, b.renderPos.y + LABEL_LIFT, b.renderPos.z);
 
         // Halo: track aircraft + slow Z-rotation pulse
         if (b.halo && b.halo.visible) {
           b.halo.position.set(b.renderPos.x, b.renderPos.y - 40, b.renderPos.z);
+          b.halo.scale.setScalar(markerScale);
           b.halo.rotation.z += 0.008; // slow spin in the horizontal plane
+        }
+
+        // Alert ring: a dedicated, always-visible severity cue in addition to
+        // the alert colour applied to the aircraft cone.
+        if (b.alertRing) {
+          const acId = st.coneToId.get(b.cone) ?? '';
+          const alertSev = st.alertedIds.get(acId);
+          b.alertRing.visible = Boolean(alertSev);
+          if (alertSev) {
+            const alertHex = alertSev === 'critical' ? 0xef4444
+                           : alertSev === 'caution'  ? 0xf59e0b : 0xfbbf24;
+            b.alertRingMat.color.setHex(alertHex);
+            b.alertRing.position.set(b.renderPos.x, b.renderPos.y - 35, b.renderPos.z);
+            b.alertRing.scale.setScalar(markerScale);
+            b.alertRing.rotation.z += 0.014;
+          }
         }
 
         // Pin ring: cyan orbit ring — counter-rotates at a slightly faster rate
@@ -2481,6 +2540,7 @@ export default function AirspaceView3D({
           b.pinRing.visible = isPinned;
           if (isPinned) {
             b.pinRing.position.set(b.renderPos.x, b.renderPos.y - 20, b.renderPos.z);
+            b.pinRing.scale.setScalar(markerScale);
             b.pinRing.rotation.z -= 0.012; // counter-clockwise spin
           }
         }
@@ -3429,7 +3489,7 @@ export default function AirspaceView3D({
       canvas.removeEventListener('pointerup',    onPointerUp);
       window.removeEventListener('keydown', onKey);
       st.acMap.forEach(b => {
-        scene.remove(b.cone, b.stem, b.trail, b.label);
+        scene.remove(b.cone, b.outline, b.stem, b.trail, b.label, b.alertRing);
         if (b.halo)      scene.remove(b.halo);
         if (b.pinRing)   scene.remove(b.pinRing);
         if (b.velVec)    scene.remove(b.velVec);
@@ -3611,7 +3671,7 @@ export default function AirspaceView3D({
         } else {
           cm.color.setHex(hex);
           cm.emissive.setHex(hex);
-          cm.emissiveIntensity = isSelected ? 0.55 : 0.30;
+          cm.emissiveIntensity = isSelected ? 0.95 : 0.55;
           (b.label.material as THREE.SpriteMaterial).opacity = 1.0;
         }
 
@@ -3626,7 +3686,7 @@ export default function AirspaceView3D({
                          : alertSev === 'caution'  ? 0xf59e0b : 0xfbbf24;
           cm.color.setHex(alertHex);
           cm.emissive.setHex(alertHex);
-          cm.emissiveIntensity = 0.80;
+           cm.emissiveIntensity = 1.10;
         }
 
         // ── FIX A: trail sanity cap ────────────────────────────────────────
@@ -3823,7 +3883,7 @@ export default function AirspaceView3D({
     // Remove aircraft that left the snapshot
     for (const [id, b] of acMap) {
       if (!seen.has(id)) {
-        scene.remove(b.cone, b.stem, b.trail, b.label, b.halo);
+        scene.remove(b.cone, b.outline, b.stem, b.trail, b.label, b.halo, b.alertRing);
         if (b.pinRing)   scene.remove(b.pinRing);
         if (b.velVec)    scene.remove(b.velVec);
         if (b.sepBubble) scene.remove(b.sepBubble);
