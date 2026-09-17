@@ -3921,7 +3921,7 @@ export default function AirspaceView3D({
       <div ref={mountRef} className="absolute inset-0" />
 
       {/* ── Photoreal ground cost control — explicit Stage 0 gate ── */}
-      <div className="absolute top-16 left-4 z-10 w-72 border border-slate-800 bg-[#0B111B]/95 p-3 shadow-2xl pointer-events-auto">
+      <div className="absolute top-[164px] right-4 z-10 w-72 border border-slate-800 bg-[#0B111B]/95 p-3 shadow-2xl pointer-events-auto">
         <label className="flex items-center gap-2 font-mono text-[10px] font-bold tracking-[0.14em] text-slate-300 uppercase">
           <input
             type="checkbox"
