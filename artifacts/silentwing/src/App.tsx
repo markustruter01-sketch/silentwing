@@ -28,6 +28,7 @@ import { isAirborne } from '@/types';
 
 type View = 'airspace' | 'airfield';
 export type DataSource = 'sim' | 'live' | 'opensky';
+const DEFAULT_AIRPORT = YSSY;
 
 // Derive a rough sector-load from aircraft count (≤ 99 %)
 // NOTE: placeholder — will be replaced with a real demand metric in Phase 7.
@@ -65,7 +66,7 @@ export default function App() {
   const [dataSource, setDataSource] = useState<DataSource>('live');
 
   // ── Active airport profile ────────────────────────────────────────────────
-  const [activeProfile, setActiveProfile] = useState<AirportProfile>(YBBN);
+  const [activeProfile, setActiveProfile] = useState<AirportProfile>(DEFAULT_AIRPORT);
   const [photorealGroundEnabled, setPhotorealGroundEnabled] = useState(false);
   const [groundTileStatus, setGroundTileStatus] = useState({
     enabled: false,
@@ -76,7 +77,7 @@ export default function App() {
   });
   const photorealGroundControlRef = useRef<(() => void) | null>(null);
   /** Stable ref — lets switch callbacks read the current profile without stale closures. */
-  const activeProfileRef = useRef<AirportProfile>(YBBN);
+  const activeProfileRef = useRef<AirportProfile>(DEFAULT_AIRPORT);
   activeProfileRef.current = activeProfile;
 
   // Adapter is (re-)created whenever dataSource or activeProfile changes.
@@ -213,7 +214,7 @@ export default function App() {
   const [controlsOpen, setControlsOpen] = useState(false);
 
   // ── Alert engine (Phase 6A) ──────────────────────────────────────────────
-  const alertEngineRef  = useRef(new AlertEngine(YBBN));
+  const alertEngineRef  = useRef(new AlertEngine(DEFAULT_AIRPORT));
   const [swAlerts,       setSWAlerts]       = useState<SWAlert[]>([]);
   const [injectConflict, setInjectConflict] = useState(false);
 
