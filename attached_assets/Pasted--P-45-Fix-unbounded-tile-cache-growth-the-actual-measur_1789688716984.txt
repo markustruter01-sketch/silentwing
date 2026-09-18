@@ -1,0 +1,47 @@
+[P-45] Fix unbounded tile cache growth (the actual measured cause).
+
+GOAL
+[P-44] evidence shows lruBytes and inCache climbing without bound
+(5MB → 255MB, 47 → 564 tiles over 89s) with zero load failures and
+zero context loss the entire time. The cache never evicts. Once it
+hits its ceiling, the library stops requesting new tiles for wherever
+the camera currently is — that's the tearing. Fix the cache so it
+actually evicts stale tiles instead of only growing.
+
+RISK CLASS
+[BEHAVIOR-CHANGING]
+
+SCOPE
+tileLayer.ts, where the tiles renderer/LRU cache is configured.
+
+DO NOT
+- Do not touch camera, Director, ALT_SCALE, toV3, aircraft, detectors,
+  tests.
+- Do not remove the P-44 logger yet — keep it running for this test,
+  it's how we confirm this actually works instead of claiming it does.
+
+STEPS
+1. Set explicit tiles.lruCache.minBytesSize / maxBytesSize tuned to
+   this app's actual working set — start around 100-150MB max, well
+   below the ~300-400MB default ceiling, so eviction kicks in long
+   before saturation. Justify or adjust the exact number based on what
+   you find in the library, don't just take mine on faith.
+2. Confirm autoMarkUnused is actually clearing "used" tiles once the
+   camera moves away from them — this is why nothing was being evicted
+   even with a huge working area covered.
+3. Re-run the same reproduction: Director running 90+ seconds, letting
+   alerts interrupt, camera roaming. Capture the same [P-44] log.
+4. Compare: lruBytes/inCache should plateau or oscillate, not climb
+   forever, once the new cap is hit.
+5. Check that eviction isn't removing tiles still on screen — if
+   lowering the cap makes currently-visible ground disappear instead,
+   report that as a new finding, don't patch over it.
+
+DONE WHEN
+The re-captured [P-44] log shows the cache plateauing under sustained
+Director movement, with no visible ground loss. Paste both logs
+side by side.
+
+REPORT
+Before/after growth curves, whether eviction actually engaged, whether
+anything currently visible got wrongly evicted.
