@@ -1,0 +1,67 @@
+[REVIEW-2] Continue the tearing investigation — both prior hypotheses are ruled out.
+
+GOAL
+Find the actual mechanism behind ground tiles tearing into black
+voids/fragments (worst at low camera angles or when Director interrupts
+move the camera). No fix — a ranked, source-grounded list of candidate
+causes.
+
+RISK CLASS
+Read-only. No commits, no file edits. Running pnpm typecheck/test/build
+is fine.
+
+STEP 0
+Re-run: git log -1 --oneline && git status --short. Confirm you're on
+experiment-3d at its current tip and the tree is clean before anything
+else.
+
+CONTEXT — what's already ruled out, don't re-check these
+- Camera-matrix staleness (P-39's target): closed. A single unconditional
+  camera.updateMatrixWorld(true) runs before every tiles.update() call,
+  covering all camera-mutation paths (Director, tick() state machine,
+  wheel zoom, drag orbit/pan).
+- One-shot ground-height offset baking in a coarse measurement: ruled
+  out by instrumented recon (P-42) — two Brisbane loads showed 0.000 m
+  drift within-load after a 2.5s delayed re-probe; only 0.391 m
+  cross-load variation, too small to explain the symptom.
+- tileLoadInFlightRef (P-41): a legitimate fix for a real async race in
+  handleLoadTiles(), but doesn't touch tearing — its own commit message
+  says so.
+
+Four committed fix attempts (P-38–P-41) and one full recon have not
+resolved this. Don't repeat any of that ground.
+
+STEPS
+1. Read how the tile layer wires dispose(), tiles-load-error, and any
+   eviction/unload callbacks (tileLayer.ts and wherever the
+   3d-tiles-renderer instance is configured). Does a failed or slow
+   tile download leave a visible hole rather than falling back to a
+   coarser parent tile while it loads?
+2. Read the library's LRU/memory cache settings actually configured
+   (tiles.lruCache, maxSize/minSize or equivalent) versus its defaults
+   in node_modules/3d-tiles-renderer. Could visible tiles be evicted
+   under memory pressure when many new tiles are requested at once
+   (fast camera movement, or GPU load from the newly added aircraft
+   GLB models plus any glow/outline shader)?
+3. Check whether WebGL context loss/restore is handled anywhere
+   (webglcontextlost/webglcontextrestored listeners). A context loss
+   would blank textures/geometry app-wide — matches "black voids."
+   Report whether this is handled, unhandled, or not applicable.
+4. Check whether the library has a fade-in/fade-out or
+   skip-level-of-detail-traversal setting for tile transitions, and
+   whether it's configured. If tile pop-in is unconfigured default
+   behavior rather than a defect, say so plainly — that changes what
+   "fixing" this even means.
+5. Rank whatever candidates you find by how well each matches the
+   actual symptom (worst at low angle / on interrupt), with file and
+   line citations. If none clearly fits, say that instead of forcing
+   an answer.
+
+DO NOT
+- Do not fix, patch, or modify anything.
+- Do not re-litigate the two ruled-out hypotheses above.
+
+REPORT
+Step 0 confirmation, then the ranked candidate list with citations,
+explicitly marking what's confirmed by reading code versus what's still
+a guess.
