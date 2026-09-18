@@ -1385,8 +1385,6 @@ export interface SceneState {
   lastPollMs:    number;
   // measured interval between the two most recent accepted polls (ms); initially 8000
   pollDurationMs: number;
-  /** Last time the P-43 orientation evidence snapshot was emitted. */
-  p43LastLogMs: number;
   // zoom/pan/rotate state
   orbitRadius:      number;          // mutable zoom radius (starts at ORBIT_RADIUS)
   orbitElevation:   number;          // camera height above scene origin (mutable via drag)
@@ -1445,17 +1443,36 @@ export interface SceneState {
   spawnQueueIds: Set<string>;
 }
 
+function neutralizeBakedAircraftTransform(source: THREE.Group): void {
+  const fbxRoot = source.getObjectByName('FBX_Root');
+  if (!fbxRoot) {
+    throw new Error('Aircraft GLB is missing its FBX_Root node.');
+  }
+
+  // The current GLB stores the baked conversion quaternion on PLANE, directly
+  // below FBX_Root. If a future export moves that quaternion back to FBX_Root,
+  // prefer the root itself rather than stacking another correction.
+  const identity = new THREE.Quaternion();
+  const bakedNode = fbxRoot.quaternion.angleTo(identity) > 1e-6
+    ? fbxRoot
+    : fbxRoot.getObjectByName('PLANE');
+  if (!bakedNode) {
+    throw new Error('Aircraft GLB is missing its baked PLANE transform.');
+  }
+
+  const bakedInverse = bakedNode.quaternion.clone().invert();
+  bakedNode.quaternion.premultiply(bakedInverse);
+}
+
 function prepareAircraftModelTemplate(source: THREE.Group): THREE.Group {
   const root = new THREE.Group();
   root.name = 'SilentWing white aircraft model';
 
-  // The FBX-to-GLB export needs a fixed quarter-turn to sit level in the
-  // app's Y-up world. Keep that correction on a child node: heading yaw is
-  // applied to `root` later, and combining X correction + Y yaw on one Euler
-  // rotation makes aircraft bank/tilt differently at different headings.
+  // Keep an explicit identity child so heading yaw remains isolated on `root`.
+  // The GLB's baked conversion transform was neutralized before this wrapper
+  // was created; no additional Euler correction is applied here.
   const orientation = new THREE.Group();
   orientation.name = 'Aircraft model ground orientation';
-  orientation.rotation.x = Math.PI / 2;
   orientation.add(source);
   root.add(orientation);
   root.updateMatrixWorld(true);
@@ -1564,92 +1581,6 @@ function setAircraftPlaneOutlineColor(bundle: AcBundle, color: number): void {
   for (const line of bundle.planeOutlineLines) {
     (line.material as THREE.LineBasicMaterial).color.setHex(color);
   }
-}
-
-const P43_TARGET_HEADINGS = [0, 90, 180, 270] as const;
-
-function headingDistance(a: number, b: number): number {
-  const delta = Math.abs(((a - b) % 360 + 360) % 360);
-  return Math.min(delta, 360 - delta);
-}
-
-function formatEulerDegrees(euler: THREE.Euler): string {
-  const toDegrees = (radians: number) => (radians * 180 / Math.PI).toFixed(1);
-  return `(${toDegrees(euler.x)},${toDegrees(euler.y)},${toDegrees(euler.z)})`;
-}
-
-function formatQuaternion(quaternion: THREE.Quaternion): string {
-  return `(${quaternion.x.toFixed(4)},${quaternion.y.toFixed(4)},` +
-    `${quaternion.z.toFixed(4)},${quaternion.w.toFixed(4)})`;
-}
-
-function logAircraftOrientationDiagnostics(st: SceneState, nowMs: number): void {
-  if (nowMs - st.p43LastLogMs < 3_000) return;
-
-  const candidates = [...st.acMap.entries()]
-    .filter(([, bundle]) => bundle.plane !== null && bundle.planeMeshes.length > 0);
-  if (candidates.length < P43_TARGET_HEADINGS.length) return;
-
-  const remaining = candidates.slice();
-  const selected: Array<{
-    id: string;
-    bundle: AcBundle;
-    targetHeading: number;
-  }> = [];
-
-  for (const targetHeading of P43_TARGET_HEADINGS) {
-    let bestIndex = -1;
-    let bestDistance = Infinity;
-    for (let index = 0; index < remaining.length; index++) {
-      const distance = headingDistance(remaining[index][1].headingDeg, targetHeading);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestIndex = index;
-      }
-    }
-    if (bestIndex < 0) return;
-    const [id, bundle] = remaining.splice(bestIndex, 1)[0];
-    selected.push({ id, bundle, targetHeading });
-  }
-
-  // Read the final world transforms after the normal per-frame position/yaw
-  // updates. This does not assign any transform; it only makes the existing
-  // values observable for P-43.
-  st.scene.updateMatrixWorld(true);
-  st.p43LastLogMs = nowMs;
-
-  const rows = selected.map(({ id, bundle, targetHeading }) => {
-    const root = bundle.plane!;
-    const orientation = root.getObjectByName('Aircraft model ground orientation');
-    const mesh = bundle.planeMeshes[0];
-    const worldQuaternion = mesh.getWorldQuaternion(new THREE.Quaternion());
-    const worldEuler = new THREE.Euler().setFromQuaternion(worldQuaternion, 'XYZ');
-    const feedHeading = bundle.headingDeg;
-
-    return [
-      `id=${id}`,
-      `callsign=${bundle.callsign}`,
-      `target=${targetHeading}°`,
-      `targetDelta=${headingDistance(feedHeading, targetHeading).toFixed(1)}°`,
-      `feedHeading=${feedHeading.toFixed(1)}°`,
-      `parentYawRad=${root.rotation.y.toFixed(6)}`,
-      `parentYawDeg=${(root.rotation.y * 180 / Math.PI).toFixed(1)}°`,
-      `childCorrectionEulerDeg=${orientation ? formatEulerDegrees(orientation.rotation) : 'missing'}`,
-      `childCorrectionQuat=${orientation ? formatQuaternion(orientation.quaternion) : 'missing'}`,
-      `childParent=${orientation?.parent?.name ?? 'missing'}`,
-      `childSeparate=${orientation?.parent === root}`,
-      `meshLocalEulerDeg=${formatEulerDegrees(mesh.rotation)}`,
-      `meshLocalQuat=${formatQuaternion(mesh.quaternion)}`,
-      `meshParent=${mesh.parent?.name ?? 'missing'}`,
-      `worldEulerDeg=${formatEulerDegrees(worldEuler)}`,
-      `worldQuat=${formatQuaternion(worldQuaternion)}`,
-    ].join(' ');
-  });
-
-  console.info(`[P-43] orientation snapshot t=${Math.round(nowMs)}ms rows=${rows.length}`);
-  rows.forEach((row, index) => {
-    console.info(`[P-43] row=${index + 1} ${row}`);
-  });
 }
 
 // ── Director camera state machine ─────────────────────────────────────────────
@@ -2572,7 +2503,6 @@ export default function AirspaceView3D({
       lastClickTime:  0,
       lastPollMs:     0,
       pollDurationMs: 8000,   // conservative default; replaced after first two polls
-      p43LastLogMs:   -Infinity,
       orbitRadius:      ORBIT_RADIUS,
       orbitElevation:   ORBIT_HEIGHT,
       orbitTarget:      LOOK_AT.clone(),
@@ -2622,6 +2552,7 @@ export default function AirspaceView3D({
       AIRCRAFT_MODEL_URL,
       (gltf) => {
         if (sceneDisposed || sceneRef.current !== st) return;
+        neutralizeBakedAircraftTransform(gltf.scene);
         st.aircraftModelTemplate = prepareAircraftModelTemplate(gltf.scene);
         st.acMap.forEach((bundle, aircraftId) => {
           attachAircraftModel(st, aircraftId, bundle);
@@ -3005,8 +2936,6 @@ export default function AirspaceView3D({
           }
         }
       }
-
-      logAircraftOrientationDiagnostics(st, nowMs);
 
       // ── Separation bubble overlap detection (Task 33) ────────────────────
       // Check all airborne pairs and tint overlapping bubbles red.
