@@ -239,15 +239,22 @@ export async function createTileLayer(
         p42ProbeTimer = null;
         if (disposed) return;
 
-        const refinedHeightM = sampleSurfaceHeightM(false);
+        const refinedRaycastHeightM = sampleSurfaceHeightM(false);
         const refinedLoadProgress = tiles.loadProgress;
         const refinedErrorTarget = tiles.errorTarget;
+        // The fixed offset is already applied when this delayed raycast runs.
+        // Report both coordinate frames so the probe does not mistake the
+        // intentional transform for a refinement delta.
+        const refinedHeightM = refinedRaycastHeightM === null
+          ? null
+          : refinedRaycastHeightM - appliedOffsetM;
         const deltaM = refinedHeightM === null
           ? null
           : refinedHeightM - measuredHeightM;
         console.info(
           `[P-42] delayed probe origin=${samplePoint} ` +
-          `height=${refinedHeightM === null ? "null" : `${refinedHeightM.toFixed(3)} m`} ` +
+          `raycastHeight=${refinedRaycastHeightM === null ? "null" : `${refinedRaycastHeightM.toFixed(3)} m`} ` +
+          `rawEquivalentHeight=${refinedHeightM === null ? "null" : `${refinedHeightM.toFixed(3)} m`} ` +
           `delta=${deltaM === null ? "null" : `${deltaM.toFixed(3)} m`} ` +
           `loadProgress=${refinedLoadProgress.toFixed(3)} ` +
           `errorTarget=${refinedErrorTarget}`,
