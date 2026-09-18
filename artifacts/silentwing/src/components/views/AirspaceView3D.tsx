@@ -1196,6 +1196,7 @@ interface AcBundle {
   outline:  THREE.Mesh;
   plane:    THREE.Group | null;
   planeMeshes: THREE.Mesh[];
+  planeOutlineLines: THREE.LineSegments[];
   hitTarget: THREE.Mesh;
   hitTargetMat: THREE.MeshBasicMaterial;
   stem:     THREE.Line;
@@ -1285,6 +1286,11 @@ function disposeBundle(b: AcBundle): void {
   // are disposed once when the scene is torn down.
   b.plane = null;
   b.planeMeshes = [];
+  for (const line of b.planeOutlineLines) {
+    line.geometry.dispose();
+    (line.material as THREE.Material).dispose();
+  }
+  b.planeOutlineLines = [];
   b.hitTargetMat.dispose();
   b.stemMat.dispose();
   b.groundShadowMat.dispose();
@@ -1474,13 +1480,36 @@ function prepareAircraftModelTemplate(source: THREE.Group): THREE.Group {
 
 function cloneAircraftModel(
   template: THREE.Group,
-): { root: THREE.Group; meshes: THREE.Mesh[] } {
+  outlineColor: number,
+): {
+  root: THREE.Group;
+  meshes: THREE.Mesh[];
+  outlineLines: THREE.LineSegments[];
+} {
   const root = template.clone(true);
   const meshes: THREE.Mesh[] = [];
+  const outlineLines: THREE.LineSegments[] = [];
   root.traverse((object) => {
-    if (object instanceof THREE.Mesh) meshes.push(object);
+    if (!(object instanceof THREE.Mesh)) return;
+    meshes.push(object);
+
+    const outline = new THREE.LineSegments(
+      new THREE.EdgesGeometry(object.geometry, 28),
+      new THREE.LineBasicMaterial({
+        color: outlineColor,
+        transparent: true,
+        opacity: 0.28,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        depthTest: false,
+      }),
+    );
+    outline.name = 'Aircraft status outline glow';
+    outline.renderOrder = 2;
+    object.add(outline);
+    outlineLines.push(outline);
   });
-  return { root, meshes };
+  return { root, meshes, outlineLines };
 }
 
 function disposeAircraftModelTemplate(template: THREE.Group): void {
@@ -1505,7 +1534,10 @@ function attachAircraftModel(
 ): void {
   if (!st.aircraftModelTemplate || bundle.plane) return;
 
-  const { root, meshes } = cloneAircraftModel(st.aircraftModelTemplate);
+  const { root, meshes, outlineLines } = cloneAircraftModel(
+    st.aircraftModelTemplate,
+    phaseHex(bundle.phase),
+  );
   root.position.copy(bundle.renderPos);
   root.rotation.y = -(bundle.headingDeg * Math.PI) / 180;
   st.scene.add(root);
@@ -1513,8 +1545,15 @@ function attachAircraftModel(
 
   bundle.plane = root;
   bundle.planeMeshes = meshes;
+  bundle.planeOutlineLines = outlineLines;
   bundle.cone.visible = false;
   bundle.outline.visible = false;
+}
+
+function setAircraftPlaneOutlineColor(bundle: AcBundle, color: number): void {
+  for (const line of bundle.planeOutlineLines) {
+    (line.material as THREE.LineBasicMaterial).color.setHex(color);
+  }
 }
 
 // ── Director camera state machine ─────────────────────────────────────────────
@@ -1809,7 +1848,7 @@ function spawnAircraft(st: SceneState, ac: Aircraft, nowMs: number): void {
   }
 
   acMap.set(ac.id, {
-    cone, outline, plane: null, planeMeshes: [],
+    cone, outline, plane: null, planeMeshes: [], planeOutlineLines: [],
     hitTarget, hitTargetMat, stem, stemMat, groundShadow, groundShadowMat,
     trail, label, trailBuf, halo, alertRing, alertRingMat, pinRing,
     leaderLine, leaderLineMat,
@@ -3940,7 +3979,9 @@ export default function AirspaceView3D({
         const isStale = (ac.seenPos ?? 0) > STALE_DISPLAY_S;
 
         // ── Cone colour — never yellow; selection shown via halo ring ─────────
+        let visualStatusHex = hex;
         if (isStale) {
+          visualStatusHex = 0x64748B;
           cm.color.setHex(0x64748B);
           cm.emissive.setHex(0x334155);
           cm.emissiveIntensity = 0.05;
@@ -3961,10 +4002,12 @@ export default function AirspaceView3D({
         if (alertSev && !isStale) {
           const alertHex = alertSev === 'critical' ? 0xef4444
                          : alertSev === 'caution'  ? 0xf59e0b : 0xfbbf24;
+          visualStatusHex = alertHex;
           cm.color.setHex(alertHex);
           cm.emissive.setHex(alertHex);
            cm.emissiveIntensity = 1.10;
         }
+        setAircraftPlaneOutlineColor(b, visualStatusHex);
 
         // ── FIX A: trail sanity cap ────────────────────────────────────────
         // Drop a trail point that is physically further from the last point
