@@ -1446,8 +1446,16 @@ export interface SceneState {
 function prepareAircraftModelTemplate(source: THREE.Group): THREE.Group {
   const root = new THREE.Group();
   root.name = 'SilentWing white aircraft model';
-  root.rotation.x = Math.PI / 2;
-  root.add(source);
+
+  // The FBX-to-GLB export needs a fixed quarter-turn to sit level in the
+  // app's Y-up world. Keep that correction on a child node: heading yaw is
+  // applied to `root` later, and combining X correction + Y yaw on one Euler
+  // rotation makes aircraft bank/tilt differently at different headings.
+  const orientation = new THREE.Group();
+  orientation.name = 'Aircraft model ground orientation';
+  orientation.rotation.x = Math.PI / 2;
+  orientation.add(source);
+  root.add(orientation);
   root.updateMatrixWorld(true);
 
   const initialBounds = new THREE.Box3().setFromObject(root);
