@@ -1,0 +1,49 @@
+[P-43b] Fix aircraft orientation using the confirmed transform data.
+
+GOAL
+Eliminate the confirmed constant +90° world-Y offset. The GLB's own
+FBX_Root node carries a baked local transform (-90°, +90°, 0° Euler /
+quat (-0.5, 0.5, -0.5, 0.5)) from its original conversion. The app's
+existing child correction (+90°, 0°, 0°) only cancels the X component,
+leaving the +90° Y uncorrected on every aircraft.
+
+RISK CLASS
+[BEHAVIOR-CHANGING]
+
+SCOPE
+Where the aircraft GLB is loaded and where the existing child-correction
+transform is created, in AirspaceView3D.tsx. No other files.
+
+DO NOT
+- Do not add another guessed Euler offset on top of the existing ones.
+- Do not use stacked Euler angles to compose the fix — use quaternion
+  multiply/invert to avoid order ambiguity.
+- Do not touch camera, tile loading, ALT_SCALE, toV3, detectors, tests.
+
+STEPS
+1. At GLB load time, take the FBX_Root node's own local transform
+   (already measured: quat (-0.5, 0.5, -0.5, 0.5)) and apply its
+   inverse directly to that node once, so the loaded model's baseline
+   orientation becomes identity — nose-forward matching whatever axis
+   convention the old cone marker used.
+2. Replace the current ad hoc child-correction node with a single,
+   clean transform: parent node applies heading yaw only, child node
+   holds the one remaining correction actually needed (if any) to
+   align the normalized model's forward axis with the app's heading
+   convention. One correction, not two stacked ones.
+3. Rerun the existing P-43 diagnostic logger (already in the code) on
+   the same 4 test aircraft. Confirm final world yaw now equals
+   -feedHeading (matching the cone marker's known-good convention)
+   with no constant offset, for all of them.
+4. Once confirmed numerically, remove the diagnostic logger (or gate it
+   behind a dev-only flag) — don't leave debug logging permanently
+   active.
+
+DONE WHEN
+The rerun P-43 table shows zero constant offset across all 4 sampled
+headings. Confirm this with real numbers before reporting done — this
+bug has had two prior false "fixed" claims.
+
+REPORT
+Before/after diagnostic tables side by side, confirmation the offset is
+gone, and whether the logger was removed or flag-gated.
