@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { TilesRenderer } from "3d-tiles-renderer";
-import { GoogleCloudAuthPlugin } from "3d-tiles-renderer/plugins";
+import { GoogleCloudAuthPlugin, TilesFadePlugin } from "3d-tiles-renderer/plugins";
 
 export interface TileLayerOrigin {
   lat: number;
@@ -156,6 +156,11 @@ export async function createTileLayer(
   }
 
   const tiles = new TilesRenderer();
+  tiles.registerPlugin(
+    new TilesFadePlugin({
+      fadeDuration: 400,
+    }),
+  );
   tiles.registerPlugin(
     new GoogleCloudAuthPlugin({
       apiToken,
