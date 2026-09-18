@@ -173,12 +173,13 @@ export async function createTileLayer(
   let disposed = false;
   let firstVisibleTileLogged = false;
   let surfaceAlignment: TileSurfaceAlignment | null = null;
+  let p42ProbeTimer: ReturnType<typeof setTimeout> | null = null;
   const startedAt = performance.now();
 
-  const sampleSurfaceHeightM = (): number | null => {
+  const sampleSurfaceHeightM = (requireCompleteLoad = true): number | null => {
     // Wait for the renderer's current refinement/download queue to settle.
     // An early coarse tile can cover the origin with a non-ground model extent.
-    if (tiles.loadProgress < 1) return null;
+    if (requireCompleteLoad && tiles.loadProgress < 1) return null;
 
     scene.updateMatrixWorld(true);
     const raycaster = new THREE.Raycaster(
@@ -224,11 +225,44 @@ export async function createTileLayer(
       }
 
       surfaceAlignment = { measuredHeightM, appliedOffsetM };
+      const alignmentLoadProgress = tiles.loadProgress;
+      const alignmentErrorTarget = tiles.errorTarget;
+      const samplePoint = `${origin.lat.toFixed(5)},${origin.lon.toFixed(5)}`;
+      console.info(
+        `[P-42] alignment cached origin=${samplePoint} ` +
+        `height=${measuredHeightM.toFixed(3)} m ` +
+        `loadProgress=${alignmentLoadProgress.toFixed(3)} ` +
+        `errorTarget=${alignmentErrorTarget}`,
+      );
+
+      p42ProbeTimer = setTimeout(() => {
+        p42ProbeTimer = null;
+        if (disposed) return;
+
+        const refinedHeightM = sampleSurfaceHeightM(false);
+        const refinedLoadProgress = tiles.loadProgress;
+        const refinedErrorTarget = tiles.errorTarget;
+        const deltaM = refinedHeightM === null
+          ? null
+          : refinedHeightM - measuredHeightM;
+        console.info(
+          `[P-42] delayed probe origin=${samplePoint} ` +
+          `height=${refinedHeightM === null ? "null" : `${refinedHeightM.toFixed(3)} m`} ` +
+          `delta=${deltaM === null ? "null" : `${deltaM.toFixed(3)} m`} ` +
+          `loadProgress=${refinedLoadProgress.toFixed(3)} ` +
+          `errorTarget=${refinedErrorTarget}`,
+        );
+      }, 2500);
+
       return surfaceAlignment;
     },
     dispose() {
       if (disposed) return;
       disposed = true;
+      if (p42ProbeTimer !== null) {
+        clearTimeout(p42ProbeTimer);
+        p42ProbeTimer = null;
+      }
       tiles.removeEventListener("tile-visibility-change", onTileVisibilityChange);
       scene.remove(tiles.group, markers);
       markers.traverse((object) => {
