@@ -25,7 +25,42 @@ interface SessionConfig {
   apiToken?: string;
 }
 
+interface P44Tile {
+  content?: {
+    uri?: string;
+    url?: string;
+  };
+  parent?: P44Tile | null;
+  internal?: {
+    loadingState?: number;
+    depth?: number;
+  };
+  traversal?: {
+    active?: boolean;
+    visible?: boolean;
+    inFrustum?: boolean;
+  };
+}
+
+interface P44RendererStats {
+  failed: number;
+  inCache: number;
+  visible: number;
+  active: number;
+}
+
+interface P44Renderer {
+  stats: P44RendererStats;
+  lruCache: {
+    cachedBytes: number;
+  };
+  visibleTiles: Set<P44Tile>;
+  activeTiles: Set<P44Tile>;
+}
+
 const TILE_CONFIG_PATH = "/api/google-tiles/config";
+const P44_FAILED_STATE = -1;
+const P44_LOADED_STATE = 4;
 
 function createLabel(text: string, color: string): THREE.Sprite {
   const canvas = document.createElement("canvas");
@@ -174,7 +209,85 @@ export async function createTileLayer(
   let firstVisibleTileLogged = false;
   let surfaceAlignment: TileSurfaceAlignment | null = null;
   let p42ProbeTimer: ReturnType<typeof setTimeout> | null = null;
+  let p44StatsTimer: ReturnType<typeof setInterval> | null = null;
   const startedAt = performance.now();
+  const diagnosticTiles = tiles as unknown as P44Renderer;
+  const failedTiles = new Map<P44Tile, number>();
+
+  const tileUri = (tile: P44Tile | null | undefined): string => {
+    if (!tile) return "none";
+    return tile.content?.uri ?? tile.content?.url ?? "no-content-uri";
+  };
+
+  const tileState = (tile: P44Tile | null | undefined): string => {
+    if (!tile) return "none";
+    const state = tile.internal?.loadingState;
+    if (state === P44_FAILED_STATE) return "FAILED";
+    if (state === P44_LOADED_STATE) return "LOADED";
+    return state === undefined ? "unknown" : String(state);
+  };
+
+  const cameraMode = (): string => {
+    const value = (camera.userData as { cameraMode?: unknown }).cameraMode;
+    return typeof value === "string" ? value : "unavailable";
+  };
+
+  const cameraPosition = (): string =>
+    `${camera.position.x.toFixed(1)},${camera.position.y.toFixed(1)},${camera.position.z.toFixed(1)}`;
+
+  const contextLost = (): string => {
+    const context = renderer.getContext();
+    return typeof context.isContextLost === "function"
+      ? String(context.isContextLost())
+      : "unsupported";
+  };
+
+  const tileEvidence = (tile: P44Tile | null | undefined): string => {
+    if (!tile) return "tile=none";
+    const parent = tile.parent;
+    return [
+      `tile=${tileUri(tile)}`,
+      `depth=${tile.internal?.depth ?? "unknown"}`,
+      `state=${tileState(tile)}`,
+      `active=${diagnosticTiles.activeTiles.has(tile)}`,
+      `visible=${diagnosticTiles.visibleTiles.has(tile)}`,
+      `traversalActive=${tile.traversal?.active ?? "unknown"}`,
+      `traversalVisible=${tile.traversal?.visible ?? "unknown"}`,
+      `parent=${tileUri(parent)}`,
+      `parentState=${tileState(parent)}`,
+      `parentActive=${parent ? diagnosticTiles.activeTiles.has(parent) : false}`,
+      `parentVisible=${parent ? diagnosticTiles.visibleTiles.has(parent) : false}`,
+      `parentTraversalActive=${parent?.traversal?.active ?? "unknown"}`,
+      `parentTraversalVisible=${parent?.traversal?.visible ?? "unknown"}`,
+    ].join(" ");
+  };
+
+  const relatedToFailedTile = (tile: P44Tile): boolean => {
+    for (const failed of failedTiles.keys()) {
+      if (failed === tile || failed.parent === tile || tile.parent === failed) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const logP44Stats = (kind: "interval" | "load-error" | "visibility", detail = "") => {
+    const stats = diagnosticTiles.stats;
+    const failedEvidence = [...failedTiles.entries()]
+      .map(([tile, failedAt]) =>
+        `${tileUri(tile)}@${Math.round(failedAt - startedAt)}ms:${tileEvidence(tile)}`,
+      )
+      .join(" || ");
+    console.info(
+      `[P-44] ${kind} t=${Math.round(performance.now() - startedAt)}ms ` +
+      `cameraMode=${cameraMode()} camera=${cameraPosition()} ` +
+      `contextLost=${contextLost()} ` +
+      `failed=${stats.failed} inCache=${stats.inCache} ` +
+      `visible=${stats.visible} active=${stats.active} ` +
+      `lruBytes=${diagnosticTiles.lruCache.cachedBytes} ` +
+      `${detail}${failedEvidence ? ` failedTiles=${failedEvidence}` : ""}`,
+    );
+  };
 
   const sampleSurfaceHeightM = (requireCompleteLoad = true): number | null => {
     // Wait for the renderer's current refinement/download queue to settle.
@@ -192,15 +305,43 @@ export async function createTileLayer(
     return hits.length ? hits[0].point.y : null;
   };
 
-  const onTileVisibilityChange = () => {
+  const onTileVisibilityChange = (event: {
+    tile?: P44Tile;
+    visible?: boolean;
+  }) => {
     if (!firstVisibleTileLogged && tiles.visibleTiles.size > 0) {
       firstVisibleTileLogged = true;
       console.info(
         `[TILES] first visible tile after ${Math.round(performance.now() - startedAt)} ms`,
       );
     }
+    if (event.tile && relatedToFailedTile(event.tile)) {
+      logP44Stats(
+        "visibility",
+        `changed=${event.visible ?? "unknown"} ${tileEvidence(event.tile)} `,
+      );
+    }
+  };
+  const onTileLoadError = (event: {
+    tile?: P44Tile | null;
+    error?: Error;
+    url?: string | URL | null;
+  }) => {
+    if (event.tile) {
+      failedTiles.set(event.tile, performance.now());
+    }
+    logP44Stats(
+      "load-error",
+      `url=${event.url ?? "unknown"} ` +
+      `error=${event.error?.message ?? String(event.error ?? "unknown")} ` +
+      `${tileEvidence(event.tile)}`,
+    );
   };
   tiles.addEventListener("tile-visibility-change", onTileVisibilityChange);
+  tiles.addEventListener("load-error", onTileLoadError);
+  p44StatsTimer = setInterval(() => {
+    if (!disposed) logP44Stats("interval");
+  }, 1_000);
 
   return {
     tiles,
@@ -270,7 +411,12 @@ export async function createTileLayer(
         clearTimeout(p42ProbeTimer);
         p42ProbeTimer = null;
       }
+      if (p44StatsTimer !== null) {
+        clearInterval(p44StatsTimer);
+        p44StatsTimer = null;
+      }
       tiles.removeEventListener("tile-visibility-change", onTileVisibilityChange);
+      tiles.removeEventListener("load-error", onTileLoadError);
       scene.remove(tiles.group, markers);
       markers.traverse((object) => {
         const mesh = object as THREE.Mesh | THREE.Sprite;
