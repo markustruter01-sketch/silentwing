@@ -11,6 +11,7 @@
 // and fires callbacks so App can update the panel overlay.
 
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { useEffect, useRef, useState } from 'react';
 import type { Aircraft, WorldSnapshot } from '@/types';
@@ -1193,6 +1194,8 @@ function disposeTakeoffIndicator(entry: TakeoffIndicatorEntry, scene: THREE.Scen
 interface AcBundle {
   cone:     THREE.Mesh;
   outline:  THREE.Mesh;
+  plane:    THREE.Group | null;
+  planeMeshes: THREE.Mesh[];
   hitTarget: THREE.Mesh;
   hitTargetMat: THREE.MeshBasicMaterial;
   stem:     THREE.Line;
@@ -1278,6 +1281,10 @@ function disposeBundle(b: AcBundle): void {
   (b.cone.material as THREE.Material).dispose();
   // outline geometry is shared — dispose the per-aircraft material clone
   (b.outline.material as THREE.Material).dispose();
+  // plane geometry/materials are shared with the scene-level GLB template and
+  // are disposed once when the scene is torn down.
+  b.plane = null;
+  b.planeMeshes = [];
   b.hitTargetMat.dispose();
   b.stemMat.dispose();
   b.groundShadowMat.dispose();
@@ -1338,6 +1345,8 @@ const WAKE_MAT_TEMPLATE = new THREE.ShaderMaterial({
   depthWrite:     false,
 });
 
+const AIRCRAFT_MODEL_URL = `${import.meta.env.BASE_URL}assets/plane.glb`;
+
 // ── Mutable scene state (lives in sceneRef, never in React state) ─────────────
 export interface SceneState {
   renderer:    THREE.WebGLRenderer;
@@ -1347,6 +1356,8 @@ export interface SceneState {
   angle:       number;
   acMap:       Map<string, AcBundle>;
   coneToId:    Map<THREE.Mesh, string>; // for raycasting
+  /** Normalized white GLB template cloned for each aircraft. */
+  aircraftModelTemplate: THREE.Group | null;
   // camera mode
   cameraMode:  CameraMode;
   // fly-to animation (used during 'inspect' with flyProgress < 1)
@@ -1424,6 +1435,86 @@ export interface SceneState {
   spawnQueue:    string[];
   /** Fast membership check — prevents re-queuing across back-to-back polls. */
   spawnQueueIds: Set<string>;
+}
+
+function prepareAircraftModelTemplate(source: THREE.Group): THREE.Group {
+  const root = new THREE.Group();
+  root.name = 'SilentWing white aircraft model';
+  root.rotation.x = Math.PI / 2;
+  root.add(source);
+  root.updateMatrixWorld(true);
+
+  const initialBounds = new THREE.Box3().setFromObject(root);
+  const initialSize = initialBounds.getSize(new THREE.Vector3());
+  const longestSide = Math.max(initialSize.x, initialSize.y, initialSize.z);
+  if (longestSide > 0) {
+    root.scale.setScalar(85 / longestSide);
+  }
+
+  root.updateMatrixWorld(true);
+  const centeredBounds = new THREE.Box3().setFromObject(root);
+  const center = centeredBounds.getCenter(new THREE.Vector3());
+  root.position.sub(center);
+
+  root.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    object.material = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.62,
+      metalness: 0.05,
+      vertexColors: false,
+    });
+    object.castShadow = false;
+    object.receiveShadow = false;
+    object.renderOrder = 1;
+  });
+
+  return root;
+}
+
+function cloneAircraftModel(
+  template: THREE.Group,
+): { root: THREE.Group; meshes: THREE.Mesh[] } {
+  const root = template.clone(true);
+  const meshes: THREE.Mesh[] = [];
+  root.traverse((object) => {
+    if (object instanceof THREE.Mesh) meshes.push(object);
+  });
+  return { root, meshes };
+}
+
+function disposeAircraftModelTemplate(template: THREE.Group): void {
+  const geometries = new Set<THREE.BufferGeometry>();
+  const materials = new Set<THREE.Material>();
+  template.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    geometries.add(object.geometry);
+    const meshMaterials = Array.isArray(object.material)
+      ? object.material
+      : [object.material];
+    meshMaterials.forEach((material) => materials.add(material));
+  });
+  geometries.forEach((geometry) => geometry.dispose());
+  materials.forEach((material) => material.dispose());
+}
+
+function attachAircraftModel(
+  st: SceneState,
+  aircraftId: string,
+  bundle: AcBundle,
+): void {
+  if (!st.aircraftModelTemplate || bundle.plane) return;
+
+  const { root, meshes } = cloneAircraftModel(st.aircraftModelTemplate);
+  root.position.copy(bundle.renderPos);
+  root.rotation.y = -(bundle.headingDeg * Math.PI) / 180;
+  st.scene.add(root);
+  meshes.forEach((mesh) => st.coneToId.set(mesh, aircraftId));
+
+  bundle.plane = root;
+  bundle.planeMeshes = meshes;
+  bundle.cone.visible = false;
+  bundle.outline.visible = false;
 }
 
 // ── Director camera state machine ─────────────────────────────────────────────
@@ -1718,7 +1809,8 @@ function spawnAircraft(st: SceneState, ac: Aircraft, nowMs: number): void {
   }
 
   acMap.set(ac.id, {
-    cone, outline, hitTarget, hitTargetMat, stem, stemMat, groundShadow, groundShadowMat,
+    cone, outline, plane: null, planeMeshes: [],
+    hitTarget, hitTargetMat, stem, stemMat, groundShadow, groundShadowMat,
     trail, label, trailBuf, halo, alertRing, alertRingMat, pinRing,
     leaderLine, leaderLineMat,
     velVec, velVecMat,
@@ -1741,6 +1833,7 @@ function spawnAircraft(st: SceneState, ac: Aircraft, nowMs: number): void {
     isHeavy:         spawnIsHeavy,
     isAirborne:      spawnIsAirborne,
   });
+  attachAircraftModel(st, ac.id, acMap.get(ac.id)!);
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -2073,12 +2166,14 @@ export default function AirspaceView3D({
           b.cone, b.outline, b.hitTarget, b.stem, b.groundShadow,
           b.trail, b.label, b.alertRing,
         );
+        if (b.plane) scene.remove(b.plane);
         if (b.halo)      scene.remove(b.halo);
         if (b.pinRing)   scene.remove(b.pinRing);
         if (b.velVec)    scene.remove(b.velVec);
         if (b.sepBubble) scene.remove(b.sepBubble);
         if (b.wakeL)     scene.remove(b.wakeL);
         if (b.wakeR)     scene.remove(b.wakeR);
+        b.planeMeshes.forEach((mesh) => st.coneToId.delete(mesh));
         disposeBundle(b);
       });
       st.acMap.clear();
@@ -2252,6 +2347,7 @@ export default function AirspaceView3D({
   useEffect(() => {
     const el = mountRef.current;
     if (!el) return;
+    let sceneDisposed = false;
 
     const W = el.clientWidth  || window.innerWidth;
     const H = el.clientHeight || window.innerHeight;
@@ -2326,6 +2422,7 @@ export default function AirspaceView3D({
       angle:   ORBIT_INIT_ANGLE,
       acMap:   new Map(),
       coneToId: new Map(),
+      aircraftModelTemplate: null,
       cameraMode:  'orbit',
       flyFrom:     new THREE.Vector3(),
       flyTo:       new THREE.Vector3(),
@@ -2383,6 +2480,24 @@ export default function AirspaceView3D({
       spawnQueueIds:        new Set(),
     };
     sceneRef.current = st;
+
+    const modelLoader = new GLTFLoader();
+    modelLoader.load(
+      AIRCRAFT_MODEL_URL,
+      (gltf) => {
+        if (sceneDisposed || sceneRef.current !== st) return;
+        st.aircraftModelTemplate = prepareAircraftModelTemplate(gltf.scene);
+        st.acMap.forEach((bundle, aircraftId) => {
+          attachAircraftModel(st, aircraftId, bundle);
+        });
+      },
+      undefined,
+      (error) => {
+        if (!sceneDisposed) {
+          console.warn('[3D] aircraft GLB unavailable — using fallback markers', error);
+        }
+      },
+    );
 
     // ── Remount recovery: directorMode + alertFocusId ───────────────────────
     // The sync effects (useEffect([directorMode]) etc.) fire BEFORE the scene
@@ -2589,6 +2704,10 @@ export default function AirspaceView3D({
         // fixed world-space size; the separate hit target handles selection.
         b.cone.position.copy(b.renderPos);
         b.outline.position.copy(b.renderPos);
+        if (b.plane) {
+          b.plane.position.copy(b.renderPos);
+          b.plane.rotation.y = -(b.headingDeg * Math.PI) / 180;
+        }
         b.hitTarget.position.copy(b.renderPos);
         b.groundShadow.position.set(b.renderPos.x, 1, b.renderPos.z);
         b.cone.scale.setScalar(1);
@@ -3614,6 +3733,7 @@ export default function AirspaceView3D({
 
     // ── Cleanup ──────────────────────────────────────────────────────────────
     return () => {
+      sceneDisposed = true;
       ro.disconnect();
       cancelAnimationFrame(st.animId);
       tileGenerationRef.current += 1;
@@ -3639,6 +3759,7 @@ export default function AirspaceView3D({
           b.cone, b.outline, b.hitTarget, b.stem, b.groundShadow,
           b.trail, b.label, b.alertRing,
         );
+        if (b.plane) scene.remove(b.plane);
         if (b.halo)      scene.remove(b.halo);
         if (b.pinRing)   scene.remove(b.pinRing);
         if (b.velVec)    scene.remove(b.velVec);
@@ -3649,6 +3770,10 @@ export default function AirspaceView3D({
       });
       st.acMap.clear();
       st.coneToId.clear();
+      if (st.aircraftModelTemplate) {
+        disposeAircraftModelTemplate(st.aircraftModelTemplate);
+        st.aircraftModelTemplate = null;
+      }
       st.beamMap.forEach(entry => disposeBeamEntry(entry, scene));
       st.beamMap.clear();
       st.pulseRingMap.forEach(entry => disposePulseRingEntry(entry, scene));
@@ -3788,6 +3913,7 @@ export default function AirspaceView3D({
 
         // Heading snaps immediately (no perceptible jerk at these speeds)
         b.cone.rotation.y = headY;
+        if (b.plane) b.plane.rotation.y = headY;
 
         // ── Refresh combined label when phase or heading drifts > 5° ─────────
         {
@@ -4038,6 +4164,7 @@ export default function AirspaceView3D({
           b.cone, b.outline, b.hitTarget, b.stem, b.groundShadow,
           b.trail, b.label, b.halo, b.alertRing,
         );
+        if (b.plane) scene.remove(b.plane);
         if (b.pinRing)   scene.remove(b.pinRing);
         if (b.velVec)    scene.remove(b.velVec);
         if (b.sepBubble) scene.remove(b.sepBubble);
@@ -4045,6 +4172,7 @@ export default function AirspaceView3D({
         if (b.wakeR)     scene.remove(b.wakeR);
         coneToId.delete(b.cone);
         coneToId.delete(b.hitTarget);
+        b.planeMeshes.forEach((mesh) => coneToId.delete(mesh));
         disposeBundle(b);
         acMap.delete(id);
         // Clean up any takeoff indicator for the despawned aircraft
